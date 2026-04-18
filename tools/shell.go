@@ -23,6 +23,20 @@ type ShellArgs struct {
 	Command string `json:"command"`
 }
 
+var blockedShellFragments = []string{
+	"&&",
+	"||",
+	";",
+	"|",
+	">",
+	"<",
+	"`",
+	"$(",
+	"\n",
+	"\r",
+	"&",
+}
+
 // NewShellTool creates a shell tool constrained to an allowlist.
 func NewShellTool(allowed []string) *ShellTool {
 	amap := make(map[string]bool)
@@ -56,6 +70,64 @@ func (s *ShellTool) Parameters() json.RawMessage {
 	}`)
 }
 
+// ValidateShellCommand rejects obviously unsafe shell syntax before a command
+// reaches the host shell.
+func ValidateShellCommand(command string) error {
+	cmd := strings.TrimSpace(command)
+	if cmd == "" {
+		return fmt.Errorf("command cannot be empty")
+	}
+
+	for _, fragment := range blockedShellFragments {
+		if strings.Contains(cmd, fragment) {
+			return fmt.Errorf("blocked shell syntax %q", fragment)
+		}
+	}
+
+	return nil
+}
+
+// ValidateAllowedShellCommand applies syntax checks plus the shell tool's
+// command allowlist without executing anything.
+func ValidateAllowedShellCommand(command string, allowed []string) error {
+	allowedCommands := make(map[string]bool, len(allowed))
+	for _, item := range allowed {
+		allowedCommands[item] = true
+	}
+
+	_, err := validateAllowedShellCommand(command, allowedCommands)
+	return err
+}
+
+func validateAllowedShellCommand(command string, allowedCommands map[string]bool) (string, error) {
+	cmd := strings.TrimSpace(command)
+	if err := ValidateShellCommand(cmd); err != nil {
+		return "", err
+	}
+
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return "", fmt.Errorf("command cannot be empty")
+	}
+
+	baseCmd := parts[0]
+
+	// Handle composed commands like 'systemctl status' if the composite form is
+	// explicitly allowlisted.
+	if len(parts) > 1 && (parts[0] == "systemctl" || parts[0] == "journalctl") {
+		composite := parts[0] + " " + parts[1]
+		if allowedCommands[composite] {
+			baseCmd = composite
+		}
+	}
+
+	if !allowedCommands[baseCmd] {
+		return "", fmt.Errorf("command %q is not in the allowlist", baseCmd)
+	}
+
+	return baseCmd, nil
+}
+
 func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	logger := log.FromContext(ctx)
 
@@ -65,22 +137,10 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (string, 
 	}
 
 	cmdStr := strings.TrimSpace(parsedArgs.Command)
-	if cmdStr == "" {
-		return "", fmt.Errorf("command cannot be empty")
-	}
-
-	// Basic security check: verify the base command is in the allowlist
-	parts := strings.Fields(cmdStr)
-	baseCmd := parts[0]
-
-	// Handle composed commands like 'systemctl status'
-	if len(parts) > 1 && (parts[0] == "systemctl" || parts[0] == "journalctl") {
-		baseCmd = parts[0] + " " + parts[1]
-	}
-
-	if !s.allowedCommands[baseCmd] {
-		logger.Warn("rejected unauthorized shell command", "command", cmdStr)
-		return "", fmt.Errorf("security violation: command '%s' is not in the allowlist", baseCmd)
+	_, err := validateAllowedShellCommand(cmdStr, s.allowedCommands)
+	if err != nil {
+		logger.Warn("rejected unsafe shell command", "command", cmdStr, "error", err)
+		return "", fmt.Errorf("security violation: %w", err)
 	}
 
 	logger.Info("executing shell command", "command", cmdStr)
@@ -94,7 +154,7 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (string, 
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
-	err := cmd.Run()
+	err = cmd.Run()
 	result := out.String()
 
 	// Truncate if output is too long to save token cost and prevent context explosion
