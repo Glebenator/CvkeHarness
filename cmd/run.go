@@ -35,7 +35,7 @@ var runCmd = &cobra.Command{
 		// 3. Initialize Provider
 		var p provider.Provider
 		if cfg.Provider == "openrouter" {
-			p = provider.NewOpenRouter(cfg.APIKey)
+			p = provider.NewOpenRouter(cfg.GetAPIKey("openrouter"))
 		} else if cfg.Provider == "lmstudio" {
 			p = provider.NewLMStudio(cfg.BaseURL)
 		} else {
