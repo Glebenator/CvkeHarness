@@ -390,7 +390,8 @@ func fetchOpenRouterModels() modelsResult {
 }
 
 type lmModel struct {
-	ID string `json:"id"`
+	ID    string `json:"id"`
+	State string `json:"state"`
 }
 
 type lmModelsResponse struct {
@@ -401,10 +402,22 @@ func fetchLMStudioModels(baseURL string) modelsResult {
 	if baseURL == "" {
 		baseURL = "http://localhost:1234/v1"
 	}
+
+	fetchURL := baseURL + "/models"
+	if strings.HasSuffix(baseURL, "/v1") {
+		fetchURL = strings.TrimSuffix(baseURL, "/v1") + "/api/v0/models"
+	}
+
 	client := &http.Client{Timeout: 800 * time.Millisecond}
-	resp, err := client.Get(baseURL + "/models")
+	resp, err := client.Get(fetchURL)
 	if err != nil || resp.StatusCode != http.StatusOK {
-		return modelsResult{items: lmStudioModels, isLive: false, timestamp: time.Now()}
+		// Fallback to /v1/models if /api/v0/models fails
+		if fetchURL != baseURL+"/models" {
+			resp, err = client.Get(baseURL + "/models")
+		}
+		if err != nil || resp.StatusCode != http.StatusOK {
+			return modelsResult{items: lmStudioModels, isLive: false, timestamp: time.Now()}
+		}
 	}
 	defer resp.Body.Close()
 
@@ -413,13 +426,23 @@ func fetchLMStudioModels(baseURL string) modelsResult {
 		return modelsResult{items: lmStudioModels, isLive: false, timestamp: time.Now()}
 	}
 
-	var items [][2]string
+	var loadedItems [][2]string
+	var availableItems [][2]string
+
 	for _, m := range data.Data {
 		if m.ID == "" {
 			continue
 		}
-		items = append(items, [2]string{m.ID, "Loaded model"})
+		if m.State == "loaded" {
+			loadedItems = append(loadedItems, [2]string{m.ID, "Loaded model  ★"})
+		} else {
+			availableItems = append(availableItems, [2]string{m.ID, "Available (not loaded)"})
+		}
 	}
+
+	var items [][2]string
+	items = append(items, loadedItems...)
+	items = append(items, availableItems...)
 
 	if len(items) == 0 {
 		return modelsResult{items: lmStudioModels, isLive: false, timestamp: time.Now()}
@@ -699,7 +722,13 @@ func wizardModel(cfg *config.Config, result modelsResult) bool {
 		res := fetchLMStudioModels(cfg.BaseURL)
 		items = res.items
 		if res.isLive {
-			fmt.Printf("  %s✔  Found %d models loaded on local server%s\n\n", fgGreen+ansiBold, len(items)-1, ansiReset)
+			loadedCount := 0
+			for _, item := range items {
+				if strings.Contains(item[1], "Loaded model") {
+					loadedCount++
+				}
+			}
+			fmt.Printf("  %s✔  Found %d loaded / %d total models on local server%s\n\n", fgGreen+ansiBold, loadedCount, len(items)-1, ansiReset)
 		} else {
 			fmt.Printf("  %s⊙  Could not verify loaded models on local server%s\n\n", fgYellow+ansiDim, ansiReset)
 			cfg.Model = "local-model"
