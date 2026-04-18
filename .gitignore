@@ -1,0 +1,13 @@
+# Local Go build cache used in sandboxed runs
+.gocache/
+
+# Local build outputs
+/cvkeharness
+/main
+
+# Common Go test and coverage artifacts
+*.test
+*.out
+coverage.txt
+coverage.out
+

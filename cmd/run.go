@@ -44,13 +44,7 @@ var runCmd = &cobra.Command{
 		}
 
 		// 4. Initialize Tools
-		registry := tools.NewRegistry()
-		registry.Register(tools.NewDockerListTool())
-		registry.Register(tools.NewDockerInspectTool())
-		registry.Register(tools.NewDockerRestartTool())
-		registry.Register(tools.NewHTTPHealthcheckTool())
-		registry.Register(tools.NewTCPHealthcheckTool())
-		registry.Register(tools.NewShellTool(cfg.AllowedCommands))
+		registry := tools.NewDefaultRegistry(cfg.AllowedCommands)
 
 		logger.Info("tools initialized", "count", len(registry.Definitions()))
 
