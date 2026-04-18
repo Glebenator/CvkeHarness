@@ -88,7 +88,7 @@ func DefaultConfig() *Config {
 		Model:         "anthropic/claude-3.5-sonnet",
 		MaxTokens:     4096,
 		MaxIterations: 15,
-		LogLevel:      "info",
+		LogLevel:      "off",
 		AllowedCommands: []string{
 			"df", "free", "uptime", "ps", "netstat", "systemctl", "journalctl",
 		},

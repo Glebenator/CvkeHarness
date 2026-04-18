@@ -3,6 +3,7 @@ package log
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -17,9 +18,17 @@ const (
 )
 
 // Init initializes the global slog logger.
-// level should be one of: debug, info, warn, error.
+// level should be one of: off, debug, info, warn, error.
+// "off" discards all log output (default for clean agent-only terminal output).
 // format should be "json" or "text".
 func Init(level, format string) {
+	// "off" silences all structured logs so only agent output reaches the terminal.
+	if strings.ToLower(level) == "off" {
+		handler := slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError})
+		slog.SetDefault(slog.New(handler))
+		return
+	}
+
 	var lvl slog.Level
 	switch strings.ToLower(level) {
 	case "debug":
