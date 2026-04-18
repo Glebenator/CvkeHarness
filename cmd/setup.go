@@ -280,8 +280,8 @@ func renderReview(cfg *config.Config) {
 	if cfg.BaseURL != "" {
 		row("Base URL", cfg.BaseURL)
 	}
-	if cfg.APIKey != "" {
-		row("API Key", maskKey(cfg.APIKey))
+	if key := cfg.GetAPIKey(cfg.Provider); key != "" {
+		row("API Key", maskKey(key))
 	}
 	row("Max Tokens", strconv.Itoa(cfg.MaxTokens))
 	row("Max Iterations", strconv.Itoa(cfg.MaxIterations))
@@ -571,24 +571,17 @@ func wizardProvider(cfg *config.Config) bool {
 }
 
 // wizardAPIKey is step 2 — dispatches to the correct credential flow.
-// savedKey is the key that was saved in the config before this wizard run
-// (used as a fallback for the reuse offer if cfg.APIKey was cleared by a
-// previous provider switch and the user now switches back to openrouter).
-func wizardAPIKey(cfg *config.Config, savedKey string) bool {
+func wizardAPIKey(cfg *config.Config) bool {
 	if cfg.Provider == "openrouter" {
-		return wizardOpenRouterKey(cfg, savedKey)
+		return wizardOpenRouterKey(cfg)
 	}
 	return wizardLMStudioURL(cfg)
 }
 
-func wizardOpenRouterKey(cfg *config.Config, savedKey string) bool {
-	// Determine which key (if any) to offer for reuse.
-	// Prefer the key the wizard already has in cfg (may be a newly validated one
-	// from an earlier pass through this step); fall back to the originally saved key.
-	keyToOffer := cfg.APIKey
-	if keyToOffer == "" {
-		keyToOffer = savedKey
-	}
+func wizardOpenRouterKey(cfg *config.Config) bool {
+	// The key for this provider lives in the map; nothing is lost when the
+	// user switches to another provider and comes back.
+	keyToOffer := cfg.GetAPIKey("openrouter")
 
 	showReuseMenu := keyToOffer != "" // show the "reuse / enter new" select on first draw
 
@@ -607,8 +600,7 @@ func wizardOpenRouterKey(cfg *config.Config, savedKey string) bool {
 			case goBack:
 				return false
 			case 0: // reuse — skip validation (was valid before)
-				cfg.APIKey = keyToOffer
-				cfg.BaseURL = ""
+				// Key is already in the map; nothing to update.
 				return true
 			}
 			// case 1: user wants to enter a new key — fall through
@@ -654,8 +646,7 @@ func wizardOpenRouterKey(cfg *config.Config, savedKey string) bool {
 		}
 
 		// ── Success ───────────────────────────────────────────────────────
-		cfg.APIKey = key
-		cfg.BaseURL = ""
+		cfg.SetAPIKey("openrouter", key)
 		renderHeader()
 		renderStep(2, totalSteps, "OpenRouter API Key")
 		if label != "" {
@@ -692,7 +683,8 @@ func wizardLMStudioURL(cfg *config.Config) bool {
 		}
 		if idx == 0 {
 			cfg.BaseURL = defaultURL
-			cfg.APIKey = ""
+			// Leave cfg.APIKey untouched so the OpenRouter key is preserved in
+			// the saved YAML — the user can reuse it if they switch back later.
 			return true
 		}
 		renderHeader()
@@ -709,7 +701,8 @@ func wizardLMStudioURL(cfg *config.Config) bool {
 		return false
 	}
 	cfg.BaseURL = url
-	cfg.APIKey = ""
+	// Leave cfg.APIKey untouched so the OpenRouter key is preserved in
+	// the saved YAML — the user can reuse it if they switch back later.
 	return true
 }
 
@@ -854,11 +847,9 @@ var setupCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		// Load any previously saved configuration so we can:
 		//   (a) pre-populate selections with the user's current values, and
-		//   (b) offer to reuse their existing API key without re-typing it.
+		//   (b) offer to reuse stored credentials without re-typing them.
 		existingCfg, _ := config.LoadConfig()
 		cfg := config.DefaultConfig()
-		savedKey := "" // the API key from the saved config — kept separate so a
-		// provider switch mid-wizard doesn't permanently lose it.
 
 		if existingCfg != nil {
 			if existingCfg.Provider != "" {
@@ -867,9 +858,11 @@ var setupCmd = &cobra.Command{
 			if existingCfg.Model != "" {
 				cfg.Model = existingCfg.Model
 			}
-			if existingCfg.APIKey != "" {
-				cfg.APIKey = existingCfg.APIKey
-				savedKey = existingCfg.APIKey
+			// Carry over the full key map so every provider's credential is
+			// available for the reuse prompt regardless of which provider the
+			// user starts from or switches to during this wizard run.
+			if len(existingCfg.APIKeys) > 0 {
+				cfg.APIKeys = existingCfg.APIKeys
 			}
 			if existingCfg.BaseURL != "" {
 				cfg.BaseURL = existingCfg.BaseURL
@@ -900,7 +893,7 @@ var setupCmd = &cobra.Command{
 				advanced = wizardProvider(cfg)
 			case 2:
 				// Step 2: API key (OpenRouter) or base URL (LM Studio).
-				advanced = wizardAPIKey(cfg, savedKey)
+				advanced = wizardAPIKey(cfg)
 			case 3:
 				// Ensure the model list is ready before rendering.
 				if fetchedModels.items == nil {

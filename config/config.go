@@ -10,14 +10,33 @@ import (
 
 // Config represents the application configuration.
 type Config struct {
-	Provider        string   `yaml:"provider"`
-	APIKey          string   `yaml:"api_key,omitempty"`  // Used for OpenRouter
-	BaseURL         string   `yaml:"base_url,omitempty"` // Used for LM Studio
-	Model           string   `yaml:"model"`
-	MaxTokens       int      `yaml:"max_tokens"`
-	MaxIterations   int      `yaml:"max_iterations"`
-	LogLevel        string   `yaml:"log_level"`
-	AllowedCommands []string `yaml:"allowed_commands"`
+	Provider        string            `yaml:"provider"`
+	// APIKeys stores credentials keyed by provider name (e.g. "openrouter",
+	// "anthropic"). All providers are preserved so a user switching providers
+	// never has to re-enter a key they already validated.
+	APIKeys         map[string]string `yaml:"api_keys,omitempty"`
+	BaseURL         string            `yaml:"base_url,omitempty"` // Used for local providers (e.g. LM Studio)
+	Model           string            `yaml:"model"`
+	MaxTokens       int               `yaml:"max_tokens"`
+	MaxIterations   int               `yaml:"max_iterations"`
+	LogLevel        string            `yaml:"log_level"`
+	AllowedCommands []string          `yaml:"allowed_commands"`
+}
+
+// GetAPIKey returns the stored credential for the given provider, or "" if none.
+func (c *Config) GetAPIKey(provider string) string {
+	if c.APIKeys == nil {
+		return ""
+	}
+	return c.APIKeys[provider]
+}
+
+// SetAPIKey stores a credential for the given provider.
+func (c *Config) SetAPIKey(provider, key string) {
+	if c.APIKeys == nil {
+		c.APIKeys = make(map[string]string)
+	}
+	c.APIKeys[provider] = key
 }
 
 // ConfigPath returns the path to the config file (~/.cvkeharness/config.yaml).
