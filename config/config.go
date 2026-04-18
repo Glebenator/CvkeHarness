@@ -11,7 +11,8 @@ import (
 // Config represents the application configuration.
 type Config struct {
 	Provider        string   `yaml:"provider"`
-	APIKey          string   `yaml:"api_key"`
+	APIKey          string   `yaml:"api_key,omitempty"`  // Used for OpenRouter
+	BaseURL         string   `yaml:"base_url,omitempty"` // Used for LM Studio
 	Model           string   `yaml:"model"`
 	MaxTokens       int      `yaml:"max_tokens"`
 	MaxIterations   int      `yaml:"max_iterations"`
