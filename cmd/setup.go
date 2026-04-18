@@ -32,27 +32,44 @@ var setupCmd = &cobra.Command{
 			cfg.Provider = provider
 		}
 
-		if cfg.Provider != "openrouter" {
-			fmt.Printf("Warning: Currently only 'openrouter' is fully supported out of the box.\n")
+		if cfg.Provider != "openrouter" && cfg.Provider != "lmstudio" {
+			fmt.Printf("Warning: Currently only 'openrouter' and 'lmstudio' are fully supported out of the box.\n")
 		}
 
-		// 2. API Key (Masked)
-		fmt.Print("API Key: ")
-		bytePassword, err := term.ReadPassword(int(syscall.Stdin))
-		fmt.Println()
-		if err == nil {
-			key := strings.TrimSpace(string(bytePassword))
-			if key != "" {
-				cfg.APIKey = key
+		// 2. Base URL (if LM Studio)
+		if cfg.Provider == "lmstudio" {
+			fmt.Printf("Base URL [%s]: ", "http://localhost:1234/v1")
+			baseURL, _ := reader.ReadString('\n')
+			baseURL = strings.TrimSpace(baseURL)
+			if baseURL != "" {
+				cfg.BaseURL = baseURL
+			} else {
+				cfg.BaseURL = "http://localhost:1234/v1"
 			}
 		}
 
-		if cfg.APIKey == "" {
-			fmt.Println("Error: API Key is required.")
-			os.Exit(1)
+		// 3. API Key (Masked - Only required for openrouter)
+		if cfg.Provider == "openrouter" {
+			fmt.Print("API Key: ")
+			bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+			fmt.Println()
+			if err == nil {
+				key := strings.TrimSpace(string(bytePassword))
+				if key != "" {
+					cfg.APIKey = key
+				}
+			}
+
+			if cfg.APIKey == "" {
+				fmt.Println("Error: API Key is required for OpenRouter.")
+				os.Exit(1)
+			}
 		}
 
-		// 3. Model
+		if cfg.Provider == "lmstudio" && cfg.Model == "anthropic/claude-3.5-sonnet" {
+			// Change sensible default if they picked LM Studio but hadn't set a model yet
+			cfg.Model = "local-model"
+		}
 		fmt.Printf("Model [%s]: ", cfg.Model)
 		model, _ := reader.ReadString('\n')
 		model = strings.TrimSpace(model)

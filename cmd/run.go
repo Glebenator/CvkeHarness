@@ -36,6 +36,8 @@ var runCmd = &cobra.Command{
 		var p provider.Provider
 		if cfg.Provider == "openrouter" {
 			p = provider.NewOpenRouter(cfg.APIKey)
+		} else if cfg.Provider == "lmstudio" {
+			p = provider.NewLMStudio(cfg.BaseURL)
 		} else {
 			fmt.Printf("Error: Unsupported provider '%s'\n", cfg.Provider)
 			os.Exit(1)
