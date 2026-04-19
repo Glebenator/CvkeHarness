@@ -136,7 +136,7 @@ func validateAllowedShellCommand(command string, allowedCommands map[string]bool
 	return baseCmd, nil
 }
 
-func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultStr string, execErr error) {
 	logger := log.FromContext(ctx)
 
 	var parsedArgs ShellArgs
@@ -146,9 +146,32 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (string, 
 
 	cmdStr := strings.TrimSpace(parsedArgs.Command)
 	
-	// Record telemetry for this zero-shot tool usage
-	// Telemetry recording ignores errors to not degrade core functionality
-	_ = telemetry.RecordCommand(s.primaryModel, cmdStr)
+	start := time.Now()
+	approvedByJudge := false
+
+	defer func() {
+		model := telemetry.ModelFromContext(ctx)
+		if model == "" {
+			model = s.primaryModel
+		}
+
+		baseCmd := "unknown"
+		fields := strings.Fields(cmdStr)
+		if len(fields) > 0 {
+			baseCmd = fields[0]
+		}
+
+		_ = telemetry.RecordEvent(telemetry.TelemetryEvent{
+			Timestamp:       start.UTC(),
+			Model:           model,
+			ToolName:        "shell_execute",
+			BaseCommand:     baseCmd,
+			FullCommand:     cmdStr,
+			ApprovedByJudge: approvedByJudge,
+			Success:         execErr == nil,
+			DurationMs:      time.Since(start).Milliseconds(),
+		})
+	}()
 
 	_, err := validateAllowedShellCommand(cmdStr, s.allowedCommands)
 	if err != nil {
@@ -179,6 +202,7 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (string, 
 		}
 		
 		logger.Info("command approved by LLM judge", "command", cmdStr)
+		approvedByJudge = true
 	}
 
 	logger.Info("executing shell command", "command", cmdStr)

@@ -277,6 +277,7 @@ func renderReview(cfg *config.Config) {
 	fmt.Println(topSep)
 	row("Provider", cfg.Provider)
 	row("Model", cfg.Model)
+	row("Safety Model", cfg.SafetyModel)
 	if cfg.BaseURL != "" {
 		row("Base URL", cfg.BaseURL)
 	}
@@ -508,17 +509,15 @@ func validateOpenRouterKey(key string) (label string, err error) {
 var openRouterFallbackModels = [][2]string{
 	{"openrouter/auto",                        "Auto-selected best model         auto"},
 	{"openrouter/free",                        "Auto-selected free model         free"},
-	{"minimax/minimax-m2.7",                   "MiniMax M2.7                     in $0.00/M  out $0.00/M"},
-	{"anthropic/claude-opus-4.6",              "Anthropic Claude Opus 4.6        in $5.00/M  out $25.00/M"},
 	{"anthropic/claude-sonnet-4.6",            "Anthropic Claude Sonnet 4.6      in $3.00/M  out $15.00/M"},
-	{"google/gemini-3.1-pro-preview",          "Google Gemini 3.1 Pro            in $2.00/M  out $12.00/M"},
+	{"anthropic/claude-opus-4.6",              "Anthropic Claude Opus 4.6        in $5.00/M  out $25.00/M"},
 	{"openai/gpt-5.4",                         "OpenAI GPT-5.4                   in $2.50/M  out $15.00/M"},
-	{"openai/gpt-5.3-codex",                   "OpenAI GPT-5.3-Codex             in $1.75/M  out $14.00/M"},
-	{"google/gemini-3-flash-preview",          "Google Gemini 3 Flash            in $0.50/M  out $3.00/M"},
+	{"google/gemini-3.1-pro-preview",          "Google Gemini 3.1 Pro            in $2.00/M  out $12.00/M"},
 	{"deepseek/deepseek-v3.2",                 "DeepSeek V3.2                    in $0.26/M  out $0.42/M"},
-	{"google/gemini-2.5-flash",                "Google Gemini 2.5 Flash          in $0.30/M  out $2.50/M"},
-	{"anthropic/claude-haiku-4.5",             "Anthropic Claude Haiku 4.5       in $1.00/M  out $5.00/M"},
+	{"x-ai/grok-4.1-fast",                     "xAI Grok 4.1 Fast                in $0.20/M  out $0.50/M"},
 	{"openai/gpt-5.4-nano",                    "OpenAI GPT-5.4 Nano              in $0.20/M  out $1.25/M"},
+	{"mistralai/mistral-large-2512",           "Mistral Large 3 2512             in $0.50/M  out $1.50/M"},
+	{"qwen/qwen3.5-plus-02-15",                "Qwen 3.5 Plus                    in $0.26/M  out $1.56/M"},
 	{"nvidia/nemotron-3-super-120b-a12b:free", "NVIDIA Nemotron 3 Super          free"},
 	{"[ custom model ]",                       "Enter your own model ID →"},
 }
@@ -545,7 +544,18 @@ var logLevelOptions = [][2]string{
 	{"debug", "Verbose · all internal events"},
 }
 
-const totalSteps = 6
+// safetyModelOptions are the recommended judge/safety models presented in the wizard.
+var safetyModelOptions = [][2]string{
+	{"x-ai/grok-4.1-fast",                   "Grok 4.1 Fast  ·  default  ★            xAI"},
+	{"anthropic/claude-sonnet-4.6",          "Claude Sonnet 4.6  ·  balanced          Anthropic"},
+	{"openai/gpt-5.4-nano",                  "GPT-5.4 Nano  ·  fast & cheap           OpenAI"},
+	{"google/gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite  ·  fast           Google"},
+	{"deepseek/deepseek-v3.2",               "DeepSeek V3.2  ·  capable               DeepSeek"},
+	{"mistralai/mistral-small-2603",         "Mistral Small 4  ·  balanced            Mistral"},
+	{"[ custom model ]",                     "Enter your own model ID →"},
+}
+
+const totalSteps = 7
 
 // ─── Wizard steps ─────────────────────────────────────────────────────────────
 // Each function returns true to advance, false to go back.
@@ -795,9 +805,45 @@ func wizardTokens(cfg *config.Config) bool {
 	return true
 }
 
+func wizardSafetyModel(cfg *config.Config) bool {
+	renderHeader()
+	renderStep(4, totalSteps, "Select a Safety Model  (LLM-as-a-Judge)")
+
+	fmt.Printf("  %sThe safety model reviews shell commands before execution.%s\n", fgGray, ansiReset)
+	fmt.Printf("  %sIt should be a capable, instruction-following model from your provider.%s\n\n", fgMuted+ansiDim, ansiReset)
+
+	initial := 0
+	for i, it := range safetyModelOptions {
+		if it[0] == cfg.SafetyModel {
+			initial = i
+			break
+		}
+	}
+
+	idx := selectList(safetyModelOptions, initial, true)
+	if idx == goBack {
+		return false
+	}
+
+	if safetyModelOptions[idx][0] == "[ custom model ]" {
+		renderHeader()
+		renderStep(4, totalSteps, "Custom Safety Model Identifier")
+		fmt.Printf("  %sEnter the exact model ID used by your provider.%s\n", fgGray, ansiReset)
+		fmt.Printf("  %sExample: %santhroptic/claude-3.5-sonnet%s\n\n", fgGray, fgAccent+ansiBold, ansiReset)
+		val, back := promptText("Safety Model ID:", cfg.SafetyModel, true)
+		if back {
+			return false
+		}
+		cfg.SafetyModel = val
+	} else {
+		cfg.SafetyModel = safetyModelOptions[idx][0]
+	}
+	return true
+}
+
 func wizardLogLevel(cfg *config.Config) bool {
 	renderHeader()
-	renderStep(5, totalSteps, "Log Verbosity")
+	renderStep(6, totalSteps, "Log Verbosity")
 
 	initial := 0
 	for i, it := range logLevelOptions {
@@ -817,7 +863,7 @@ func wizardLogLevel(cfg *config.Config) bool {
 
 func wizardConfirm(cfg *config.Config) bool {
 	renderHeader()
-	renderStep(6, totalSteps, "Review & Confirm")
+	renderStep(7, totalSteps, "Review & Confirm")
 
 	renderReview(cfg)
 	fmt.Println()
@@ -876,6 +922,9 @@ var setupCmd = &cobra.Command{
 			if existingCfg.LogLevel != "" {
 				cfg.LogLevel = existingCfg.LogLevel
 			}
+			if existingCfg.SafetyModel != "" {
+				cfg.SafetyModel = existingCfg.SafetyModel
+			}
 		}
 
 		// Begin fetching the model list concurrently so it's ready by step 3.
@@ -908,10 +957,12 @@ var setupCmd = &cobra.Command{
 				}
 				advanced = wizardModel(cfg, fetchedModels)
 			case 4:
-				advanced = wizardTokens(cfg)
+				advanced = wizardSafetyModel(cfg)
 			case 5:
-				advanced = wizardLogLevel(cfg)
+				advanced = wizardTokens(cfg)
 			case 6:
+				advanced = wizardLogLevel(cfg)
+			case 7:
 				advanced = wizardConfirm(cfg)
 			}
 

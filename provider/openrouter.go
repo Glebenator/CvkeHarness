@@ -39,6 +39,7 @@ type openRouterRequest struct {
 // openRouterResponse represents the JSON response from OpenRouter API.
 type openRouterResponse struct {
 	ID      string `json:"id"`
+	Model   string `json:"model"`
 	Choices []struct {
 		Message      Message `json:"message"`
 		FinishReason string  `json:"finish_reason"`
@@ -109,5 +110,6 @@ func (o *OpenRouter) ChatCompletion(ctx context.Context, req *ChatRequest) (*Cha
 		Message:      choice.Message,
 		FinishReason: choice.FinishReason,
 		Usage:        apiResp.Usage,
+		Model:        apiResp.Model,
 	}, nil
 }
