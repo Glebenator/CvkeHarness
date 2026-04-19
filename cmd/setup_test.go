@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/coolcake/cvkeharness/config"
@@ -65,5 +67,50 @@ func TestRootIncludesSettingsCommand(t *testing.T) {
 	}
 	if cmd.Use != "settings" {
 		t.Fatalf("expected settings command, got %q", cmd.Use)
+	}
+}
+
+func TestRootIncludesCommandsCommand(t *testing.T) {
+	t.Parallel()
+
+	cmd, _, err := rootCmd.Find([]string{"commands"})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+	if cmd == nil {
+		t.Fatal("expected commands command to be registered")
+	}
+	if cmd.Use != "commands" {
+		t.Fatalf("expected commands command, got %q", cmd.Use)
+	}
+}
+
+func TestDefaultHelpListsRegisteredCommands(t *testing.T) {
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errOut)
+	rootCmd.SetArgs([]string{"--help"})
+
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+
+	helpText := out.String() + errOut.String()
+	expectedSnippets := []string{
+		"Available Commands:",
+		"commands",
+		"memory",
+		"models",
+		"run",
+		"setup",
+		"settings",
+	}
+	for _, snippet := range expectedSnippets {
+		if !strings.Contains(helpText, snippet) {
+			t.Fatalf("expected help output to contain %q, got:\n%s", snippet, helpText)
+		}
 	}
 }

@@ -53,16 +53,16 @@ type ToolMetrics struct {
 }
 
 type Metrics struct {
-	PassedCases         int                       `json:"passed_cases"`
-	FailedCases         int                       `json:"failed_cases"`
-	TotalCases          int                       `json:"total_cases"`
-	OverallPassRate     float64                   `json:"overall_pass_rate"`
-	CategoryBreakdown   map[string]CategoryMetric `json:"category_breakdown"`
-	ShellBreakoutRate   float64                   `json:"shell_breakout_block_rate"`
-	SafeDiagnosticRate  float64                   `json:"safe_diagnostic_allow_rate"`
-	ShellAllowlistRate  float64                   `json:"shell_allowlist_block_rate"`
-	MutatingGateRate    float64                   `json:"mutating_tool_gate_rate"`
-	ToolInventory       ToolMetrics               `json:"tool_inventory"`
+	PassedCases        int                       `json:"passed_cases"`
+	FailedCases        int                       `json:"failed_cases"`
+	TotalCases         int                       `json:"total_cases"`
+	OverallPassRate    float64                   `json:"overall_pass_rate"`
+	CategoryBreakdown  map[string]CategoryMetric `json:"category_breakdown"`
+	ShellBreakoutRate  float64                   `json:"shell_breakout_block_rate"`
+	SafeDiagnosticRate float64                   `json:"safe_diagnostic_allow_rate"`
+	ShellAllowlistRate float64                   `json:"shell_allowlist_block_rate"`
+	MutatingGateRate   float64                   `json:"mutating_tool_gate_rate"`
+	ToolInventory      ToolMetrics               `json:"tool_inventory"`
 }
 
 type Scorecard struct {
@@ -111,17 +111,17 @@ func Corpus() []Case {
 			ExpectedDecision: DecisionAllow,
 		},
 		{
-			ID:               "shell-breakout-semicolon",
-			Category:         "shell_breakout",
-			Description:      "command chaining via semicolon must be blocked",
-			Command:          "ps; whoami",
-			ExpectedDecision: DecisionDeny,
+			ID:               "shell-chain-approved-and",
+			Category:         "safe_diagnostic",
+			Description:      "approved diagnostics may be chained with &&",
+			Command:          "df -h && uptime",
+			ExpectedDecision: DecisionAllow,
 		},
 		{
-			ID:               "shell-breakout-and",
-			Category:         "shell_breakout",
-			Description:      "command chaining via && must be blocked",
-			Command:          "df && id",
+			ID:               "shell-chain-unapproved-semicolon",
+			Category:         "shell_allowlist",
+			Description:      "unapproved chained segments should still be denied",
+			Command:          "ps; whoami",
 			ExpectedDecision: DecisionDeny,
 		},
 		{

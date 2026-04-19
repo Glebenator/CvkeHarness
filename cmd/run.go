@@ -44,12 +44,12 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		registry := tools.NewDefaultRegistry(cfg.AllowedCommands, p, cfg.SafetyMode, cfg.SafetyModel, cfg.PrimaryModel())
 		store := state.Open(cfg.StateDBPath)
 		if store.Err() != nil {
 			fmt.Printf("Warning: state DB unavailable, continuing with file-only memory fallback (%v)\n", store.Err())
 		}
 		defer store.Close()
+		registry := tools.NewDefaultRegistryWithStore(cfg.AllowedCommands, store, p, cfg.SafetyMode, cfg.SafetyModel, cfg.PrimaryModel())
 
 		mem := memory.NewManager(cfg.MemoryDir, store, cfg.MemoryMaxSnippets)
 		if err := mem.EnsureFiles(); err != nil {

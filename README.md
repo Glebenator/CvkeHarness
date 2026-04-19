@@ -60,6 +60,7 @@ This lives in `~/.cvkeharness/state.db` and stores:
 - per-model stats
 - routing candidates
 - model approvals
+- command approvals
 - memory entry metadata
 - snapshots for rollback
 
@@ -144,6 +145,13 @@ Show why routing chose a model:
 - `cvkeharness models stats`
   Show normalized model performance data
 
+### Command commands
+
+- `cvkeharness commands list`
+  Show the static shell allowlist plus learned approved commands
+- `cvkeharness commands approve "<command>"`
+  Approve one or more parsed shell command segments for future runs
+
 ## Configuration
 
 Config is stored in `~/.cvkeharness/config.yaml`.
@@ -224,9 +232,11 @@ The current default tool surface is intentionally small.
 The shell tool:
 
 - validates shell syntax
-- blocks obvious breakout constructs
-- checks an allowlist for automatically approved commands
-- routes non-allowlisted commands through either an LLM judge or direct user confirmation, depending on config
+- parses supported chaining operators like `&&`, `||`, and `;`
+- blocks unsupported shell constructs such as pipes, redirection, substitution, and backgrounding
+- checks both the static allowlist and the learned approved-command list
+- routes unknown commands through either an LLM judge or direct user confirmation, depending on config
+- persists approved command segments for reuse in future runs
 - records telemetry and tool outcomes
 
 This keeps the runtime provider-agnostic while still allowing policy-sensitive shell access behind a narrow gate.

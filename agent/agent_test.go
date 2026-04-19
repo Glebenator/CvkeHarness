@@ -28,7 +28,7 @@ func (f *fakeProvider) ChatCompletion(_ context.Context, req *provider.ChatReque
 						Type: "function",
 						Function: provider.ToolFunction{
 							Name:      "shell_execute",
-							Arguments: `{"command":"ps; whoami"}`,
+							Arguments: `{"command":"ps && whoami"}`,
 						},
 					},
 				},

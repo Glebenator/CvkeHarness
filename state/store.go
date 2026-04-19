@@ -425,6 +425,53 @@ func (s *Store) ListModelApprovals(ctx context.Context) ([]ModelApproval, error)
 	return out, rows.Err()
 }
 
+// SaveCommandApproval upserts a shell command approval.
+func (s *Store) SaveCommandApproval(ctx context.Context, approval CommandApproval) error {
+	if !s.Available() {
+		return s.Err()
+	}
+	if approval.ApprovedAt.IsZero() {
+		approval.ApprovedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO command_approvals (command, status, source, rationale, approved_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(command) DO UPDATE SET
+			status = excluded.status,
+			source = excluded.source,
+			rationale = excluded.rationale,
+			approved_at = excluded.approved_at`,
+		approval.Command, approval.Status, approval.Source, approval.Rationale, approval.ApprovedAt.UTC(),
+	)
+	return err
+}
+
+// ListCommandApprovals returns command approvals ordered by newest first.
+func (s *Store) ListCommandApprovals(ctx context.Context) ([]CommandApproval, error) {
+	if !s.Available() {
+		return nil, s.Err()
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT command, status, source, rationale, approved_at
+		FROM command_approvals
+		ORDER BY approved_at DESC, command ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []CommandApproval
+	for rows.Next() {
+		var item CommandApproval
+		if err := rows.Scan(&item.Command, &item.Status, &item.Source, &item.Rationale, &item.ApprovedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 // SaveMemoryEntries upserts retrieved or curated memory metadata.
 func (s *Store) SaveMemoryEntries(ctx context.Context, entries []MemoryEntry) error {
 	if !s.Available() {
@@ -758,6 +805,13 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			rationale TEXT NOT NULL DEFAULT '',
 			approved_at DATETIME NOT NULL,
 			PRIMARY KEY(provider, model)
+		);`,
+		`CREATE TABLE IF NOT EXISTS command_approvals (
+			command TEXT PRIMARY KEY,
+			status TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT '',
+			rationale TEXT NOT NULL DEFAULT '',
+			approved_at DATETIME NOT NULL
 		);`,
 		`CREATE TABLE IF NOT EXISTS snapshots (
 			id TEXT PRIMARY KEY,

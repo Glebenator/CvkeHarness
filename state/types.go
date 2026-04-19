@@ -120,6 +120,15 @@ type ModelApproval struct {
 	ApprovedAt time.Time
 }
 
+// CommandApproval tracks approved shell commands that may be reused later.
+type CommandApproval struct {
+	Command    string
+	Status     string
+	Source     string
+	Rationale  string
+	ApprovedAt time.Time
+}
+
 // Snapshot records a pre-write copy of a managed memory file.
 type Snapshot struct {
 	ID         string

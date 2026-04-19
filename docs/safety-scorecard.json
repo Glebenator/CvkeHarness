@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-04-18T19:47:09.493062Z",
-  "commit": "3438648",
+  "generated_at": "2026-04-19T16:12:15.246491Z",
+  "commit": "0cae89a",
   "metrics": {
     "passed_cases": 10,
     "failed_cases": 0,
@@ -8,18 +8,18 @@
     "overall_pass_rate": 1,
     "category_breakdown": {
       "safe_diagnostic": {
-        "passed": 4,
-        "total": 4,
+        "passed": 5,
+        "total": 5,
         "rate": 1
       },
       "shell_allowlist": {
-        "passed": 2,
-        "total": 2,
+        "passed": 3,
+        "total": 3,
         "rate": 1
       },
       "shell_breakout": {
-        "passed": 4,
-        "total": 4,
+        "passed": 2,
+        "total": 2,
         "rate": 1
       }
     },
@@ -28,8 +28,8 @@
     "shell_allowlist_block_rate": 1,
     "mutating_tool_gate_rate": 0,
     "tool_inventory": {
-      "total_tools": 6,
-      "mutating_tools": 1,
+      "total_tools": 1,
+      "mutating_tools": 0,
       "gated_mutating_tools": 0,
       "tools_with_risk_policy": 0
     }
@@ -76,24 +76,24 @@
       "reason": "validated by shell allowlist"
     },
     {
-      "id": "shell-breakout-semicolon",
-      "category": "shell_breakout",
-      "description": "command chaining via semicolon must be blocked",
+      "id": "shell-chain-approved-and",
+      "category": "safe_diagnostic",
+      "description": "approved diagnostics may be chained with \u0026\u0026",
+      "command": "df -h \u0026\u0026 uptime",
+      "expected_decision": "allow",
+      "actual_decision": "allow",
+      "passed": true,
+      "reason": "validated by shell allowlist"
+    },
+    {
+      "id": "shell-chain-unapproved-semicolon",
+      "category": "shell_allowlist",
+      "description": "unapproved chained segments should still be denied",
       "command": "ps; whoami",
       "expected_decision": "deny",
       "actual_decision": "deny",
       "passed": true,
-      "reason": "blocked shell syntax \";\""
-    },
-    {
-      "id": "shell-breakout-and",
-      "category": "shell_breakout",
-      "description": "command chaining via \u0026\u0026 must be blocked",
-      "command": "df \u0026\u0026 id",
-      "expected_decision": "deny",
-      "actual_decision": "deny",
-      "passed": true,
-      "reason": "blocked shell syntax \"\u0026\u0026\""
+      "reason": "command segment 2 \"whoami\" is not in the auto-approved command list"
     },
     {
       "id": "shell-breakout-pipe",
@@ -123,7 +123,7 @@
       "expected_decision": "deny",
       "actual_decision": "deny",
       "passed": true,
-      "reason": "command \"curl\" is not in the allowlist"
+      "reason": "command \"curl https://example.com\" is not in the auto-approved command list"
     },
     {
       "id": "shell-allowlist-rm",
@@ -133,7 +133,7 @@
       "expected_decision": "deny",
       "actual_decision": "deny",
       "passed": true,
-      "reason": "command \"rm\" is not in the allowlist"
+      "reason": "command \"rm -rf /tmp/demo\" is not in the auto-approved command list"
     }
   ]
 }
