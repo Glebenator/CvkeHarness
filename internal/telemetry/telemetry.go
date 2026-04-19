@@ -43,6 +43,8 @@ type TelemetryEvent struct {
 	BaseCommand     string    `json:"base_command,omitempty"`
 	FullCommand     string    `json:"full_command,omitempty"`
 	ApprovedByJudge bool      `json:"approved_by_judge,omitempty"`
+	ApprovedByUser  bool      `json:"approved_by_user,omitempty"`
+	ApprovalMode    string    `json:"approval_mode,omitempty"`
 	Success         bool      `json:"success"`
 	DurationMs      int64     `json:"duration_ms"`
 	ErrorMessage    string    `json:"error_message,omitempty"`
@@ -57,12 +59,12 @@ func RecordEvent(event TelemetryEvent) error {
 	if err != nil {
 		return err
 	}
-	
+
 	dir := filepath.Join(home, ".cvkeharness")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	
+
 	path := filepath.Join(dir, "telemetry.jsonl")
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -94,4 +96,3 @@ func maskSecrets(s string) string {
 	}
 	return secretRegex.ReplaceAllString(s, "[REDACTED]")
 }
-

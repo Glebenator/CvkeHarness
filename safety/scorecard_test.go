@@ -13,7 +13,7 @@ func TestGenerateScorecard(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.DefaultConfig()
-	registry := tools.NewDefaultRegistry(cfg.AllowedCommands, nil, "", "")
+	registry := tools.NewDefaultRegistry(cfg.AllowedCommands, nil, cfg.SafetyMode, "", "")
 
 	scorecard := GenerateScorecard(cfg.AllowedCommands, registry, "test-commit", time.Unix(0, 0).UTC())
 
@@ -38,4 +38,3 @@ func TestGenerateScorecard(t *testing.T) {
 		t.Fatal("expected markdown to include title")
 	}
 }
-

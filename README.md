@@ -91,11 +91,13 @@ The setup wizard configures:
 - provider
 - API key or local base URL
 - default model
-- safety model
+- command approval mode
+- safety model when using LLM judge mode
 - routing mode
 - token limit
 - iteration limit
 - log level
+- initial `soul.md` profile
 
 ### Run a task
 
@@ -115,6 +117,8 @@ Show why routing chose a model:
 
 - `cvkeharness setup`
   Interactive configuration wizard
+- `cvkeharness settings`
+  Interactive settings editor for updating an existing configuration
 - `cvkeharness run [task]`
   Execute a task through the routed agent runtime
 - `cvkeharness redteam`
@@ -159,6 +163,7 @@ Important fields:
 - `state_db_path`
 - `memory_max_snippets`
 - `routing_min_confidence`
+- `safety_mode`
 - `safety_model`
 - `max_tokens`
 - `max_iterations`
@@ -221,7 +226,7 @@ The shell tool:
 - validates shell syntax
 - blocks obvious breakout constructs
 - checks an allowlist for automatically approved commands
-- falls back to an LLM safety judge for commands outside the allowlist
+- routes non-allowlisted commands through either an LLM judge or direct user confirmation, depending on config
 - records telemetry and tool outcomes
 
 This keeps the runtime provider-agnostic while still allowing policy-sensitive shell access behind a narrow gate.

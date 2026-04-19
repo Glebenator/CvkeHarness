@@ -195,7 +195,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	}
 
 	systemMessages := initialSystemMessages(retrieved, planningNotes)
-	messages := append(systemMessages, provider.Message{Role: "user", Content: prompt})
+	chat := NewChatState(append(systemMessages, provider.Message{Role: "user", Content: prompt})...)
 	toolDefs := a.opts.ToolRegistry.Definitions()
 
 	phaseRecord := state.PhaseRecord{
@@ -221,7 +221,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 		iterCtx := log.WithIteration(ctx, iter)
 		req := &provider.ChatRequest{
 			Model:       selection.Requested.Model,
-			Messages:    messages,
+			Messages:    chat.Messages(),
 			Tools:       toolDefs,
 			Temperature: 0.2,
 			MaxTokens:   a.opts.MaxTokens,
@@ -253,7 +253,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 		}
 		phaseRecord.ActualModel = actualModel
 
-		messages = append(messages, resp.Message)
+		chat.Add(resp.Message)
 		if len(resp.Message.ToolCalls) == 0 {
 			logger.Info("agent finished task")
 			phaseRecord.Success = true
@@ -297,20 +297,13 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 						},
 					})
 					if refreshErr == nil && strings.TrimSpace(refresh.Learned) != "" {
-						messages = append(messages, provider.Message{
-							Role:    "system",
-							Content: "Refreshed learned context after tool trouble:\n" + refresh.Learned,
-						})
+						chat.AddSystem("Refreshed learned context after tool trouble:\n" + refresh.Learned)
 					}
 				}
 			}
 
 			toolOutcomes = append(toolOutcomes, outcome)
-			messages = append(messages, provider.Message{
-				Role:       "tool",
-				ToolCallID: call.ID,
-				Content:    resultStr,
-			})
+			chat.AddToolResult(call.ID, resultStr)
 		}
 	}
 
@@ -465,6 +458,8 @@ func classifyPolicyDenial(err error) (bool, string) {
 	}
 	lower := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(lower, "user denied command execution"):
+		return true, "user_denial"
 	case strings.Contains(lower, "deemed this command dangerous"):
 		return true, "judge_denial"
 	case strings.Contains(lower, "safety constraint violated"):

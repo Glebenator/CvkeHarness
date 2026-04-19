@@ -21,6 +21,7 @@ type Config struct {
 	PlanningModel        string            `yaml:"planning_model,omitempty"`
 	ExecutionModel       string            `yaml:"execution_model,omitempty"`
 	CurationModel        string            `yaml:"curation_model,omitempty"`
+	SafetyMode           string            `yaml:"safety_mode,omitempty"`
 	SafetyModel          string            `yaml:"safety_model"`
 	MaxTokens            int               `yaml:"max_tokens"`
 	MaxIterations        int               `yaml:"max_iterations"`
@@ -102,6 +103,9 @@ func LoadConfig() (*Config, error) {
 	if cfg.SafetyModel == "" {
 		cfg.SafetyModel = "x-ai/grok-4.1-fast"
 	}
+	if cfg.SafetyMode == "" {
+		cfg.SafetyMode = "llm_judge"
+	}
 	if cfg.DefaultModel == "" {
 		cfg.DefaultModel = cfg.Model
 	}
@@ -160,6 +164,7 @@ func DefaultConfig() *Config {
 		Provider:             "openrouter",
 		Model:                "anthropic/claude-sonnet-4.6",
 		DefaultModel:         "anthropic/claude-sonnet-4.6",
+		SafetyMode:           "llm_judge",
 		SafetyModel:          "x-ai/grok-4.1-fast",
 		MaxTokens:            4096,
 		MaxIterations:        25,

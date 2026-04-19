@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -277,7 +278,13 @@ func renderReview(cfg *config.Config) {
 	fmt.Println(topSep)
 	row("Provider", cfg.Provider)
 	row("Default Model", cfg.PrimaryModel())
-	row("Safety Model", cfg.SafetyModel)
+	switch cfg.SafetyMode {
+	case tools.SafetyModeUserConfirm:
+		row("Command Approval", "Manual user confirmation")
+	default:
+		row("Command Approval", "LLM judge")
+		row("Safety Model", cfg.SafetyModel)
+	}
 	if cfg.RoutingEnabled {
 		row("Routing", "Auto within approved models")
 	} else {
@@ -569,12 +576,17 @@ var safetyModelOptions = [][2]string{
 	{"[ custom model ]", "Enter your own model ID →"},
 }
 
+var safetyModeOptions = [][2]string{
+	{tools.SafetyModeLLMJudge, "LLM judge  ·  secondary model reviews commands  ★"},
+	{tools.SafetyModeUserConfirm, "Manual confirm  ·  wait for terminal user approval"},
+}
+
 var routingOptions = [][2]string{
 	{"auto_within_policy", "Auto route within approved models  ★"},
 	{"disabled", "Always use the default model"},
 }
 
-const totalSteps = 9
+const totalSteps = 10
 
 // ─── Wizard steps ─────────────────────────────────────────────────────────────
 // Each function returns true to advance, false to go back.
@@ -825,39 +837,60 @@ func wizardTokens(cfg *config.Config) bool {
 }
 
 func wizardSafetyModel(cfg *config.Config) bool {
-	renderHeader()
-	renderStep(4, totalSteps, "Select a Safety Model  (LLM-as-a-Judge)")
-
-	fmt.Printf("  %sThe safety model reviews shell commands before execution.%s\n", fgGray, ansiReset)
-	fmt.Printf("  %sIt should be a capable, instruction-following model from your provider.%s\n\n", fgMuted+ansiDim, ansiReset)
-
-	initial := 0
-	for i, it := range safetyModelOptions {
-		if it[0] == cfg.SafetyModel {
-			initial = i
-			break
-		}
-	}
-
-	idx := selectList(safetyModelOptions, initial, true)
-	if idx == goBack {
-		return false
-	}
-
-	if safetyModelOptions[idx][0] == "[ custom model ]" {
+	for {
 		renderHeader()
-		renderStep(4, totalSteps, "Custom Safety Model Identifier")
-		fmt.Printf("  %sEnter the exact model ID used by your provider.%s\n", fgGray, ansiReset)
-		fmt.Printf("  %sExample: %santhropic/claude-3.5-sonnet%s\n\n", fgGray, fgAccent+ansiBold, ansiReset)
-		val, back := promptText("Safety Model ID:", cfg.SafetyModel, true)
-		if back {
+		renderStep(4, totalSteps, "Command Approval Policy")
+
+		fmt.Printf("  %sCommands outside the auto-approved allowlist need a secondary gate before execution.%s\n", fgGray, ansiReset)
+		fmt.Printf("  %sChoose whether that gate is another model or a direct user confirmation prompt.%s\n\n", fgMuted+ansiDim, ansiReset)
+
+		initialMode := 0
+		if cfg.SafetyMode == tools.SafetyModeUserConfirm {
+			initialMode = 1
+		}
+
+		modeIdx := selectList(safetyModeOptions, initialMode, true)
+		if modeIdx == goBack {
 			return false
 		}
-		cfg.SafetyModel = val
-	} else {
-		cfg.SafetyModel = safetyModelOptions[idx][0]
+		cfg.SafetyMode = safetyModeOptions[modeIdx][0]
+		if cfg.SafetyMode == tools.SafetyModeUserConfirm {
+			return true
+		}
+
+		renderHeader()
+		renderStep(4, totalSteps, "Select a Safety Model  (LLM-as-a-Judge)")
+		fmt.Printf("  %sThe safety model reviews shell commands before execution.%s\n", fgGray, ansiReset)
+		fmt.Printf("  %sIt should be a capable, instruction-following model from your provider.%s\n\n", fgMuted+ansiDim, ansiReset)
+
+		initial := 0
+		for i, it := range safetyModelOptions {
+			if it[0] == cfg.SafetyModel {
+				initial = i
+				break
+			}
+		}
+
+		idx := selectList(safetyModelOptions, initial, true)
+		if idx == goBack {
+			continue
+		}
+
+		if safetyModelOptions[idx][0] == "[ custom model ]" {
+			renderHeader()
+			renderStep(4, totalSteps, "Custom Safety Model Identifier")
+			fmt.Printf("  %sEnter the exact model ID used by your provider.%s\n", fgGray, ansiReset)
+			fmt.Printf("  %sExample: %santhropic/claude-3.5-sonnet%s\n\n", fgGray, fgAccent+ansiBold, ansiReset)
+			val, back := promptText("Safety Model ID:", cfg.SafetyModel, true)
+			if back {
+				continue
+			}
+			cfg.SafetyModel = val
+		} else {
+			cfg.SafetyModel = safetyModelOptions[idx][0]
+		}
+		return true
 	}
-	return true
 }
 
 func wizardRouting(cfg *config.Config) bool {
@@ -943,12 +976,53 @@ func wizardLogLevel(cfg *config.Config) bool {
 	return true
 }
 
-func wizardConfirm(cfg *config.Config) bool {
+func wizardSoulProfile(cfg *config.Config, profile *soulProfile) bool {
 	renderHeader()
-	renderStep(9, totalSteps, "Review & Confirm")
+	renderStep(9, totalSteps, "Agent Soul")
+
+	needsBootstrap, err := soulBootstrapRequired(cfg.MemoryDir)
+	if err != nil {
+		fmt.Printf("  %sThe soul file could not be inspected yet, so setup will prepare a fresh one.%s\n\n", fgYellow+ansiBold, ansiReset)
+		needsBootstrap = true
+	}
+
+	if !needsBootstrap {
+		fmt.Printf("  %sAn existing %s will be preserved.%s\n", fgGray, fgAccent+ansiBold+"soul.md"+ansiReset+fgGray, ansiReset)
+		fmt.Printf("  %sSetup will still ensure the other memory files exist, but it will not overwrite your current soul.%s\n\n", fgMuted+ansiDim, ansiReset)
+
+		choices := [][2]string{
+			{"Keep existing soul.md", "User-owned file preserved as-is"},
+		}
+		return selectList(choices, 0, true) != goBack
+	}
+
+	fmt.Printf("  %sChoose the starting voice and working style for the generated %s.%s\n", fgGray, fgAccent+ansiBold+"soul.md"+ansiReset+fgGray, ansiReset)
+	fmt.Printf("  %sThis mainly tunes tone, autonomy, risk posture, and explanation depth.%s\n\n", fgMuted+ansiDim, ansiReset)
+
+	initial := 0
+	for i, option := range soulProfiles {
+		if option.ID == profile.ID {
+			initial = i
+			break
+		}
+	}
+
+	idx := selectList(soulProfileItems(), initial, true)
+	if idx == goBack {
+		return false
+	}
+
+	*profile = soulProfiles[idx]
+	return true
+}
+
+func wizardConfirm(cfg *config.Config, profile soulProfile) bool {
+	renderHeader()
+	renderStep(10, totalSteps, "Review & Confirm")
 
 	renderReview(cfg)
 	fmt.Println()
+	fmt.Printf("  %sSoul profile:%s  %s%s%s\n\n", fgMuted, ansiReset, ansiBold, fgWhite, profile.Label+ansiReset)
 
 	choices := [][2]string{
 		{"✔  Save and finish", "Write config — ready to run"},
@@ -990,150 +1064,198 @@ func ensureDefaultApproved(cfg *config.Config) {
 
 // ─── Command ──────────────────────────────────────────────────────────────────
 
+func loadWizardConfig() *config.Config {
+	// Load any previously saved configuration so we can:
+	//   (a) pre-populate selections with the user's current values, and
+	//   (b) offer to reuse stored credentials without re-typing them.
+	existingCfg, _ := config.LoadConfig()
+	cfg := config.DefaultConfig()
+
+	if existingCfg == nil {
+		return cfg
+	}
+
+	if existingCfg.Provider != "" {
+		cfg.Provider = existingCfg.Provider
+	}
+	if existingCfg.PrimaryModel() != "" {
+		cfg.Model = existingCfg.PrimaryModel()
+		cfg.DefaultModel = existingCfg.PrimaryModel()
+	}
+	// Carry over the full key map so every provider's credential is
+	// available for the reuse prompt regardless of which provider the
+	// user starts from or switches to during this wizard run.
+	if len(existingCfg.APIKeys) > 0 {
+		cfg.APIKeys = existingCfg.APIKeys
+	}
+	if existingCfg.BaseURL != "" {
+		cfg.BaseURL = existingCfg.BaseURL
+	}
+	if existingCfg.MaxTokens > 0 {
+		cfg.MaxTokens = existingCfg.MaxTokens
+	}
+	if existingCfg.MaxIterations > 0 {
+		cfg.MaxIterations = existingCfg.MaxIterations
+	}
+	if existingCfg.LogLevel != "" {
+		cfg.LogLevel = existingCfg.LogLevel
+	}
+	if existingCfg.SafetyModel != "" {
+		cfg.SafetyModel = existingCfg.SafetyModel
+	}
+	if existingCfg.SafetyMode != "" {
+		cfg.SafetyMode = existingCfg.SafetyMode
+	}
+	cfg.RoutingEnabled = existingCfg.RoutingEnabled
+	if existingCfg.RoutingMode != "" {
+		cfg.RoutingMode = existingCfg.RoutingMode
+	}
+	if len(existingCfg.ApprovedModels) > 0 {
+		cfg.ApprovedModels = existingCfg.ApprovedModels
+	}
+	if existingCfg.MemoryDir != "" {
+		cfg.MemoryDir = existingCfg.MemoryDir
+	}
+	if existingCfg.StateDBPath != "" {
+		cfg.StateDBPath = existingCfg.StateDBPath
+	}
+	if existingCfg.MemoryMaxSnippets > 0 {
+		cfg.MemoryMaxSnippets = existingCfg.MemoryMaxSnippets
+	}
+	if existingCfg.RoutingMinConfidence > 0 {
+		cfg.RoutingMinConfidence = existingCfg.RoutingMinConfidence
+	}
+
+	return cfg
+}
+
+func runSetupWizard(mode string) {
+	cfg := loadWizardConfig()
+
+	// Begin fetching the model list concurrently so it's ready by step 3.
+	modelsCh := make(chan modelsResult, 1)
+	go func() { modelsCh <- fetchOpenRouterModels() }()
+
+	var fetchedModels modelsResult // populated on first visit to step 3
+	selectedSoulProfile := defaultSoulProfile()
+
+	// ── Step loop with Backspace back-navigation ──────────────────────
+	step := 1
+	for step >= 1 && step <= totalSteps {
+		var advanced bool
+		switch step {
+		case 1:
+			advanced = wizardProvider(cfg)
+		case 2:
+			// Step 2: API key (OpenRouter) or base URL (LM Studio).
+			advanced = wizardAPIKey(cfg)
+		case 3:
+			// Ensure the model list is ready before rendering.
+			if fetchedModels.items == nil {
+				select {
+				case fetchedModels = <-modelsCh:
+				case <-time.After(100 * time.Millisecond):
+					renderHeader()
+					renderStep(3, totalSteps, "Select a Model")
+					fmt.Printf("  %s%s⟳  Fetching latest models …%s\n", ansiDim, fgGray, ansiReset)
+					fetchedModels = <-modelsCh
+				}
+			}
+			advanced = wizardModel(cfg, fetchedModels)
+		case 4:
+			advanced = wizardSafetyModel(cfg)
+		case 5:
+			advanced = wizardRouting(cfg)
+		case 6:
+			advanced = wizardTokens(cfg)
+		case 7:
+			advanced = wizardIterations(cfg)
+		case 8:
+			advanced = wizardLogLevel(cfg)
+		case 9:
+			advanced = wizardSoulProfile(cfg, &selectedSoulProfile)
+		case 10:
+			advanced = wizardConfirm(cfg, selectedSoulProfile)
+		}
+
+		if advanced {
+			step++
+		} else if step > 1 {
+			step--
+		}
+		// step == 1 and back pressed → stays at 1 (no previous step)
+	}
+
+	if cfg.DefaultModel == "" {
+		cfg.DefaultModel = cfg.Model
+	}
+	cfg.Model = cfg.PrimaryModel()
+	if cfg.RoutingMode == "" {
+		cfg.RoutingMode = "auto_within_policy"
+	}
+	ensureDefaultApproved(cfg)
+
+	if err := cfg.Save(); err != nil {
+		fmt.Printf("\n  %s%s✗  Failed to save configuration: %v%s\n\n",
+			ansiBold, fgRed, err, ansiReset)
+		os.Exit(1)
+	}
+
+	wroteSoul, err := writeSetupSoul(cfg.MemoryDir, cfg.MemoryMaxSnippets, selectedSoulProfile)
+	if err != nil {
+		fmt.Printf("\n  %s%s✗  Failed to prepare memory files: %v%s\n\n",
+			ansiBold, fgRed, err, ansiReset)
+		os.Exit(1)
+	}
+
+	successTitle := "Setup complete!"
+	actionLabel := "Setup"
+	if mode == "settings" {
+		successTitle = "Settings updated!"
+		actionLabel = "Settings"
+	}
+
+	// ── Success banner ─────────────────────────────────────────────────
+	fmt.Print(clearScreen)
+	fmt.Println()
+	fmt.Printf("%s%s%s\n", fgGreen+ansiBold, hSep, ansiReset)
+	fmt.Printf("  %s%s✔  %s%s Configuration saved.\n", ansiBold, fgGreen, successTitle, ansiReset)
+	fmt.Printf("%s%s%s\n\n", fgGreen+ansiBold, hSep, ansiReset)
+
+	renderReview(cfg)
+
+	fmt.Println()
+	fmt.Printf("  %sTry running:%s\n\n", fgGray, ansiReset)
+	fmt.Printf("  %s%s  cvkeharness run \"list all running docker containers\"%s\n\n",
+		ansiBold, fgAccent, ansiReset)
+	if wroteSoul {
+		fmt.Printf("  %s%s generated %s~/.cvkeharness/soul.md%s and ensured %smemory.md%s plus %sfindings.md%s are ready.%s\n",
+			fgGray, actionLabel, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
+	} else {
+		fmt.Printf("  %s%s preserved your existing %s~/.cvkeharness/soul.md%s and ensured %smemory.md%s plus %sfindings.md%s are present.%s\n",
+			fgGray, actionLabel, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
+	}
+	fmt.Printf("  %sThe SQLite state file %s~/.cvkeharness/state.db%s will still be created on first run as needed.%s\n\n",
+		fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
+}
+
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Interactive onboarding wizard to configure the agent",
 	Run: func(cmd *cobra.Command, args []string) {
-		// Load any previously saved configuration so we can:
-		//   (a) pre-populate selections with the user's current values, and
-		//   (b) offer to reuse stored credentials without re-typing them.
-		existingCfg, _ := config.LoadConfig()
-		cfg := config.DefaultConfig()
+		runSetupWizard("setup")
+	},
+}
 
-		if existingCfg != nil {
-			if existingCfg.Provider != "" {
-				cfg.Provider = existingCfg.Provider
-			}
-			if existingCfg.PrimaryModel() != "" {
-				cfg.Model = existingCfg.PrimaryModel()
-				cfg.DefaultModel = existingCfg.PrimaryModel()
-			}
-			// Carry over the full key map so every provider's credential is
-			// available for the reuse prompt regardless of which provider the
-			// user starts from or switches to during this wizard run.
-			if len(existingCfg.APIKeys) > 0 {
-				cfg.APIKeys = existingCfg.APIKeys
-			}
-			if existingCfg.BaseURL != "" {
-				cfg.BaseURL = existingCfg.BaseURL
-			}
-			if existingCfg.MaxTokens > 0 {
-				cfg.MaxTokens = existingCfg.MaxTokens
-			}
-			if existingCfg.MaxIterations > 0 {
-				cfg.MaxIterations = existingCfg.MaxIterations
-			}
-			if existingCfg.LogLevel != "" {
-				cfg.LogLevel = existingCfg.LogLevel
-			}
-			if existingCfg.SafetyModel != "" {
-				cfg.SafetyModel = existingCfg.SafetyModel
-			}
-			cfg.RoutingEnabled = existingCfg.RoutingEnabled
-			if existingCfg.RoutingMode != "" {
-				cfg.RoutingMode = existingCfg.RoutingMode
-			}
-			if len(existingCfg.ApprovedModels) > 0 {
-				cfg.ApprovedModels = existingCfg.ApprovedModels
-			}
-			if existingCfg.MemoryDir != "" {
-				cfg.MemoryDir = existingCfg.MemoryDir
-			}
-			if existingCfg.StateDBPath != "" {
-				cfg.StateDBPath = existingCfg.StateDBPath
-			}
-			if existingCfg.MemoryMaxSnippets > 0 {
-				cfg.MemoryMaxSnippets = existingCfg.MemoryMaxSnippets
-			}
-			if existingCfg.RoutingMinConfidence > 0 {
-				cfg.RoutingMinConfidence = existingCfg.RoutingMinConfidence
-			}
-		}
-
-		// Begin fetching the model list concurrently so it's ready by step 3.
-		modelsCh := make(chan modelsResult, 1)
-		go func() { modelsCh <- fetchOpenRouterModels() }()
-
-		var fetchedModels modelsResult // populated on first visit to step 3
-
-		// ── Step loop with Backspace back-navigation ──────────────────────
-		step := 1
-		for step >= 1 && step <= totalSteps {
-			var advanced bool
-			switch step {
-			case 1:
-				advanced = wizardProvider(cfg)
-			case 2:
-				// Step 2: API key (OpenRouter) or base URL (LM Studio).
-				advanced = wizardAPIKey(cfg)
-			case 3:
-				// Ensure the model list is ready before rendering.
-				if fetchedModels.items == nil {
-					select {
-					case fetchedModels = <-modelsCh:
-					case <-time.After(100 * time.Millisecond):
-						renderHeader()
-						renderStep(3, totalSteps, "Select a Model")
-						fmt.Printf("  %s%s⟳  Fetching latest models …%s\n", ansiDim, fgGray, ansiReset)
-						fetchedModels = <-modelsCh
-					}
-				}
-				advanced = wizardModel(cfg, fetchedModels)
-			case 4:
-				advanced = wizardSafetyModel(cfg)
-			case 5:
-				advanced = wizardRouting(cfg)
-			case 6:
-				advanced = wizardTokens(cfg)
-			case 7:
-				advanced = wizardIterations(cfg)
-			case 8:
-				advanced = wizardLogLevel(cfg)
-			case 9:
-				advanced = wizardConfirm(cfg)
-			}
-
-			if advanced {
-				step++
-			} else if step > 1 {
-				step--
-			}
-			// step == 1 and back pressed → stays at 1 (no previous step)
-		}
-
-		if cfg.DefaultModel == "" {
-			cfg.DefaultModel = cfg.Model
-		}
-		cfg.Model = cfg.PrimaryModel()
-		if cfg.RoutingMode == "" {
-			cfg.RoutingMode = "auto_within_policy"
-		}
-		ensureDefaultApproved(cfg)
-
-		if err := cfg.Save(); err != nil {
-			fmt.Printf("\n  %s%s✗  Failed to save configuration: %v%s\n\n",
-				ansiBold, fgRed, err, ansiReset)
-			os.Exit(1)
-		}
-
-		// ── Success banner ─────────────────────────────────────────────────
-		fmt.Print(clearScreen)
-		fmt.Println()
-		fmt.Printf("%s%s%s\n", fgGreen+ansiBold, hSep, ansiReset)
-		fmt.Printf("  %s%s✔  Setup complete!%s Configuration saved.\n", ansiBold, fgGreen, ansiReset)
-		fmt.Printf("%s%s%s\n\n", fgGreen+ansiBold, hSep, ansiReset)
-
-		renderReview(cfg)
-
-		fmt.Println()
-		fmt.Printf("  %sYou're all set. Try running:%s\n\n", fgGray, ansiReset)
-		fmt.Printf("  %s%s  cvkeharness run \"list all running docker containers\"%s\n\n",
-			ansiBold, fgAccent, ansiReset)
-		fmt.Printf("  %sFirst run will create %s~/.cvkeharness/soul.md%s, %smemory.md%s, %sfindings.md%s, and %sstate.db%s as needed.%s\n\n",
-			fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
+var settingsCmd = &cobra.Command{
+	Use:   "settings",
+	Short: "Interactive settings editor for the agent",
+	Run: func(cmd *cobra.Command, args []string) {
+		runSetupWizard("settings")
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(setupCmd)
+	rootCmd.AddCommand(settingsCmd)
 }

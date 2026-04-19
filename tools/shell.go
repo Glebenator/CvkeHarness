@@ -18,8 +18,7 @@ import (
 type ShellTool struct {
 	allowedCommands map[string]bool
 	timeout         time.Duration
-	judge           provider.Provider
-	safetyModel     string
+	approver        ShellApprover
 	primaryModel    string
 }
 
@@ -44,6 +43,11 @@ var blockedShellFragments = []string{
 
 // NewShellTool creates a shell tool constrained to an allowlist and LLM judge.
 func NewShellTool(allowed []string, judge provider.Provider, safetyModel, primaryModel string) *ShellTool {
+	return NewShellToolWithApprover(allowed, NewLLMJudgeApprover(judge, safetyModel), primaryModel)
+}
+
+// NewShellToolWithApprover creates a shell tool with a configurable approval path.
+func NewShellToolWithApprover(allowed []string, approver ShellApprover, primaryModel string) *ShellTool {
 	amap := make(map[string]bool)
 	for _, a := range allowed {
 		amap[a] = true
@@ -51,8 +55,7 @@ func NewShellTool(allowed []string, judge provider.Provider, safetyModel, primar
 	return &ShellTool{
 		allowedCommands: amap,
 		timeout:         30 * time.Duration(time.Second),
-		judge:           judge,
-		safetyModel:     safetyModel,
+		approver:        approver,
 		primaryModel:    primaryModel,
 	}
 }
@@ -62,7 +65,7 @@ func (s *ShellTool) Name() string {
 }
 
 func (s *ShellTool) Description() string {
-	return "Executes shell commands on the host via an LLM judge validation buffer."
+	return "Executes shell commands on the host via an allowlist plus a configurable approval gate."
 }
 
 func (s *ShellTool) Parameters() json.RawMessage {
@@ -148,6 +151,9 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 
 	start := time.Now()
 	approvedByJudge := false
+	approvedByUser := false
+	approvalMode := "allowlist"
+	historyNote := ""
 
 	defer func() {
 		model := telemetry.ModelFromContext(ctx)
@@ -168,6 +174,8 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 			BaseCommand:     baseCmd,
 			FullCommand:     cmdStr,
 			ApprovedByJudge: approvedByJudge,
+			ApprovedByUser:  approvedByUser,
+			ApprovalMode:    approvalMode,
 			Success:         execErr == nil,
 			DurationMs:      time.Since(start).Milliseconds(),
 		})
@@ -175,34 +183,23 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 
 	_, err := validateAllowedShellCommand(cmdStr, s.allowedCommands)
 	if err != nil {
-		// Not auto-approved. Ask LLM Judge.
-		logger.Warn("command not in auto-approve list, asking LLM judge", "command", cmdStr)
-		if s.judge == nil || s.safetyModel == "" {
-			return "", fmt.Errorf("security violation: %w (and LLM judge is not configured)", err)
+		logger.Warn("command not in auto-approve list, asking approval gate", "command", cmdStr)
+		if s.approver == nil {
+			return "", fmt.Errorf("security violation: %w (and no approval path is configured)", err)
 		}
 
-		prompt := fmt.Sprintf("An automated DevOps agent wants to run the following bash command:\n`%s`\nIs this command safe (will not permanently delete vital data, alter kernel, or install clearly malicious software)? Reply strictly with 'SAFE' or 'DANGEROUS'. Provide no other output.", cmdStr)
-
-		req := &provider.ChatRequest{
-			Model:       s.safetyModel,
-			Messages:    []provider.Message{{Role: "user", Content: prompt}},
-			Temperature: 0.0,
-			MaxTokens:   10,
+		decision, approvalErr := s.approver.Approve(ctx, ShellApprovalRequest{
+			Command:         cmdStr,
+			ValidationError: err.Error(),
+		})
+		if approvalErr != nil {
+			return "", approvalErr
 		}
-
-		resp, judgeErr := s.judge.ChatCompletion(ctx, req)
-		if judgeErr != nil {
-			return "", fmt.Errorf("LLM judge failed to evaluate command: %w\nOriginal safety error: %v", judgeErr, err)
-		}
-
-		decision := strings.TrimSpace(strings.ToUpper(resp.Message.Content))
-		if !strings.Contains(decision, "SAFE") || strings.Contains(decision, "DANGEROUS") {
-			logger.Warn("rejected unsafe shell command by judge", "command", cmdStr, "decision", decision)
-			return "", fmt.Errorf("safety constraint violated: supervisor model deemed this command dangerous")
-		}
-
-		logger.Info("command approved by LLM judge", "command", cmdStr)
-		approvedByJudge = true
+		approvalMode = decision.Mode
+		historyNote = strings.TrimSpace(decision.HistoryNote)
+		approvedByJudge = decision.Mode == SafetyModeLLMJudge
+		approvedByUser = decision.Mode == SafetyModeUserConfirm
+		logger.Info("command approved by secondary gate", "command", cmdStr, "mode", decision.Mode)
 	}
 
 	logger.Info("executing shell command", "command", cmdStr)
@@ -223,6 +220,13 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	const maxOutput = 4096
 	if len(result) > maxOutput {
 		result = result[:maxOutput] + "\n... (output truncated)"
+	}
+	if historyNote != "" {
+		if result == "" {
+			result = historyNote
+		} else {
+			result = historyNote + "\n\n" + result
+		}
 	}
 
 	if err != nil {

@@ -19,7 +19,7 @@ var scorecardCmd = &cobra.Command{
 	Short: "Generate a deterministic safety scorecard",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg := config.DefaultConfig()
-		registry := tools.NewDefaultRegistry(cfg.AllowedCommands, nil, "", "")
+		registry := tools.NewDefaultRegistry(cfg.AllowedCommands, nil, cfg.SafetyMode, "", "")
 		scorecard := safety.GenerateScorecard(cfg.AllowedCommands, registry, gitCommit(), time.Now().UTC())
 
 		if err := safety.WriteScorecard(scorecardOutputDir, scorecard); err != nil {
