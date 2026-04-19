@@ -52,3 +52,18 @@ func TestEnsureDefaultApprovedAvoidsDuplicates(t *testing.T) {
 		t.Fatalf("expected no duplicate approved model entries, got %#v", cfg.ApprovedModels)
 	}
 }
+
+func TestRootIncludesSettingsCommand(t *testing.T) {
+	t.Parallel()
+
+	cmd, _, err := rootCmd.Find([]string{"settings"})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+	if cmd == nil {
+		t.Fatal("expected settings command to be registered")
+	}
+	if cmd.Use != "settings" {
+		t.Fatalf("expected settings command, got %q", cmd.Use)
+	}
+}

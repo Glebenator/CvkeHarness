@@ -1,10 +1,23 @@
 package tools
 
-import "github.com/coolcake/cvkeharness/provider"
+import (
+	"os"
+
+	"github.com/coolcake/cvkeharness/provider"
+)
 
 // NewDefaultRegistry creates the standard tool registry used by the CLI.
-func NewDefaultRegistry(allowedCommands []string, judge provider.Provider, safetyModel, primaryModel string) *Registry {
+func NewDefaultRegistry(allowedCommands []string, judge provider.Provider, safetyMode, safetyModel, primaryModel string) *Registry {
 	registry := NewRegistry()
-	registry.Register(NewShellTool(allowedCommands, judge, safetyModel, primaryModel))
+
+	var approver ShellApprover
+	switch safetyMode {
+	case "", SafetyModeLLMJudge:
+		approver = NewLLMJudgeApprover(judge, safetyModel)
+	case SafetyModeUserConfirm:
+		approver = NewUserPromptApprover(os.Stdin, os.Stdout)
+	}
+
+	registry.Register(NewShellToolWithApprover(allowedCommands, approver, primaryModel))
 	return registry
 }
