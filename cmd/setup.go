@@ -276,8 +276,14 @@ func renderReview(cfg *config.Config) {
 	}
 	fmt.Println(topSep)
 	row("Provider", cfg.Provider)
-	row("Model", cfg.Model)
+	row("Default Model", cfg.PrimaryModel())
 	row("Safety Model", cfg.SafetyModel)
+	if cfg.RoutingEnabled {
+		row("Routing", "Auto within approved models")
+	} else {
+		row("Routing", "Default model only")
+	}
+	row("Approved Models", strconv.Itoa(len(cfg.ApprovedModels)))
 	if cfg.BaseURL != "" {
 		row("Base URL", cfg.BaseURL)
 	}
@@ -536,6 +542,14 @@ var maxTokenOptions = [][2]string{
 	{"[ custom ]", "Enter a specific token count →"},
 }
 
+var maxIterationOptions = [][2]string{
+	{"10", "Short runs · tight loops"},
+	{"25", "Standard · recommended  ★"},
+	{"40", "Longer investigations"},
+	{"60", "Deep multi-step runs"},
+	{"[ custom ]", "Enter a specific iteration limit →"},
+}
+
 var logLevelOptions = [][2]string{
 	{"off", "Silent · only agent output shown  ★"},
 	{"error", "Critical errors only"},
@@ -555,7 +569,12 @@ var safetyModelOptions = [][2]string{
 	{"[ custom model ]", "Enter your own model ID →"},
 }
 
-const totalSteps = 7
+var routingOptions = [][2]string{
+	{"auto_within_policy", "Auto route within approved models  ★"},
+	{"disabled", "Always use the default model"},
+}
+
+const totalSteps = 9
 
 // ─── Wizard steps ─────────────────────────────────────────────────────────────
 // Each function returns true to advance, false to go back.
@@ -743,7 +762,7 @@ func wizardModel(cfg *config.Config, result modelsResult) bool {
 
 	initial := 0
 	for i, it := range items {
-		if it[0] == cfg.Model {
+		if it[0] == cfg.PrimaryModel() {
 			initial = i
 			break
 		}
@@ -758,21 +777,21 @@ func wizardModel(cfg *config.Config, result modelsResult) bool {
 		renderHeader()
 		renderStep(3, totalSteps, "Custom Model Identifier")
 		fmt.Printf("  %sEnter the exact model ID used by your provider.%s\n", fgGray, ansiReset)
-		fmt.Printf("  %sExample: %santhroptic/claude-sonnet-4.6%s\n\n", fgGray, fgAccent+ansiBold, ansiReset)
-		val, back := promptText("Model ID:", cfg.Model, true)
+		fmt.Printf("  %sExample: %santhropic/claude-sonnet-4.6%s\n\n", fgGray, fgAccent+ansiBold, ansiReset)
+		val, back := promptText("Model ID:", cfg.PrimaryModel(), true)
 		if back {
 			return false
 		}
-		cfg.Model = val
+		setDefaultModel(cfg, val)
 	} else {
-		cfg.Model = items[idx][0]
+		setDefaultModel(cfg, items[idx][0])
 	}
 	return true
 }
 
 func wizardTokens(cfg *config.Config) bool {
 	renderHeader()
-	renderStep(4, totalSteps, "Max Response Length  (Tokens)")
+	renderStep(6, totalSteps, "Max Response Length  (Tokens)")
 
 	initial := 2 // 4096 by default
 	for i, it := range maxTokenOptions {
@@ -789,7 +808,7 @@ func wizardTokens(cfg *config.Config) bool {
 
 	if maxTokenOptions[idx][0] == "[ custom ]" {
 		renderHeader()
-		renderStep(4, totalSteps, "Custom Token Limit")
+		renderStep(6, totalSteps, "Custom Token Limit")
 		fmt.Printf("  %sEnter any positive integer.%s\n\n", fgGray, ansiReset)
 		raw, back := promptText("Max tokens:", strconv.Itoa(cfg.MaxTokens), true)
 		if back {
@@ -829,7 +848,7 @@ func wizardSafetyModel(cfg *config.Config) bool {
 		renderHeader()
 		renderStep(4, totalSteps, "Custom Safety Model Identifier")
 		fmt.Printf("  %sEnter the exact model ID used by your provider.%s\n", fgGray, ansiReset)
-		fmt.Printf("  %sExample: %santhroptic/claude-3.5-sonnet%s\n\n", fgGray, fgAccent+ansiBold, ansiReset)
+		fmt.Printf("  %sExample: %santhropic/claude-3.5-sonnet%s\n\n", fgGray, fgAccent+ansiBold, ansiReset)
 		val, back := promptText("Safety Model ID:", cfg.SafetyModel, true)
 		if back {
 			return false
@@ -841,9 +860,72 @@ func wizardSafetyModel(cfg *config.Config) bool {
 	return true
 }
 
+func wizardRouting(cfg *config.Config) bool {
+	renderHeader()
+	renderStep(5, totalSteps, "Execution Routing")
+
+	fmt.Printf("  %sRouting can use different approved models for planning, execution, and memory curation.%s\n", fgGray, ansiReset)
+	fmt.Printf("  %sUnapproved recommendations still require a prompt before use.%s\n\n", fgMuted+ansiDim, ansiReset)
+
+	initial := 0
+	if !cfg.RoutingEnabled || cfg.RoutingMode == "disabled" {
+		initial = 1
+	}
+
+	idx := selectList(routingOptions, initial, true)
+	if idx == goBack {
+		return false
+	}
+
+	switch routingOptions[idx][0] {
+	case "disabled":
+		cfg.RoutingEnabled = false
+		cfg.RoutingMode = "disabled"
+	default:
+		cfg.RoutingEnabled = true
+		cfg.RoutingMode = "auto_within_policy"
+	}
+	return true
+}
+
+func wizardIterations(cfg *config.Config) bool {
+	renderHeader()
+	renderStep(7, totalSteps, "Max Iterations")
+
+	initial := 1
+	for i, it := range maxIterationOptions {
+		if it[0] == strconv.Itoa(cfg.MaxIterations) {
+			initial = i
+			break
+		}
+	}
+
+	idx := selectList(maxIterationOptions, initial, true)
+	if idx == goBack {
+		return false
+	}
+
+	if maxIterationOptions[idx][0] == "[ custom ]" {
+		renderHeader()
+		renderStep(7, totalSteps, "Custom Iteration Limit")
+		fmt.Printf("  %sEnter any positive integer.%s\n\n", fgGray, ansiReset)
+		raw, back := promptText("Max iterations:", strconv.Itoa(cfg.MaxIterations), true)
+		if back {
+			return false
+		}
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			cfg.MaxIterations = n
+		}
+	} else {
+		val, _ := strconv.Atoi(maxIterationOptions[idx][0])
+		cfg.MaxIterations = val
+	}
+	return true
+}
+
 func wizardLogLevel(cfg *config.Config) bool {
 	renderHeader()
-	renderStep(6, totalSteps, "Log Verbosity")
+	renderStep(8, totalSteps, "Log Verbosity")
 
 	initial := 0
 	for i, it := range logLevelOptions {
@@ -863,7 +945,7 @@ func wizardLogLevel(cfg *config.Config) bool {
 
 func wizardConfirm(cfg *config.Config) bool {
 	renderHeader()
-	renderStep(7, totalSteps, "Review & Confirm")
+	renderStep(9, totalSteps, "Review & Confirm")
 
 	renderReview(cfg)
 	fmt.Println()
@@ -885,6 +967,27 @@ func wizardConfirm(cfg *config.Config) bool {
 	return true
 }
 
+func setDefaultModel(cfg *config.Config, model string) {
+	model = strings.TrimSpace(model)
+	cfg.Model = model
+	cfg.DefaultModel = model
+	ensureDefaultApproved(cfg)
+}
+
+func ensureDefaultApproved(cfg *config.Config) {
+	if strings.TrimSpace(cfg.Provider) == "" || strings.TrimSpace(cfg.PrimaryModel()) == "" {
+		return
+	}
+
+	entry := cfg.Provider + "/" + cfg.PrimaryModel()
+	for _, existing := range cfg.ApprovedModels {
+		if existing == entry {
+			return
+		}
+	}
+	cfg.ApprovedModels = append(cfg.ApprovedModels, entry)
+}
+
 // ─── Command ──────────────────────────────────────────────────────────────────
 
 var setupCmd = &cobra.Command{
@@ -901,8 +1004,9 @@ var setupCmd = &cobra.Command{
 			if existingCfg.Provider != "" {
 				cfg.Provider = existingCfg.Provider
 			}
-			if existingCfg.Model != "" {
-				cfg.Model = existingCfg.Model
+			if existingCfg.PrimaryModel() != "" {
+				cfg.Model = existingCfg.PrimaryModel()
+				cfg.DefaultModel = existingCfg.PrimaryModel()
 			}
 			// Carry over the full key map so every provider's credential is
 			// available for the reuse prompt regardless of which provider the
@@ -924,6 +1028,25 @@ var setupCmd = &cobra.Command{
 			}
 			if existingCfg.SafetyModel != "" {
 				cfg.SafetyModel = existingCfg.SafetyModel
+			}
+			cfg.RoutingEnabled = existingCfg.RoutingEnabled
+			if existingCfg.RoutingMode != "" {
+				cfg.RoutingMode = existingCfg.RoutingMode
+			}
+			if len(existingCfg.ApprovedModels) > 0 {
+				cfg.ApprovedModels = existingCfg.ApprovedModels
+			}
+			if existingCfg.MemoryDir != "" {
+				cfg.MemoryDir = existingCfg.MemoryDir
+			}
+			if existingCfg.StateDBPath != "" {
+				cfg.StateDBPath = existingCfg.StateDBPath
+			}
+			if existingCfg.MemoryMaxSnippets > 0 {
+				cfg.MemoryMaxSnippets = existingCfg.MemoryMaxSnippets
+			}
+			if existingCfg.RoutingMinConfidence > 0 {
+				cfg.RoutingMinConfidence = existingCfg.RoutingMinConfidence
 			}
 		}
 
@@ -959,10 +1082,14 @@ var setupCmd = &cobra.Command{
 			case 4:
 				advanced = wizardSafetyModel(cfg)
 			case 5:
-				advanced = wizardTokens(cfg)
+				advanced = wizardRouting(cfg)
 			case 6:
-				advanced = wizardLogLevel(cfg)
+				advanced = wizardTokens(cfg)
 			case 7:
+				advanced = wizardIterations(cfg)
+			case 8:
+				advanced = wizardLogLevel(cfg)
+			case 9:
 				advanced = wizardConfirm(cfg)
 			}
 
@@ -973,6 +1100,15 @@ var setupCmd = &cobra.Command{
 			}
 			// step == 1 and back pressed → stays at 1 (no previous step)
 		}
+
+		if cfg.DefaultModel == "" {
+			cfg.DefaultModel = cfg.Model
+		}
+		cfg.Model = cfg.PrimaryModel()
+		if cfg.RoutingMode == "" {
+			cfg.RoutingMode = "auto_within_policy"
+		}
+		ensureDefaultApproved(cfg)
 
 		if err := cfg.Save(); err != nil {
 			fmt.Printf("\n  %s%s✗  Failed to save configuration: %v%s\n\n",
@@ -993,6 +1129,8 @@ var setupCmd = &cobra.Command{
 		fmt.Printf("  %sYou're all set. Try running:%s\n\n", fgGray, ansiReset)
 		fmt.Printf("  %s%s  cvkeharness run \"list all running docker containers\"%s\n\n",
 			ansiBold, fgAccent, ansiReset)
+		fmt.Printf("  %sFirst run will create %s~/.cvkeharness/soul.md%s, %smemory.md%s, %sfindings.md%s, and %sstate.db%s as needed.%s\n\n",
+			fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
 	},
 }
 

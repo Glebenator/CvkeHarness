@@ -92,6 +92,7 @@ The setup wizard configures:
 - API key or local base URL
 - default model
 - safety model
+- routing mode
 - token limit
 - iteration limit
 - log level
