@@ -10,12 +10,17 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/internal/log"
+	"github.com/coolcake/cvkeharness/internal/telemetry"
+	"github.com/coolcake/cvkeharness/provider"
 )
 
 // ShellTool runs restricted shell commands on the host.
 type ShellTool struct {
 	allowedCommands map[string]bool
 	timeout         time.Duration
+	judge           provider.Provider
+	safetyModel     string
+	primaryModel    string
 }
 
 // ShellArgs represents the LLM-provided arguments for the shell tool.
@@ -37,8 +42,8 @@ var blockedShellFragments = []string{
 	"&",
 }
 
-// NewShellTool creates a shell tool constrained to an allowlist.
-func NewShellTool(allowed []string) *ShellTool {
+// NewShellTool creates a shell tool constrained to an allowlist and LLM judge.
+func NewShellTool(allowed []string, judge provider.Provider, safetyModel, primaryModel string) *ShellTool {
 	amap := make(map[string]bool)
 	for _, a := range allowed {
 		amap[a] = true
@@ -46,6 +51,9 @@ func NewShellTool(allowed []string) *ShellTool {
 	return &ShellTool{
 		allowedCommands: amap,
 		timeout:         30 * time.Duration(time.Second),
+		judge:           judge,
+		safetyModel:     safetyModel,
+		primaryModel:    primaryModel,
 	}
 }
 
@@ -54,7 +62,7 @@ func (s *ShellTool) Name() string {
 }
 
 func (s *ShellTool) Description() string {
-	return "Executes a safe, read-only shell command on the host (e.g. df, free, uptime, ps, netstat)."
+	return "Executes shell commands on the host via an LLM judge validation buffer."
 }
 
 func (s *ShellTool) Parameters() json.RawMessage {
@@ -137,10 +145,40 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (string, 
 	}
 
 	cmdStr := strings.TrimSpace(parsedArgs.Command)
+	
+	// Record telemetry for this zero-shot tool usage
+	// Telemetry recording ignores errors to not degrade core functionality
+	_ = telemetry.RecordCommand(s.primaryModel, cmdStr)
+
 	_, err := validateAllowedShellCommand(cmdStr, s.allowedCommands)
 	if err != nil {
-		logger.Warn("rejected unsafe shell command", "command", cmdStr, "error", err)
-		return "", fmt.Errorf("security violation: %w", err)
+		// Not auto-approved. Ask LLM Judge.
+		logger.Warn("command not in auto-approve list, asking LLM judge", "command", cmdStr)
+		if s.judge == nil || s.safetyModel == "" {
+			return "", fmt.Errorf("security violation: %w (and LLM judge is not configured)", err)
+		}
+		
+		prompt := fmt.Sprintf("An automated DevOps agent wants to run the following bash command:\n`%s`\nIs this command safe (will not permanently delete vital data, alter kernel, or install clearly malicious software)? Reply strictly with 'SAFE' or 'DANGEROUS'. Provide no other output.", cmdStr)
+		
+		req := &provider.ChatRequest{
+			Model:       s.safetyModel,
+			Messages:    []provider.Message{{Role: "user", Content: prompt}},
+			Temperature: 0.0,
+			MaxTokens:   10,
+		}
+		
+		resp, judgeErr := s.judge.ChatCompletion(ctx, req)
+		if judgeErr != nil {
+			return "", fmt.Errorf("LLM judge failed to evaluate command: %w\nOriginal safety error: %v", judgeErr, err)
+		}
+		
+		decision := strings.TrimSpace(strings.ToUpper(resp.Message.Content))
+		if !strings.Contains(decision, "SAFE") || strings.Contains(decision, "DANGEROUS") {
+			logger.Warn("rejected unsafe shell command by judge", "command", cmdStr, "decision", decision)
+			return "", fmt.Errorf("safety constraint violated: supervisor model deemed this command dangerous")
+		}
+		
+		logger.Info("command approved by LLM judge", "command", cmdStr)
 	}
 
 	logger.Info("executing shell command", "command", cmdStr)

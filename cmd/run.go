@@ -8,7 +8,6 @@ import (
 	"github.com/coolcake/cvkeharness/agent"
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/internal/log"
-	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
 )
@@ -33,18 +32,14 @@ var runCmd = &cobra.Command{
 		logger.Info("CvkeHarness starting up", "model", cfg.Model)
 
 		// 3. Initialize Provider
-		var p provider.Provider
-		if cfg.Provider == "openrouter" {
-			p = provider.NewOpenRouter(cfg.GetAPIKey("openrouter"))
-		} else if cfg.Provider == "lmstudio" {
-			p = provider.NewLMStudio(cfg.BaseURL)
-		} else {
-			fmt.Printf("Error: Unsupported provider '%s'\n", cfg.Provider)
+		p, err := providerFromConfig(cfg)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
 		}
 
 		// 4. Initialize Tools
-		registry := tools.NewDefaultRegistry(cfg.AllowedCommands)
+		registry := tools.NewDefaultRegistry(cfg.AllowedCommands, p, cfg.SafetyModel, cfg.Model)
 
 		logger.Info("tools initialized", "count", len(registry.Definitions()))
 

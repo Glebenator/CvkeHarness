@@ -10,13 +10,14 @@ import (
 
 // Config represents the application configuration.
 type Config struct {
-	Provider        string            `yaml:"provider"`
+	Provider string `yaml:"provider"`
 	// APIKeys stores credentials keyed by provider name (e.g. "openrouter",
 	// "anthropic"). All providers are preserved so a user switching providers
 	// never has to re-enter a key they already validated.
 	APIKeys         map[string]string `yaml:"api_keys,omitempty"`
 	BaseURL         string            `yaml:"base_url,omitempty"` // Used for local providers (e.g. LM Studio)
 	Model           string            `yaml:"model"`
+	SafetyModel     string            `yaml:"safety_model"`
 	MaxTokens       int               `yaml:"max_tokens"`
 	MaxIterations   int               `yaml:"max_iterations"`
 	LogLevel        string            `yaml:"log_level"`
@@ -78,6 +79,11 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Fallback for safety model if not found
+	if cfg.SafetyModel == "" {
+		cfg.SafetyModel = "xai/grok-4.20"
+	}
+
 	return &cfg, nil
 }
 
@@ -105,8 +111,9 @@ func DefaultConfig() *Config {
 	return &Config{
 		Provider:      "openrouter",
 		Model:         "anthropic/claude-3.5-sonnet",
+		SafetyModel:   "xai/grok-4.20",
 		MaxTokens:     4096,
-		MaxIterations: 15,
+		MaxIterations: 25,
 		LogLevel:      "off",
 		AllowedCommands: []string{
 			"df", "free", "uptime", "ps", "netstat", "systemctl", "journalctl",
