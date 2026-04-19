@@ -14,14 +14,25 @@ type Config struct {
 	// APIKeys stores credentials keyed by provider name (e.g. "openrouter",
 	// "anthropic"). All providers are preserved so a user switching providers
 	// never has to re-enter a key they already validated.
-	APIKeys         map[string]string `yaml:"api_keys,omitempty"`
-	BaseURL         string            `yaml:"base_url,omitempty"` // Used for local providers (e.g. LM Studio)
-	Model           string            `yaml:"model"`
-	SafetyModel     string            `yaml:"safety_model"`
-	MaxTokens       int               `yaml:"max_tokens"`
-	MaxIterations   int               `yaml:"max_iterations"`
-	LogLevel        string            `yaml:"log_level"`
-	AllowedCommands []string          `yaml:"allowed_commands"`
+	APIKeys              map[string]string `yaml:"api_keys,omitempty"`
+	BaseURL              string            `yaml:"base_url,omitempty"` // Used for local providers (e.g. LM Studio)
+	Model                string            `yaml:"model,omitempty"`    // legacy compatibility
+	DefaultModel         string            `yaml:"default_model,omitempty"`
+	PlanningModel        string            `yaml:"planning_model,omitempty"`
+	ExecutionModel       string            `yaml:"execution_model,omitempty"`
+	CurationModel        string            `yaml:"curation_model,omitempty"`
+	SafetyModel          string            `yaml:"safety_model"`
+	MaxTokens            int               `yaml:"max_tokens"`
+	MaxIterations        int               `yaml:"max_iterations"`
+	LogLevel             string            `yaml:"log_level"`
+	AllowedCommands      []string          `yaml:"allowed_commands"`
+	RoutingEnabled       bool              `yaml:"routing_enabled,omitempty"`
+	RoutingMode          string            `yaml:"routing_mode,omitempty"`
+	ApprovedModels       []string          `yaml:"approved_models,omitempty"`
+	MemoryDir            string            `yaml:"memory_dir,omitempty"`
+	StateDBPath          string            `yaml:"state_db_path,omitempty"`
+	MemoryMaxSnippets    int               `yaml:"memory_max_snippets,omitempty"`
+	RoutingMinConfidence float64           `yaml:"routing_min_confidence,omitempty"`
 }
 
 // GetAPIKey returns the stored credential for the given provider, or "" if none.
@@ -38,6 +49,14 @@ func (c *Config) SetAPIKey(provider, key string) {
 		c.APIKeys = make(map[string]string)
 	}
 	c.APIKeys[provider] = key
+}
+
+// PrimaryModel returns the configured default model with legacy fallback.
+func (c *Config) PrimaryModel() string {
+	if c.DefaultModel != "" {
+		return c.DefaultModel
+	}
+	return c.Model
 }
 
 // ConfigPath returns the path to the config file (~/.cvkeharness/config.yaml).
@@ -83,6 +102,30 @@ func LoadConfig() (*Config, error) {
 	if cfg.SafetyModel == "" {
 		cfg.SafetyModel = "x-ai/grok-4.1-fast"
 	}
+	if cfg.DefaultModel == "" {
+		cfg.DefaultModel = cfg.Model
+	}
+	if cfg.Model == "" {
+		cfg.Model = cfg.DefaultModel
+	}
+	if cfg.RoutingMode == "" {
+		cfg.RoutingMode = "auto_within_policy"
+	}
+	if cfg.MemoryMaxSnippets <= 0 {
+		cfg.MemoryMaxSnippets = 3
+	}
+	if cfg.RoutingMinConfidence <= 0 {
+		cfg.RoutingMinConfidence = 0.55
+	}
+	if cfg.MemoryDir == "" {
+		cfg.MemoryDir = defaultHarnessPath("memory")
+	}
+	if cfg.StateDBPath == "" {
+		cfg.StateDBPath = defaultHarnessPath("state.db")
+	}
+	if len(cfg.ApprovedModels) == 0 && cfg.DefaultModel != "" && cfg.Provider != "" {
+		cfg.ApprovedModels = []string{cfg.Provider + "/" + cfg.DefaultModel}
+	}
 
 	return &cfg, nil
 }
@@ -98,6 +141,11 @@ func (c *Config) Save() error {
 		return err
 	}
 
+	if c.DefaultModel == "" {
+		c.DefaultModel = c.Model
+	}
+	c.Model = c.DefaultModel
+
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err
@@ -109,14 +157,33 @@ func (c *Config) Save() error {
 // DefaultConfig provides sensible defaults for a new setup.
 func DefaultConfig() *Config {
 	return &Config{
-		Provider:      "openrouter",
-		Model:         "anthropic/claude-sonnet-4.6",
-		SafetyModel:   "x-ai/grok-4.1-fast",
-		MaxTokens:     4096,
-		MaxIterations: 25,
-		LogLevel:      "off",
+		Provider:             "openrouter",
+		Model:                "anthropic/claude-sonnet-4.6",
+		DefaultModel:         "anthropic/claude-sonnet-4.6",
+		SafetyModel:          "x-ai/grok-4.1-fast",
+		MaxTokens:            4096,
+		MaxIterations:        25,
+		LogLevel:             "off",
+		RoutingMode:          "auto_within_policy",
+		MemoryDir:            defaultHarnessPath(""),
+		StateDBPath:          defaultHarnessPath("state.db"),
+		MemoryMaxSnippets:    3,
+		RoutingMinConfidence: 0.55,
+		ApprovedModels:       []string{"openrouter/anthropic/claude-sonnet-4.6"},
 		AllowedCommands: []string{
 			"df", "free", "uptime", "ps", "netstat", "systemctl", "journalctl",
 		},
 	}
+}
+
+func defaultHarnessPath(name string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	base := filepath.Join(home, ".cvkeharness")
+	if name == "" || name == "memory" {
+		return base
+	}
+	return filepath.Join(base, name)
 }

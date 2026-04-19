@@ -8,4 +8,3 @@ func NewDefaultRegistry(allowedCommands []string, judge provider.Provider, safet
 	registry.Register(NewShellTool(allowedCommands, judge, safetyModel, primaryModel))
 	return registry
 }
-

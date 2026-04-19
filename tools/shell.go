@@ -145,7 +145,7 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	}
 
 	cmdStr := strings.TrimSpace(parsedArgs.Command)
-	
+
 	start := time.Now()
 	approvedByJudge := false
 
@@ -180,27 +180,27 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		if s.judge == nil || s.safetyModel == "" {
 			return "", fmt.Errorf("security violation: %w (and LLM judge is not configured)", err)
 		}
-		
+
 		prompt := fmt.Sprintf("An automated DevOps agent wants to run the following bash command:\n`%s`\nIs this command safe (will not permanently delete vital data, alter kernel, or install clearly malicious software)? Reply strictly with 'SAFE' or 'DANGEROUS'. Provide no other output.", cmdStr)
-		
+
 		req := &provider.ChatRequest{
 			Model:       s.safetyModel,
 			Messages:    []provider.Message{{Role: "user", Content: prompt}},
 			Temperature: 0.0,
 			MaxTokens:   10,
 		}
-		
+
 		resp, judgeErr := s.judge.ChatCompletion(ctx, req)
 		if judgeErr != nil {
 			return "", fmt.Errorf("LLM judge failed to evaluate command: %w\nOriginal safety error: %v", judgeErr, err)
 		}
-		
+
 		decision := strings.TrimSpace(strings.ToUpper(resp.Message.Content))
 		if !strings.Contains(decision, "SAFE") || strings.Contains(decision, "DANGEROUS") {
 			logger.Warn("rejected unsafe shell command by judge", "command", cmdStr, "decision", decision)
 			return "", fmt.Errorf("safety constraint violated: supervisor model deemed this command dangerous")
 		}
-		
+
 		logger.Info("command approved by LLM judge", "command", cmdStr)
 		approvedByJudge = true
 	}

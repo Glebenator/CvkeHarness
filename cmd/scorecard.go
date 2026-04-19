@@ -50,4 +50,3 @@ func gitCommit() string {
 	}
 	return strings.TrimSpace(string(out))
 }
-
