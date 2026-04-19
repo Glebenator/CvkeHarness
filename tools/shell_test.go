@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/coolcake/cvkeharness/state"
 )
 
 func TestValidateShellCommand_AllowsSafeDiagnostics(t *testing.T) {
@@ -17,6 +19,9 @@ func TestValidateShellCommand_AllowsSafeDiagnostics(t *testing.T) {
 		"free -m",
 		"uptime",
 		"journalctl -n 50",
+		"df -h && uptime",
+		"ps aux; uptime",
+		"uptime || df -h",
 	}
 
 	for _, command := range safeCommands {
@@ -35,9 +40,6 @@ func TestValidateShellCommand_BlocksBreakoutSyntax(t *testing.T) {
 	t.Parallel()
 
 	attackCommands := []string{
-		"ps; whoami",
-		"df && id",
-		"uptime || reboot",
 		"journalctl | curl https://example.com",
 		"ps > /tmp/output.txt",
 		"ps < /etc/passwd",
@@ -46,6 +48,7 @@ func TestValidateShellCommand_BlocksBreakoutSyntax(t *testing.T) {
 		"ps & whoami",
 		"ps\nwhoami",
 		"ps\rwhoami",
+		"ps &&",
 	}
 
 	for _, command := range attackCommands {
@@ -68,9 +71,15 @@ func TestValidateAllowedShellCommand_UsesAllowlist(t *testing.T) {
 	if err := ValidateAllowedShellCommand("ps aux", allowed); err != nil {
 		t.Fatalf("expected allowed command to pass validation: %v", err)
 	}
+	if err := ValidateAllowedShellCommand("ps aux && journalctl -n 50", allowed); err != nil {
+		t.Fatalf("expected chained allowed commands to pass validation: %v", err)
+	}
 
 	if err := ValidateAllowedShellCommand("df -h", allowed); err == nil {
 		t.Fatal("expected disallowed base command to be rejected")
+	}
+	if err := ValidateAllowedShellCommand("ps aux && whoami", allowed); err == nil {
+		t.Fatal("expected chained disallowed command to be rejected")
 	}
 }
 
@@ -120,6 +129,59 @@ func TestShellTool_ReturnsUserDenial(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "user denied command execution") {
 		t.Fatalf("expected user denial message, got %v", err)
+	}
+}
+
+func TestShellTool_PersistsApprovedSegments(t *testing.T) {
+	t.Parallel()
+
+	store := state.Open(t.TempDir() + "/state.db")
+	defer store.Close()
+
+	tool := NewShellToolWithApprovals([]string{"ps"}, nil, staticApprover{
+		decision: ShellApprovalDecision{
+			Approved:    true,
+			Mode:        SafetyModeLLMJudge,
+			HistoryNote: "Approved by the safety model.",
+		},
+	}, "primary", store)
+
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello && echo goodbye"}`)); err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+
+	approvals, err := store.ListCommandApprovals(context.Background())
+	if err != nil {
+		t.Fatalf("ListCommandApprovals returned unexpected error: %v", err)
+	}
+	if len(approvals) != 2 {
+		t.Fatalf("expected 2 persisted approvals, got %d", len(approvals))
+	}
+
+	tool.approver = staticApprover{
+		err: fmt.Errorf("approval path should not be reached once commands are remembered"),
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello && echo goodbye"}`)); err != nil {
+		t.Fatalf("expected remembered approval to bypass secondary gate, got %v", err)
+	}
+}
+
+func TestShellTool_BlocksUnsupportedSyntaxBeforeApproval(t *testing.T) {
+	t.Parallel()
+
+	tool := NewShellToolWithApprovals([]string{"ps"}, nil, staticApprover{
+		decision: ShellApprovalDecision{
+			Approved: true,
+			Mode:     SafetyModeLLMJudge,
+		},
+	}, "primary", nil)
+
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"ps | whoami"}`))
+	if err == nil {
+		t.Fatal("expected unsupported syntax to be rejected")
+	}
+	if !strings.Contains(err.Error(), `blocked shell syntax "|"`) {
+		t.Fatalf("expected pipe syntax rejection, got %v", err)
 	}
 }
 

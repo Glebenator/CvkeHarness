@@ -130,6 +130,7 @@ func LoadConfig() (*Config, error) {
 	if len(cfg.ApprovedModels) == 0 && cfg.DefaultModel != "" && cfg.Provider != "" {
 		cfg.ApprovedModels = []string{cfg.Provider + "/" + cfg.DefaultModel}
 	}
+	ensureAllowedCommand(&cfg, "echo")
 
 	return &cfg, nil
 }
@@ -176,7 +177,7 @@ func DefaultConfig() *Config {
 		RoutingMinConfidence: 0.55,
 		ApprovedModels:       []string{"openrouter/anthropic/claude-sonnet-4.6"},
 		AllowedCommands: []string{
-			"df", "free", "uptime", "ps", "netstat", "systemctl", "journalctl",
+			"df", "echo", "free", "uptime", "ps", "netstat", "systemctl", "journalctl",
 		},
 	}
 }
@@ -191,4 +192,13 @@ func defaultHarnessPath(name string) string {
 		return base
 	}
 	return filepath.Join(base, name)
+}
+
+func ensureAllowedCommand(cfg *Config, command string) {
+	for _, item := range cfg.AllowedCommands {
+		if item == command {
+			return
+		}
+	}
+	cfg.AllowedCommands = append(cfg.AllowedCommands, command)
 }

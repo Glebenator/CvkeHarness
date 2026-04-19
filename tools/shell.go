@@ -12,14 +12,17 @@ import (
 	"github.com/coolcake/cvkeharness/internal/log"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/state"
 )
 
 // ShellTool runs restricted shell commands on the host.
 type ShellTool struct {
-	allowedCommands map[string]bool
-	timeout         time.Duration
-	approver        ShellApprover
-	primaryModel    string
+	allowedCommands  map[string]bool
+	approvedCommands map[string]bool
+	timeout          time.Duration
+	approver         ShellApprover
+	primaryModel     string
+	approvalStore    *state.Store
 }
 
 // ShellArgs represents the LLM-provided arguments for the shell tool.
@@ -27,36 +30,50 @@ type ShellArgs struct {
 	Command string `json:"command"`
 }
 
-var blockedShellFragments = []string{
-	"&&",
-	"||",
-	";",
-	"|",
-	">",
-	"<",
-	"`",
-	"$(",
-	"\n",
-	"\r",
-	"&",
+// ShellSegment is one shell command segment between control operators.
+type ShellSegment struct {
+	Command    string
+	Normalized string
+}
+
+// ParsedShellCommand captures the supported chained command structure.
+type ParsedShellCommand struct {
+	Segments  []ShellSegment
+	Operators []string
 }
 
 // NewShellTool creates a shell tool constrained to an allowlist and LLM judge.
 func NewShellTool(allowed []string, judge provider.Provider, safetyModel, primaryModel string) *ShellTool {
-	return NewShellToolWithApprover(allowed, NewLLMJudgeApprover(judge, safetyModel), primaryModel)
+	return NewShellToolWithApprovals(allowed, nil, NewLLMJudgeApprover(judge, safetyModel), primaryModel, nil)
 }
 
 // NewShellToolWithApprover creates a shell tool with a configurable approval path.
 func NewShellToolWithApprover(allowed []string, approver ShellApprover, primaryModel string) *ShellTool {
+	return NewShellToolWithApprovals(allowed, nil, approver, primaryModel, nil)
+}
+
+// NewShellToolWithApprovals creates a shell tool with both static and learned
+// approved command lists.
+func NewShellToolWithApprovals(allowed, approved []string, approver ShellApprover, primaryModel string, approvalStore *state.Store) *ShellTool {
 	amap := make(map[string]bool)
 	for _, a := range allowed {
 		amap[a] = true
 	}
+	pmap := make(map[string]bool)
+	for _, item := range approved {
+		normalized := normalizeShellWhitespace(item)
+		if normalized == "" {
+			continue
+		}
+		pmap[normalized] = true
+	}
 	return &ShellTool{
-		allowedCommands: amap,
-		timeout:         30 * time.Duration(time.Second),
-		approver:        approver,
-		primaryModel:    primaryModel,
+		allowedCommands:  amap,
+		approvedCommands: pmap,
+		timeout:          30 * time.Duration(time.Second),
+		approver:         approver,
+		primaryModel:     primaryModel,
+		approvalStore:    approvalStore,
 	}
 }
 
@@ -81,21 +98,11 @@ func (s *ShellTool) Parameters() json.RawMessage {
 	}`)
 }
 
-// ValidateShellCommand rejects obviously unsafe shell syntax before a command
-// reaches the host shell.
+// ValidateShellCommand rejects unsupported shell syntax while allowing simple
+// command chaining through &&, ||, and ;.
 func ValidateShellCommand(command string) error {
-	cmd := strings.TrimSpace(command)
-	if cmd == "" {
-		return fmt.Errorf("command cannot be empty")
-	}
-
-	for _, fragment := range blockedShellFragments {
-		if strings.Contains(cmd, fragment) {
-			return fmt.Errorf("blocked shell syntax %q", fragment)
-		}
-	}
-
-	return nil
+	_, err := ParseShellCommand(command)
+	return err
 }
 
 // ValidateAllowedShellCommand applies syntax checks plus the shell tool's
@@ -106,17 +113,30 @@ func ValidateAllowedShellCommand(command string, allowed []string) error {
 		allowedCommands[item] = true
 	}
 
-	_, err := validateAllowedShellCommand(command, allowedCommands)
+	_, err := validateAllowedShellCommand(command, allowedCommands, nil)
 	return err
 }
 
-func validateAllowedShellCommand(command string, allowedCommands map[string]bool) (string, error) {
-	cmd := strings.TrimSpace(command)
-	if err := ValidateShellCommand(cmd); err != nil {
-		return "", err
+func validateAllowedShellCommand(command string, allowedCommands, approvedCommands map[string]bool) (ParsedShellCommand, error) {
+	parsed, err := ParseShellCommand(command)
+	if err != nil {
+		return ParsedShellCommand{}, err
 	}
 
-	parts := strings.Fields(cmd)
+	for idx, segment := range parsed.Segments {
+		if _, err := validateShellSegment(segment, allowedCommands, approvedCommands); err != nil {
+			if len(parsed.Segments) > 1 {
+				return ParsedShellCommand{}, fmt.Errorf("command segment %d %q is not in the auto-approved command list", idx+1, segment.Normalized)
+			}
+			return ParsedShellCommand{}, err
+		}
+	}
+
+	return parsed, nil
+}
+
+func validateShellSegment(segment ShellSegment, allowedCommands, approvedCommands map[string]bool) (string, error) {
+	parts := strings.Fields(segment.Command)
 	if len(parts) == 0 {
 		return "", fmt.Errorf("command cannot be empty")
 	}
@@ -132,11 +152,231 @@ func validateAllowedShellCommand(command string, allowedCommands map[string]bool
 		}
 	}
 
-	if !allowedCommands[baseCmd] {
-		return "", fmt.Errorf("command %q is not in the allowlist", baseCmd)
+	if allowedCommands[baseCmd] {
+		return baseCmd, nil
+	}
+	if approvedCommands != nil && approvedCommands[segment.Normalized] {
+		return baseCmd, nil
 	}
 
-	return baseCmd, nil
+	return "", fmt.Errorf("command %q is not in the auto-approved command list", segment.Normalized)
+}
+
+// ParseShellCommand tokenizes a shell command into approved segments and
+// control operators while rejecting unsupported shell features.
+func ParseShellCommand(command string) (ParsedShellCommand, error) {
+	cmd := strings.TrimSpace(command)
+	if cmd == "" {
+		return ParsedShellCommand{}, fmt.Errorf("command cannot be empty")
+	}
+
+	var parsed ParsedShellCommand
+	var current strings.Builder
+	inSingle := false
+	inDouble := false
+	escaped := false
+
+	flush := func(operator string) error {
+		raw := strings.TrimSpace(current.String())
+		if raw == "" {
+			if operator == "" && len(parsed.Segments) == 0 {
+				return fmt.Errorf("command cannot be empty")
+			}
+			if operator != "" {
+				return fmt.Errorf("malformed shell command near %q", operator)
+			}
+			return nil
+		}
+		parsed.Segments = append(parsed.Segments, ShellSegment{
+			Command:    raw,
+			Normalized: normalizeShellWhitespace(raw),
+		})
+		current.Reset()
+		if operator != "" {
+			parsed.Operators = append(parsed.Operators, operator)
+		}
+		return nil
+	}
+
+	for i := 0; i < len(cmd); i++ {
+		ch := cmd[i]
+
+		switch {
+		case escaped:
+			current.WriteByte(ch)
+			escaped = false
+			continue
+		case inSingle:
+			current.WriteByte(ch)
+			if ch == '\'' {
+				inSingle = false
+			}
+			continue
+		case inDouble:
+			switch ch {
+			case '\n', '\r':
+				return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", string(ch))
+			case '`':
+				return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "`")
+			case '$':
+				if i+1 < len(cmd) && cmd[i+1] == '(' {
+					return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "$(")
+				}
+			case '\\':
+				current.WriteByte(ch)
+				escaped = true
+				continue
+			case '"':
+				inDouble = false
+			}
+			current.WriteByte(ch)
+			continue
+		}
+
+		switch ch {
+		case ' ', '\t':
+			current.WriteByte(ch)
+		case '\\':
+			current.WriteByte(ch)
+			escaped = true
+		case '\'':
+			current.WriteByte(ch)
+			inSingle = true
+		case '"':
+			current.WriteByte(ch)
+			inDouble = true
+		case '\n', '\r':
+			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", string(ch))
+		case '`':
+			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "`")
+		case '$':
+			if i+1 < len(cmd) && cmd[i+1] == '(' {
+				return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "$(")
+			}
+			current.WriteByte(ch)
+		case '>':
+			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", ">")
+		case '<':
+			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "<")
+		case '|':
+			if i+1 < len(cmd) && cmd[i+1] == '|' {
+				if err := flush("||"); err != nil {
+					return ParsedShellCommand{}, err
+				}
+				i++
+				continue
+			}
+			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "|")
+		case '&':
+			if i+1 < len(cmd) && cmd[i+1] == '&' {
+				if err := flush("&&"); err != nil {
+					return ParsedShellCommand{}, err
+				}
+				i++
+				continue
+			}
+			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "&")
+		case ';':
+			if err := flush(";"); err != nil {
+				return ParsedShellCommand{}, err
+			}
+		default:
+			current.WriteByte(ch)
+		}
+	}
+
+	if escaped {
+		return ParsedShellCommand{}, fmt.Errorf("unterminated escape sequence")
+	}
+	if inSingle || inDouble {
+		return ParsedShellCommand{}, fmt.Errorf("unterminated quoted string")
+	}
+	if err := flush(""); err != nil {
+		return ParsedShellCommand{}, err
+	}
+	if len(parsed.Operators) >= len(parsed.Segments) {
+		return ParsedShellCommand{}, fmt.Errorf("malformed shell command near %q", parsed.Operators[len(parsed.Operators)-1])
+	}
+
+	return parsed, nil
+}
+
+func normalizeShellWhitespace(segment string) string {
+	trimmed := strings.TrimSpace(segment)
+	if trimmed == "" {
+		return ""
+	}
+
+	var normalized strings.Builder
+	inSingle := false
+	inDouble := false
+	escaped := false
+	pendingSpace := false
+
+	for i := 0; i < len(trimmed); i++ {
+		ch := trimmed[i]
+
+		switch {
+		case escaped:
+			if pendingSpace && normalized.Len() > 0 {
+				normalized.WriteByte(' ')
+				pendingSpace = false
+			}
+			normalized.WriteByte(ch)
+			escaped = false
+			continue
+		case inSingle:
+			normalized.WriteByte(ch)
+			if ch == '\'' {
+				inSingle = false
+			}
+			continue
+		case inDouble:
+			normalized.WriteByte(ch)
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inDouble = false
+			}
+			continue
+		}
+
+		switch ch {
+		case ' ', '\t':
+			pendingSpace = normalized.Len() > 0
+		case '\\':
+			if pendingSpace && normalized.Len() > 0 {
+				normalized.WriteByte(' ')
+				pendingSpace = false
+			}
+			normalized.WriteByte(ch)
+			escaped = true
+		case '\'':
+			if pendingSpace && normalized.Len() > 0 {
+				normalized.WriteByte(' ')
+				pendingSpace = false
+			}
+			normalized.WriteByte(ch)
+			inSingle = true
+		case '"':
+			if pendingSpace && normalized.Len() > 0 {
+				normalized.WriteByte(' ')
+				pendingSpace = false
+			}
+			normalized.WriteByte(ch)
+			inDouble = true
+		default:
+			if pendingSpace && normalized.Len() > 0 {
+				normalized.WriteByte(' ')
+				pendingSpace = false
+			}
+			normalized.WriteByte(ch)
+		}
+	}
+
+	return strings.TrimSpace(normalized.String())
 }
 
 func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultStr string, execErr error) {
@@ -162,9 +402,11 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		}
 
 		baseCmd := "unknown"
-		fields := strings.Fields(cmdStr)
-		if len(fields) > 0 {
-			baseCmd = fields[0]
+		if parsed, err := ParseShellCommand(cmdStr); err == nil && len(parsed.Segments) > 0 {
+			fields := strings.Fields(parsed.Segments[0].Command)
+			if len(fields) > 0 {
+				baseCmd = fields[0]
+			}
 		}
 
 		_ = telemetry.RecordEvent(telemetry.TelemetryEvent{
@@ -181,9 +423,14 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		})
 	}()
 
-	_, err := validateAllowedShellCommand(cmdStr, s.allowedCommands)
+	parsedCommand, err := ParseShellCommand(cmdStr)
 	if err != nil {
-		logger.Warn("command not in auto-approve list, asking approval gate", "command", cmdStr)
+		return "", fmt.Errorf("security violation: %w", err)
+	}
+
+	_, err = validateAllowedShellCommand(cmdStr, s.allowedCommands, s.approvedCommands)
+	if err != nil {
+		logger.Warn("command not in auto-approved command list, asking approval gate", "command", cmdStr)
 		if s.approver == nil {
 			return "", fmt.Errorf("security violation: %w (and no approval path is configured)", err)
 		}
@@ -200,6 +447,7 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		approvedByJudge = decision.Mode == SafetyModeLLMJudge
 		approvedByUser = decision.Mode == SafetyModeUserConfirm
 		logger.Info("command approved by secondary gate", "command", cmdStr, "mode", decision.Mode)
+		s.rememberApprovedSegments(ctx, parsedCommand, decision)
 	}
 
 	logger.Info("executing shell command", "command", cmdStr)
@@ -237,4 +485,35 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	}
 
 	return result, nil
+}
+
+func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedShellCommand, decision ShellApprovalDecision) {
+	source := decision.Mode
+	if source == "" {
+		source = "unknown"
+	}
+	rationale := strings.TrimSpace(decision.HistoryNote)
+	if rationale == "" {
+		rationale = "approved after secondary review"
+	}
+
+	for _, segment := range parsed.Segments {
+		if segment.Normalized == "" {
+			continue
+		}
+		s.approvedCommands[segment.Normalized] = true
+
+		if s.approvalStore == nil || !s.approvalStore.Available() {
+			continue
+		}
+		if err := s.approvalStore.SaveCommandApproval(ctx, state.CommandApproval{
+			Command:    segment.Normalized,
+			Status:     "approved",
+			Source:     source,
+			Rationale:  rationale,
+			ApprovedAt: time.Now().UTC(),
+		}); err != nil {
+			log.FromContext(ctx).Warn("failed to persist command approval", "command", segment.Normalized, "error", err)
+		}
+	}
 }
