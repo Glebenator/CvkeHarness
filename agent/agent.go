@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/coolcake/cvkeharness/internal/log"
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/tools"
 )
@@ -58,8 +60,18 @@ If you encounter an error using a tool, read the error message carefully and try
 			MaxTokens:   a.maxTokens,
 		}
 
+		start := time.Now()
 		resp, err := a.provider.ChatCompletion(iterCtx, req)
+		duration := time.Since(start)
+
 		if err != nil {
+			_ = telemetry.RecordEvent(telemetry.TelemetryEvent{
+				Timestamp:    start.UTC(),
+				Model:        a.model,
+				Success:      false,
+				DurationMs:   duration.Milliseconds(),
+				ErrorMessage: err.Error(),
+			})
 			return "", fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
 		}
 
@@ -80,7 +92,7 @@ If you encounter an error using a tool, read the error message carefully and try
 			toolLog := iterLog.With("tool", call.Function.Name)
 			toolLog.Info("executing tool")
 
-			resultStr, err := a.toolsRegistry.ExecuteTool(iterCtx, call)
+			resultStr, err := a.toolsRegistry.ExecuteTool(telemetry.WithModel(iterCtx, resp.Model), call)
 			if err != nil {
 				toolLog.Warn("tool execution failed", "error", err)
 				resultStr = fmt.Sprintf("Error executing tool: %v", err)

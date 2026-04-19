@@ -41,6 +41,7 @@ type lmStudioRequest struct {
 // lmStudioResponse represents the JSON response from LM Studio.
 type lmStudioResponse struct {
 	ID      string `json:"id"`
+	Model   string `json:"model"`
 	Choices []struct {
 		Message      Message `json:"message"`
 		FinishReason string  `json:"finish_reason"`
@@ -109,5 +110,6 @@ func (l *LMStudio) ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatR
 		Message:      choice.Message,
 		FinishReason: choice.FinishReason,
 		Usage:        apiResp.Usage,
+		Model:        apiResp.Model,
 	}, nil
 }

@@ -81,7 +81,7 @@ func LoadConfig() (*Config, error) {
 
 	// Fallback for safety model if not found
 	if cfg.SafetyModel == "" {
-		cfg.SafetyModel = "xai/grok-4.20"
+		cfg.SafetyModel = "x-ai/grok-4.1-fast"
 	}
 
 	return &cfg, nil
@@ -110,8 +110,8 @@ func (c *Config) Save() error {
 func DefaultConfig() *Config {
 	return &Config{
 		Provider:      "openrouter",
-		Model:         "anthropic/claude-3.5-sonnet",
-		SafetyModel:   "xai/grok-4.20",
+		Model:         "anthropic/claude-sonnet-4.6",
+		SafetyModel:   "x-ai/grok-4.1-fast",
 		MaxTokens:     4096,
 		MaxIterations: 25,
 		LogLevel:      "off",

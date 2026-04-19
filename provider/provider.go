@@ -59,6 +59,7 @@ type ChatResponse struct {
 	Message      Message
 	FinishReason string
 	Usage        Usage
+	Model        string
 }
 
 // Usage tracking for tokens.

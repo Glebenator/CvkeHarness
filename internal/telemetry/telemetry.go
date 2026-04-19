@@ -1,59 +1,97 @@
 package telemetry
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"sync"
+	"time"
 )
 
 var (
 	mu sync.Mutex
+	// Matches common API key patterns (sk-..., or generic sk-or-v1- for OpenRouter)
+	secretRegex = regexp.MustCompile(`(sk-[a-zA-Z0-9]{20,})|(sk-or-v1-[a-zA-Z0-9]{40,})`)
 )
 
-// TelemetryData maps model name to a map of base shell commands and their counts.
-type TelemetryData map[string]map[string]int
+type contextKey struct {
+	name string
+}
 
-// RecordCommand updates the telemetry file for a specific model zero-shot shell execution attempt.
-func RecordCommand(model, fullCommand string) error {
+var modelContextKey = &contextKey{"actual_model"}
+
+// WithModel returns a new context with the actual model identifier attached.
+func WithModel(ctx context.Context, model string) context.Context {
+	return context.WithValue(ctx, modelContextKey, model)
+}
+
+// ModelFromContext extracts the actual model identifier if present.
+func ModelFromContext(ctx context.Context) string {
+	if val, ok := ctx.Value(modelContextKey).(string); ok {
+		return val
+	}
+	return ""
+}
+
+// TelemetryEvent represents a single execution event for analytics.
+type TelemetryEvent struct {
+	Timestamp       time.Time `json:"timestamp"`
+	Model           string    `json:"model"`
+	ToolName        string    `json:"tool_name,omitempty"`
+	BaseCommand     string    `json:"base_command,omitempty"`
+	FullCommand     string    `json:"full_command,omitempty"`
+	ApprovedByJudge bool      `json:"approved_by_judge,omitempty"`
+	Success         bool      `json:"success"`
+	DurationMs      int64     `json:"duration_ms"`
+	ErrorMessage    string    `json:"error_message,omitempty"`
+}
+
+// RecordEvent appends a structured telemetry event to a JSONL file.
+func RecordEvent(event TelemetryEvent) error {
 	mu.Lock()
 	defer mu.Unlock()
-
-	// Extract base command (e.g., 'docker' from 'docker ps -a')
-	baseCmd := "unknown"
-	fields := strings.Fields(strings.TrimSpace(fullCommand))
-	if len(fields) > 0 {
-		baseCmd = fields[0]
-	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(home, ".cvkeharness", "telemetry.json")
+	
+	dir := filepath.Join(home, ".cvkeharness")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	
+	path := filepath.Join(dir, "telemetry.jsonl")
 
-	data := make(TelemetryData)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
-	// Read existing data if possible
-	contents, err := os.ReadFile(path)
-	if err == nil {
-		_ = json.Unmarshal(contents, &data)
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
 	}
 
-	if data[model] == nil {
-		data[model] = make(map[string]int)
-	}
+	// Mask potential secrets in fields that might contain them
+	event.FullCommand = maskSecrets(event.FullCommand)
+	event.ErrorMessage = maskSecrets(event.ErrorMessage)
 
-	data[model][baseCmd]++
-
-	newContents, err := json.MarshalIndent(data, "", "  ")
+	b, err := json.Marshal(event)
 	if err != nil {
 		return err
 	}
 
-	// Ensure dir exists
-	_ = os.MkdirAll(filepath.Dir(path), 0755)
-
-	return os.WriteFile(path, newContents, 0644)
+	_, err = f.Write(append(b, '\n'))
+	return err
 }
+
+func maskSecrets(s string) string {
+	if s == "" {
+		return s
+	}
+	return secretRegex.ReplaceAllString(s, "[REDACTED]")
+}
+
