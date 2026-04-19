@@ -13,7 +13,7 @@ func TestGenerateScorecard(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.DefaultConfig()
-	registry := tools.NewDefaultRegistry(cfg.AllowedCommands)
+	registry := tools.NewDefaultRegistry(cfg.AllowedCommands, nil, "", "")
 
 	scorecard := GenerateScorecard(cfg.AllowedCommands, registry, "test-commit", time.Unix(0, 0).UTC())
 

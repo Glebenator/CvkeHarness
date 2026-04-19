@@ -35,10 +35,28 @@ func (f *fakeProvider) ChatCompletion(_ context.Context, req *provider.ChatReque
 			},
 		}, nil
 	case 2:
-		if len(req.Messages) == 0 {
-			return nil, fmt.Errorf("expected tool result in second request")
+		// It might be the judge model calling to verify.
+		lastMessage := req.Messages[len(req.Messages)-1]
+		if strings.Contains(lastMessage.Content, "Is this command safe") {
+			return &provider.ChatResponse{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: "DANGEROUS",
+				},
+			}, nil
+		}
+		
+		if lastMessage.Role != "tool" {
+			return nil, fmt.Errorf("expected last message to be a tool result, got %q", lastMessage.Role)
 		}
 
+		return &provider.ChatResponse{
+			Message: provider.Message{
+				Role:    "assistant",
+				Content: lastMessage.Content,
+			},
+		}, nil
+	case 3:
 		lastMessage := req.Messages[len(req.Messages)-1]
 		if lastMessage.Role != "tool" {
 			return nil, fmt.Errorf("expected last message to be a tool result, got %q", lastMessage.Role)
@@ -59,9 +77,8 @@ func TestRun_RejectsUnsafeShellToolCall(t *testing.T) {
 	t.Parallel()
 
 	registry := tools.NewRegistry()
-	registry.Register(tools.NewShellTool([]string{"ps"}))
-
 	provider := &fakeProvider{}
+	registry.Register(tools.NewShellTool([]string{"ps"}, provider, "safety", "primary"))
 	agent := New(provider, registry, "test-model", 3, 512)
 
 	result, err := agent.Run(context.Background(), "inspect process list")
@@ -69,16 +86,16 @@ func TestRun_RejectsUnsafeShellToolCall(t *testing.T) {
 		t.Fatalf("Run returned unexpected error: %v", err)
 	}
 
-	if provider.callCount != 2 {
-		t.Fatalf("expected 2 provider calls, got %d", provider.callCount)
+	if provider.callCount != 3 {
+		t.Fatalf("expected 3 provider calls, got %d", provider.callCount)
 	}
 
 	if !strings.Contains(result, "Error executing tool:") {
 		t.Fatalf("expected tool execution error in final result, got %q", result)
 	}
 
-	if !strings.Contains(result, `blocked shell syntax ";"`) {
-		t.Fatalf("expected blocked shell syntax in final result, got %q", result)
+	if !strings.Contains(result, `supervisor model deemed this command dangerous`) {
+		t.Fatalf("expected judge rejection error in final result, got %q", result)
 	}
 }
 
