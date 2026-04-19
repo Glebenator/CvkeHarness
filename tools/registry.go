@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/coolcake/cvkeharness/provider"
 )
@@ -53,6 +54,16 @@ func (r *Registry) Definitions() []provider.ToolDef {
 		})
 	}
 	return defs
+}
+
+// Names returns the registered tool names in stable order.
+func (r *Registry) Names() []string {
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ExecuteTool attempts to find and run a tool based on the model's requested call.

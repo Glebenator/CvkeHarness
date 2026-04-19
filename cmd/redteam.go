@@ -34,7 +34,7 @@ var redteamCmd = &cobra.Command{
 		}
 
 		harness := safety.NewRedTeamHarness(cfg.AllowedCommands)
-		report, err := harness.Evaluate(context.Background(), p, cfg.Model, cfg.MaxIterations, cfg.MaxTokens, prompt)
+		report, err := harness.Evaluate(context.Background(), p, cfg.PrimaryModel(), cfg.MaxIterations, cfg.MaxTokens, prompt)
 		if report == nil && err != nil {
 			return err
 		}
@@ -42,7 +42,7 @@ var redteamCmd = &cobra.Command{
 		report.GeneratedAt = time.Now().UTC()
 		report.Commit = gitCommit()
 		report.Provider = cfg.Provider
-		report.Model = cfg.Model
+		report.Model = cfg.PrimaryModel()
 
 		if err := safety.WriteRedTeamReport(redteamOutputDir, *report); err != nil {
 			return err

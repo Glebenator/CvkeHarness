@@ -45,7 +45,7 @@ func (f *fakeProvider) ChatCompletion(_ context.Context, req *provider.ChatReque
 				},
 			}, nil
 		}
-		
+
 		if lastMessage.Role != "tool" {
 			return nil, fmt.Errorf("expected last message to be a tool result, got %q", lastMessage.Role)
 		}
@@ -79,7 +79,14 @@ func TestRun_RejectsUnsafeShellToolCall(t *testing.T) {
 	registry := tools.NewRegistry()
 	provider := &fakeProvider{}
 	registry.Register(tools.NewShellTool([]string{"ps"}, provider, "safety", "primary"))
-	agent := New(provider, registry, "test-model", 3, 512)
+	agent := New(Options{
+		Provider:      provider,
+		ProviderName:  "openrouter",
+		ToolRegistry:  registry,
+		DefaultModel:  "test-model",
+		MaxIterations: 3,
+		MaxTokens:     512,
+	})
 
 	result, err := agent.Run(context.Background(), "inspect process list")
 	if err != nil {
@@ -90,12 +97,11 @@ func TestRun_RejectsUnsafeShellToolCall(t *testing.T) {
 		t.Fatalf("expected 3 provider calls, got %d", provider.callCount)
 	}
 
-	if !strings.Contains(result, "Error executing tool:") {
-		t.Fatalf("expected tool execution error in final result, got %q", result)
+	if !strings.Contains(result.Output, "Error executing tool:") {
+		t.Fatalf("expected tool execution error in final result, got %q", result.Output)
 	}
 
-	if !strings.Contains(result, `supervisor model deemed this command dangerous`) {
-		t.Fatalf("expected judge rejection error in final result, got %q", result)
+	if !strings.Contains(result.Output, `supervisor model deemed this command dangerous`) {
+		t.Fatalf("expected judge rejection error in final result, got %q", result.Output)
 	}
 }
-

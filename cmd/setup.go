@@ -507,52 +507,52 @@ func validateOpenRouterKey(key string) (label string, err error) {
 
 // openRouterFallbackModels mirrors the top-weekly programming ranking as of 2026-04-18.
 var openRouterFallbackModels = [][2]string{
-	{"openrouter/auto",                        "Auto-selected best model         auto"},
-	{"openrouter/free",                        "Auto-selected free model         free"},
-	{"anthropic/claude-sonnet-4.6",            "Anthropic Claude Sonnet 4.6      in $3.00/M  out $15.00/M"},
-	{"anthropic/claude-opus-4.6",              "Anthropic Claude Opus 4.6        in $5.00/M  out $25.00/M"},
-	{"openai/gpt-5.4",                         "OpenAI GPT-5.4                   in $2.50/M  out $15.00/M"},
-	{"google/gemini-3.1-pro-preview",          "Google Gemini 3.1 Pro            in $2.00/M  out $12.00/M"},
-	{"deepseek/deepseek-v3.2",                 "DeepSeek V3.2                    in $0.26/M  out $0.42/M"},
-	{"x-ai/grok-4.1-fast",                     "xAI Grok 4.1 Fast                in $0.20/M  out $0.50/M"},
-	{"openai/gpt-5.4-nano",                    "OpenAI GPT-5.4 Nano              in $0.20/M  out $1.25/M"},
-	{"mistralai/mistral-large-2512",           "Mistral Large 3 2512             in $0.50/M  out $1.50/M"},
-	{"qwen/qwen3.5-plus-02-15",                "Qwen 3.5 Plus                    in $0.26/M  out $1.56/M"},
+	{"openrouter/auto", "Auto-selected best model         auto"},
+	{"openrouter/free", "Auto-selected free model         free"},
+	{"anthropic/claude-sonnet-4.6", "Anthropic Claude Sonnet 4.6      in $3.00/M  out $15.00/M"},
+	{"anthropic/claude-opus-4.6", "Anthropic Claude Opus 4.6        in $5.00/M  out $25.00/M"},
+	{"openai/gpt-5.4", "OpenAI GPT-5.4                   in $2.50/M  out $15.00/M"},
+	{"google/gemini-3.1-pro-preview", "Google Gemini 3.1 Pro            in $2.00/M  out $12.00/M"},
+	{"deepseek/deepseek-v3.2", "DeepSeek V3.2                    in $0.26/M  out $0.42/M"},
+	{"x-ai/grok-4.1-fast", "xAI Grok 4.1 Fast                in $0.20/M  out $0.50/M"},
+	{"openai/gpt-5.4-nano", "OpenAI GPT-5.4 Nano              in $0.20/M  out $1.25/M"},
+	{"mistralai/mistral-large-2512", "Mistral Large 3 2512             in $0.50/M  out $1.50/M"},
+	{"qwen/qwen3.5-plus-02-15", "Qwen 3.5 Plus                    in $0.26/M  out $1.56/M"},
 	{"nvidia/nemotron-3-super-120b-a12b:free", "NVIDIA Nemotron 3 Super          free"},
-	{"[ custom model ]",                       "Enter your own model ID →"},
+	{"[ custom model ]", "Enter your own model ID →"},
 }
 
 var lmStudioModels = [][2]string{
-	{"local-model",      "Use currently loaded model  ★"},
+	{"local-model", "Use currently loaded model  ★"},
 	{"[ custom model ]", "Enter your model identifier →"},
 }
 
 var maxTokenOptions = [][2]string{
-	{"1024",       "Short · fast responses"},
-	{"2048",       "Compact responses"},
-	{"4096",       "Standard · recommended  ★"},
-	{"8192",       "Extended responses"},
-	{"16384",      "Maximum context window"},
+	{"1024", "Short · fast responses"},
+	{"2048", "Compact responses"},
+	{"4096", "Standard · recommended  ★"},
+	{"8192", "Extended responses"},
+	{"16384", "Maximum context window"},
 	{"[ custom ]", "Enter a specific token count →"},
 }
 
 var logLevelOptions = [][2]string{
-	{"off",   "Silent · only agent output shown  ★"},
+	{"off", "Silent · only agent output shown  ★"},
 	{"error", "Critical errors only"},
-	{"warn",  "Warnings and errors"},
-	{"info",  "Standard structured logging"},
+	{"warn", "Warnings and errors"},
+	{"info", "Standard structured logging"},
 	{"debug", "Verbose · all internal events"},
 }
 
 // safetyModelOptions are the recommended judge/safety models presented in the wizard.
 var safetyModelOptions = [][2]string{
-	{"x-ai/grok-4.1-fast",                   "Grok 4.1 Fast  ·  default  ★            xAI"},
-	{"anthropic/claude-sonnet-4.6",          "Claude Sonnet 4.6  ·  balanced          Anthropic"},
-	{"openai/gpt-5.4-nano",                  "GPT-5.4 Nano  ·  fast & cheap           OpenAI"},
+	{"x-ai/grok-4.1-fast", "Grok 4.1 Fast  ·  default  ★            xAI"},
+	{"anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6  ·  balanced          Anthropic"},
+	{"openai/gpt-5.4-nano", "GPT-5.4 Nano  ·  fast & cheap           OpenAI"},
 	{"google/gemini-3.1-flash-lite-preview", "Gemini 3.1 Flash Lite  ·  fast           Google"},
-	{"deepseek/deepseek-v3.2",               "DeepSeek V3.2  ·  capable               DeepSeek"},
-	{"mistralai/mistral-small-2603",         "Mistral Small 4  ·  balanced            Mistral"},
-	{"[ custom model ]",                     "Enter your own model ID →"},
+	{"deepseek/deepseek-v3.2", "DeepSeek V3.2  ·  capable               DeepSeek"},
+	{"mistralai/mistral-small-2603", "Mistral Small 4  ·  balanced            Mistral"},
+	{"[ custom model ]", "Enter your own model ID →"},
 }
 
 const totalSteps = 7
@@ -570,7 +570,7 @@ func wizardProvider(cfg *config.Config) bool {
 	}
 	providers := [][2]string{
 		{"openrouter", "Cloud API  ·  many models  ·  requires API key"},
-		{"lmstudio",   "Local inference  ·  no key needed  ·  offline-capable"},
+		{"lmstudio", "Local inference  ·  no key needed  ·  offline-capable"},
 	}
 	idx := selectList(providers, initial, false) // step 1 has no back
 	if idx == goBack {
@@ -674,7 +674,7 @@ func wizardOpenRouterKey(cfg *config.Config) bool {
 func wizardLMStudioURL(cfg *config.Config) bool {
 	renderHeader()
 	renderStep(2, totalSteps, "LM Studio Connection")
-	
+
 	defaultURL := "http://localhost:1234/v1"
 	client := &http.Client{Timeout: 400 * time.Millisecond}
 	resp, err := client.Get(defaultURL + "/models")
@@ -870,7 +870,7 @@ func wizardConfirm(cfg *config.Config) bool {
 
 	choices := [][2]string{
 		{"✔  Save and finish", "Write config — ready to run"},
-		{"✗  Cancel",          "Exit without saving changes"},
+		{"✗  Cancel", "Exit without saving changes"},
 	}
 	idx := selectList(choices, 0, true)
 	if idx == goBack {

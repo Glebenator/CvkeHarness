@@ -2,105 +2,310 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/log"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
+	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
 )
 
-// Agent orchestrates the LLM and tools.
+// ProviderResolver resolves a concrete provider client by name.
+type ProviderResolver interface {
+	Resolve(provider string) (provider.Provider, error)
+}
+
+// Router picks a model for a routed phase.
+type Router interface {
+	Select(ctx context.Context, phase core.Phase, task string, taskClass core.TaskClass, toolNames []string) (core.RoutingSelection, error)
+}
+
+// MemoryRetriever loads the current memory context for a phase.
+type MemoryRetriever interface {
+	Retrieve(ctx context.Context, input core.RetrievalContext) (memory.RetrievalResult, error)
+}
+
+// MemoryCurator persists newly learned lessons.
+type MemoryCurator interface {
+	PersistLessons(ctx context.Context, lessons []memory.Lesson) error
+}
+
+// RunRecorder stores a structured run record.
+type RunRecorder interface {
+	RecordRun(ctx context.Context, record state.RunRecord) error
+}
+
+// Options configures a new agent.
+type Options struct {
+	Provider         provider.Provider
+	ProviderName     string
+	ProviderResolver ProviderResolver
+	ToolRegistry     *tools.Registry
+	DefaultModel     string
+	MaxIterations    int
+	MaxTokens        int
+	RoutingConfig    core.RoutingConfig
+	Router           Router
+	MemoryRetriever  MemoryRetriever
+	MemoryCurator    MemoryCurator
+	RunRecorder      RunRecorder
+}
+
+// Agent orchestrates routed model execution and tool use.
 type Agent struct {
-	provider      provider.Provider
-	toolsRegistry *tools.Registry
-	model         string
-	maxIterations int
-	maxTokens     int
+	opts Options
+}
+
+// RunResult contains the user-facing output plus structured execution details.
+type RunResult struct {
+	Output  string
+	Run     state.RunRecord
+	Routing []core.RoutingSelection
 }
 
 // New creates a new Agent.
-func New(p provider.Provider, r *tools.Registry, model string, maxIterations int, maxTokens int) *Agent {
-	return &Agent{
-		provider:      p,
-		toolsRegistry: r,
-		model:         model,
-		maxIterations: maxIterations,
-		maxTokens:     maxTokens,
-	}
+func New(opts Options) *Agent {
+	return &Agent{opts: opts}
 }
 
-// Run executes the agentic loop for a given prompt until a final answer is produced or the iteration limit is hit.
-func (a *Agent) Run(ctx context.Context, prompt string) (string, error) {
+// Run executes the harness loop for a given prompt.
+func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err error) {
 	logger := log.FromContext(ctx)
-	logger.Info("CvkeHarness starting task", "task", prompt)
-
-	systemPrompt := `You are CvkeHarness, a highly capable DevOps AI assistant.
-Before deciding to use a tool, think through the problem step-by-step.
-If you encounter an error using a tool, read the error message carefully and try a different approach or adjust your arguments.`
-
-	messages := []provider.Message{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: prompt},
+	taskClass := core.ClassifyTask(prompt)
+	toolNames := []string{}
+	if a.opts.ToolRegistry != nil {
+		toolNames = a.opts.ToolRegistry.Names()
 	}
 
-	toolDefs := a.toolsRegistry.Definitions()
+	startedAt := time.Now().UTC()
+	runRecord := state.RunRecord{
+		StartedAt:      startedAt,
+		Provider:       a.opts.ProviderName,
+		Task:           prompt,
+		TaskClass:      taskClass,
+		RoutingEnabled: a.opts.RoutingConfig.Enabled,
+	}
 
-	for iter := 1; iter <= a.maxIterations; iter++ {
+	defer func() {
+		runRecord.FinishedAt = time.Now().UTC()
+		runRecord.Success = err == nil
+		if err != nil {
+			runRecord.ErrorMessage = err.Error()
+		}
+		result.Run = runRecord
+		if a.opts.RunRecorder != nil {
+			if recErr := a.opts.RunRecorder.RecordRun(ctx, runRecord); recErr != nil {
+				logger.Warn("failed to record run", "error", recErr)
+			}
+		}
+	}()
+
+	logger.Info("CvkeHarness starting task", "task", prompt, "task_class", taskClass)
+
+	var routingSelections []core.RoutingSelection
+	var planningNotes string
+	if a.opts.RoutingConfig.Enabled && a.opts.Router != nil {
+		planningSelection, planRecord, planText, planErr := a.runPlanningPhase(ctx, prompt, taskClass, toolNames)
+		routingSelections = append(routingSelections, planningSelection)
+		if planRecord.Provider != "" {
+			runRecord.Phases = append(runRecord.Phases, planRecord)
+		}
+		if planErr != nil {
+			logger.Warn("planning phase failed, continuing with execution", "error", planErr)
+		}
+		planningNotes = planText
+	}
+
+	execSelection := core.RoutingSelection{
+		Phase:       core.PhaseExecution,
+		Requested:   core.NewModelRef(a.opts.ProviderName, a.opts.DefaultModel),
+		UsedDefault: true,
+		Reason:      "routing disabled; using the configured default model",
+	}
+	if a.opts.Router != nil {
+		execSelection, err = a.opts.Router.Select(ctx, core.PhaseExecution, prompt, taskClass, toolNames)
+		if err != nil {
+			return result, err
+		}
+	}
+	routingSelections = append(routingSelections, execSelection)
+
+	output, phaseRecord, toolOutcomes, execErr := a.runExecutionPhase(ctx, prompt, taskClass, toolNames, planningNotes, execSelection)
+	runRecord.Phases = append(runRecord.Phases, phaseRecord)
+	runRecord.Tools = append(runRecord.Tools, toolOutcomes...)
+	result.Output = output
+	result.Routing = routingSelections
+	if execErr != nil {
+		err = execErr
+	}
+
+	curationLessons := heuristicLessons(prompt, taskClass, output, toolOutcomes, execErr, phaseRecord)
+	if a.opts.MemoryCurator != nil {
+		if a.opts.RoutingConfig.Enabled && a.opts.Router != nil {
+			curationSelection, curationRecord, modelLessons, curErr := a.runCurationPhase(ctx, prompt, taskClass, output, toolOutcomes, execErr)
+			routingSelections = append(routingSelections, curationSelection)
+			result.Routing = routingSelections
+			if curationRecord.Provider != "" {
+				runRecord.Phases = append(runRecord.Phases, curationRecord)
+			}
+			if curErr == nil && len(modelLessons) > 0 {
+				curationLessons = modelLessons
+			}
+		}
+		if persistErr := a.opts.MemoryCurator.PersistLessons(ctx, curationLessons); persistErr != nil {
+			logger.Warn("failed to persist lessons", "error", persistErr)
+		}
+	}
+
+	return result, err
+}
+
+func (a *Agent) runPlanningPhase(ctx context.Context, prompt string, taskClass core.TaskClass, toolNames []string) (core.RoutingSelection, state.PhaseRecord, string, error) {
+	selection, err := a.opts.Router.Select(ctx, core.PhasePlanning, prompt, taskClass, nil)
+	if err != nil {
+		return core.RoutingSelection{}, state.PhaseRecord{}, "", err
+	}
+
+	planPrompt := "Write a concise 3-step plan for the task below. Do not call tools. Do not answer the user directly.\n\nTask:\n" + prompt
+	content, record, _, err := a.singleModelCall(ctx, core.PhasePlanning, selection, taskClass, toolNames, planPrompt)
+	if err != nil {
+		return selection, record, "", err
+	}
+	return selection, record, strings.TrimSpace(content), nil
+}
+
+func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass core.TaskClass, toolNames []string, planningNotes string, selection core.RoutingSelection) (string, state.PhaseRecord, []state.ToolOutcome, error) {
+	logger := log.FromContext(ctx)
+	execCtx := core.RetrievalContext{
+		Task:        prompt,
+		TaskClass:   taskClass,
+		Phase:       core.PhaseExecution,
+		ActiveModel: selection.Requested,
+		ToolNames:   toolNames,
+	}
+	retrieved, err := a.retrieveMemory(ctx, execCtx)
+	if err != nil {
+		return "", state.PhaseRecord{}, nil, err
+	}
+
+	systemMessages := initialSystemMessages(retrieved, planningNotes)
+	messages := append(systemMessages, provider.Message{Role: "user", Content: prompt})
+	toolDefs := a.opts.ToolRegistry.Definitions()
+
+	phaseRecord := state.PhaseRecord{
+		Phase:          core.PhaseExecution,
+		Provider:       selection.Requested.Provider,
+		RequestedModel: selection.Requested.Model,
+		Confidence:     selection.Confidence,
+		Explanation:    selection.Reason,
+	}
+
+	execProvider, err := a.resolveProvider(selection.Requested.Provider)
+	if err != nil {
+		return "", phaseRecord, nil, err
+	}
+
+	var toolOutcomes []state.ToolOutcome
+	var output string
+	var actualModel = selection.Requested.Model
+	var refreshed bool
+	failuresByTool := make(map[string]int)
+
+	for iter := 1; iter <= a.opts.MaxIterations; iter++ {
 		iterCtx := log.WithIteration(ctx, iter)
-		iterLog := log.FromContext(iterCtx)
-		iterLog.Info("starting execution loop")
-
 		req := &provider.ChatRequest{
-			Model:       a.model,
+			Model:       selection.Requested.Model,
 			Messages:    messages,
 			Tools:       toolDefs,
-			Temperature: 0.2, // low temp for more deterministic DevOps actions
-			MaxTokens:   a.maxTokens,
+			Temperature: 0.2,
+			MaxTokens:   a.opts.MaxTokens,
 		}
 
 		start := time.Now()
-		resp, err := a.provider.ChatCompletion(iterCtx, req)
+		resp, err := execProvider.ChatCompletion(iterCtx, req)
 		duration := time.Since(start)
+		phaseRecord.LatencyMs += duration.Milliseconds()
+		if resp != nil {
+			phaseRecord.PromptTokens += resp.Usage.PromptTokens
+			phaseRecord.CompletionTokens += resp.Usage.CompletionTokens
+			phaseRecord.TotalTokens += resp.Usage.TotalTokens
+		}
 
 		if err != nil {
 			_ = telemetry.RecordEvent(telemetry.TelemetryEvent{
 				Timestamp:    start.UTC(),
-				Model:        a.model,
+				Model:        selection.Requested.String(),
 				Success:      false,
 				DurationMs:   duration.Milliseconds(),
 				ErrorMessage: err.Error(),
 			})
-			return "", fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
+			return "", phaseRecord, toolOutcomes, fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
 		}
 
-		// Append the assistant's response to history
+		if resp.Model != "" {
+			actualModel = resp.Model
+		}
+		phaseRecord.ActualModel = actualModel
+
 		messages = append(messages, resp.Message)
-
-		// 1. Did the model just return text? Then it's done.
 		if len(resp.Message.ToolCalls) == 0 {
-			iterLog.Info("agent finished task")
-			return resp.Message.Content, nil
+			logger.Info("agent finished task")
+			phaseRecord.Success = true
+			return resp.Message.Content, phaseRecord, toolOutcomes, nil
 		}
 
-		// 2. The model requested one or more tool calls.
-		iterLog.Info("agent requested tools", "count", len(resp.Message.ToolCalls))
-
-		// Execute them (serially for now to keep history ordered, could go parallel later)
 		for _, call := range resp.Message.ToolCalls {
-			toolLog := iterLog.With("tool", call.Function.Name)
-			toolLog.Info("executing tool")
+			toolStart := time.Now()
+			resultStr, toolErr := a.opts.ToolRegistry.ExecuteTool(telemetry.WithModel(iterCtx, actualModel), call)
+			durationMs := time.Since(toolStart).Milliseconds()
 
-			resultStr, err := a.toolsRegistry.ExecuteTool(telemetry.WithModel(iterCtx, resp.Model), call)
-			if err != nil {
-				toolLog.Warn("tool execution failed", "error", err)
-				resultStr = fmt.Sprintf("Error executing tool: %v", err)
-			} else {
-				toolLog.Info("tool execution succeeded")
+			outcome := state.ToolOutcome{
+				Phase:      core.PhaseExecution,
+				Provider:   selection.Requested.Provider,
+				Model:      actualModel,
+				ToolName:   call.Function.Name,
+				Toolset:    core.ToolsetKey(toolNames),
+				Success:    toolErr == nil,
+				DurationMs: durationMs,
 			}
 
-			// Feed result back to the model
+			if toolErr != nil {
+				failuresByTool[call.Function.Name]++
+				outcome.ErrorMessage = toolErr.Error()
+				outcome.PolicyDenied, outcome.DenialClass = classifyPolicyDenial(toolErr)
+				resultStr = fmt.Sprintf("Error executing tool: %v", toolErr)
+
+				if !refreshed && (outcome.PolicyDenied || failuresByTool[call.Function.Name] >= 2) {
+					refreshed = true
+					refresh, refreshErr := a.retrieveMemory(ctx, core.RetrievalContext{
+						Task:        prompt,
+						TaskClass:   taskClass,
+						Phase:       core.PhaseExecution,
+						ActiveModel: selection.Requested,
+						ActualModel: core.NewModelRef(selection.Requested.Provider, actualModel),
+						ToolNames:   toolNames,
+						Trouble: &core.ToolTrouble{
+							Tool:        call.Function.Name,
+							DenialClass: outcome.DenialClass,
+							Repeated:    failuresByTool[call.Function.Name] >= 2,
+						},
+					})
+					if refreshErr == nil && strings.TrimSpace(refresh.Learned) != "" {
+						messages = append(messages, provider.Message{
+							Role:    "system",
+							Content: "Refreshed learned context after tool trouble:\n" + refresh.Learned,
+						})
+					}
+				}
+			}
+
+			toolOutcomes = append(toolOutcomes, outcome)
 			messages = append(messages, provider.Message{
 				Role:       "tool",
 				ToolCallID: call.ID,
@@ -109,5 +314,240 @@ If you encounter an error using a tool, read the error message carefully and try
 		}
 	}
 
-	return "", fmt.Errorf("agent exceeded max iterations (%d) without completing the task", a.maxIterations)
+	return output, phaseRecord, toolOutcomes, fmt.Errorf("agent exceeded max iterations (%d) without completing the task", a.opts.MaxIterations)
+}
+
+func (a *Agent) runCurationPhase(ctx context.Context, prompt string, taskClass core.TaskClass, output string, tools []state.ToolOutcome, execErr error) (core.RoutingSelection, state.PhaseRecord, []memory.Lesson, error) {
+	selection, err := a.opts.Router.Select(ctx, core.PhaseCuration, prompt, taskClass, nil)
+	if err != nil {
+		return core.RoutingSelection{}, state.PhaseRecord{}, nil, err
+	}
+
+	summary := map[string]any{
+		"task":        prompt,
+		"task_class":  taskClass,
+		"output":      output,
+		"run_error":   errString(execErr),
+		"tool_events": tools,
+	}
+	payload, _ := json.Marshal(summary)
+	curPrompt := "Produce up to 3 concise lessons as JSON with shape {\"lessons\":[{\"body\":\"...\",\"scope\":\"global|model|tool|model_tool\",\"tool_name\":\"\",\"confidence\":0.0}]}. Focus on provider/model/tool/task heuristics that would improve future runs.\n\nRun summary:\n" + string(payload)
+
+	content, record, actualModel, err := a.singleModelCall(ctx, core.PhaseCuration, selection, taskClass, nil, curPrompt)
+	if err != nil {
+		return selection, record, nil, err
+	}
+
+	var parsed struct {
+		Lessons []struct {
+			Body       string  `json:"body"`
+			Scope      string  `json:"scope"`
+			ToolName   string  `json:"tool_name"`
+			Confidence float64 `json:"confidence"`
+		} `json:"lessons"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(content)), &parsed); err != nil {
+		return selection, record, nil, err
+	}
+
+	var lessons []memory.Lesson
+	for _, item := range parsed.Lessons {
+		if strings.TrimSpace(item.Body) == "" {
+			continue
+		}
+		lessons = append(lessons, memory.Lesson{
+			Body:       item.Body,
+			Scope:      item.Scope,
+			Provider:   selection.Requested.Provider,
+			Model:      actualModel,
+			ToolName:   item.ToolName,
+			TaskClass:  taskClass,
+			Phase:      core.PhaseCuration,
+			Confidence: item.Confidence,
+		})
+	}
+	return selection, record, lessons, nil
+}
+
+func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection core.RoutingSelection, taskClass core.TaskClass, toolNames []string, userPrompt string) (string, state.PhaseRecord, string, error) {
+	retrieved, err := a.retrieveMemory(ctx, core.RetrievalContext{
+		Task:        userPrompt,
+		TaskClass:   taskClass,
+		Phase:       phase,
+		ActiveModel: selection.Requested,
+		ToolNames:   toolNames,
+	})
+	if err != nil {
+		return "", state.PhaseRecord{}, "", err
+	}
+
+	p, err := a.resolveProvider(selection.Requested.Provider)
+	if err != nil {
+		return "", state.PhaseRecord{}, "", err
+	}
+
+	req := &provider.ChatRequest{
+		Model: selection.Requested.Model,
+		Messages: append(initialSystemMessages(retrieved, ""), provider.Message{
+			Role:    "user",
+			Content: userPrompt,
+		}),
+		Temperature: 0.1,
+		MaxTokens:   minInt(a.opts.MaxTokens, 1024),
+	}
+
+	record := state.PhaseRecord{
+		Phase:          phase,
+		Provider:       selection.Requested.Provider,
+		RequestedModel: selection.Requested.Model,
+		Confidence:     selection.Confidence,
+		Explanation:    selection.Reason,
+	}
+
+	start := time.Now()
+	resp, err := p.ChatCompletion(ctx, req)
+	record.LatencyMs = time.Since(start).Milliseconds()
+	if err != nil {
+		return "", record, "", err
+	}
+	record.Success = true
+	record.ActualModel = resp.Model
+	record.PromptTokens = resp.Usage.PromptTokens
+	record.CompletionTokens = resp.Usage.CompletionTokens
+	record.TotalTokens = resp.Usage.TotalTokens
+	return resp.Message.Content, record, resp.Model, nil
+}
+
+func (a *Agent) retrieveMemory(ctx context.Context, input core.RetrievalContext) (memory.RetrievalResult, error) {
+	if a.opts.MemoryRetriever == nil {
+		return memory.RetrievalResult{
+			BuiltInRules: `You are CvkeHarness.
+Before deciding to use a tool, think through the problem step-by-step.
+If you encounter an error using a tool, read the error message carefully and try a different approach or adjust your arguments.`,
+			Learned: fmt.Sprintf("You are currently running as %s.", input.ActiveModel.String()),
+		}, nil
+	}
+	return a.opts.MemoryRetriever.Retrieve(ctx, input)
+}
+
+func initialSystemMessages(retrieved memory.RetrievalResult, planningNotes string) []provider.Message {
+	var messages []provider.Message
+	if strings.TrimSpace(retrieved.BuiltInRules) != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.BuiltInRules)})
+	}
+	if strings.TrimSpace(retrieved.Soul) != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.Soul)})
+	}
+	if strings.TrimSpace(retrieved.Learned) != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.Learned)})
+	}
+	if strings.TrimSpace(planningNotes) != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: "Planning notes:\n" + strings.TrimSpace(planningNotes)})
+	}
+	return messages
+}
+
+func (a *Agent) resolveProvider(providerName string) (provider.Provider, error) {
+	if providerName == "" || providerName == a.opts.ProviderName {
+		if a.opts.Provider != nil {
+			return a.opts.Provider, nil
+		}
+	}
+	if a.opts.ProviderResolver == nil {
+		return nil, fmt.Errorf("no provider resolver configured for %q", providerName)
+	}
+	return a.opts.ProviderResolver.Resolve(providerName)
+}
+
+func classifyPolicyDenial(err error) (bool, string) {
+	if err == nil {
+		return false, ""
+	}
+	lower := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(lower, "deemed this command dangerous"):
+		return true, "judge_denial"
+	case strings.Contains(lower, "safety constraint violated"):
+		return true, "safety_denial"
+	case strings.Contains(lower, "security violation"):
+		return true, "allowlist_denial"
+	case strings.Contains(lower, "blocked shell syntax"):
+		return true, "syntax_denial"
+	default:
+		return false, ""
+	}
+}
+
+func heuristicLessons(prompt string, taskClass core.TaskClass, output string, toolsUsed []state.ToolOutcome, execErr error, phase state.PhaseRecord) []memory.Lesson {
+	var lessons []memory.Lesson
+	seen := map[string]bool{}
+
+	add := func(lesson memory.Lesson) {
+		key := strings.TrimSpace(strings.ToLower(lesson.Body))
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		lessons = append(lessons, lesson)
+	}
+
+	for _, outcome := range toolsUsed {
+		if outcome.PolicyDenied {
+			add(memory.Lesson{
+				Body:       fmt.Sprintf("When %s is denied with %s, switch to a narrower diagnostic command instead of retrying the same action.", outcome.ToolName, outcome.DenialClass),
+				Scope:      "model_tool",
+				Provider:   phase.Provider,
+				Model:      phase.ActualModel,
+				ToolName:   outcome.ToolName,
+				TaskClass:  taskClass,
+				Phase:      core.PhaseExecution,
+				Confidence: 0.7,
+			})
+		} else if !outcome.Success {
+			add(memory.Lesson{
+				Body:       fmt.Sprintf("If %s fails repeatedly, refresh context and simplify the next tool request before escalating.", outcome.ToolName),
+				Scope:      "tool",
+				ToolName:   outcome.ToolName,
+				TaskClass:  taskClass,
+				Phase:      core.PhaseExecution,
+				Confidence: 0.55,
+			})
+		}
+	}
+
+	if execErr == nil && strings.TrimSpace(output) != "" && taskClass == core.TaskClassSummarization {
+		add(memory.Lesson{
+			Body:       "For summarization tasks, favor concise final answers once the needed evidence is gathered.",
+			Scope:      "task_class",
+			TaskClass:  taskClass,
+			Phase:      core.PhaseExecution,
+			Confidence: 0.55,
+		})
+	}
+
+	if execErr != nil && strings.Contains(strings.ToLower(prompt), "shell") {
+		add(memory.Lesson{
+			Body:       "Shell-heavy tasks benefit from one command per tool call so failures stay easy to recover from.",
+			Scope:      "task_class",
+			TaskClass:  core.TaskClassShellHeavy,
+			Phase:      core.PhaseExecution,
+			Confidence: 0.6,
+		})
+	}
+
+	return lessons
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
