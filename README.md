@@ -30,11 +30,11 @@ For each run, the harness:
    - built-in runtime rules
    - `operator.md`
    - `soul.md`
-   - the top relevant learned snippets from memory/findings
+   - only the relevant learned snippets from memory/findings
 4. Executes the model/tool loop
 5. Records structured outcomes to SQLite
-6. Writes short-lived lessons to `findings.md`
-7. Promotes repeated durable lessons into `memory.md`
+6. Records a finding only when a concrete reusable note is worth keeping
+7. Promotes repeated or clearly durable findings into `memory.md`
 
 ## Human-Managed vs Machine-Managed State
 
@@ -49,9 +49,9 @@ These live under `~/.cvkeharness/`:
 - `soul.md`
   The primary persona and long-lived behavioral guidance. User-managed.
 - `memory.md`
-  Durable learned heuristics. Agent-managed.
+  Durable learned notes. Agent-managed, intentionally concise.
 - `findings.md`
-  Recent short-lived lessons. Agent-managed.
+  Provisional notes for future runs. Agent-managed and expected to stay short.
 
 ### Machine-managed state
 
@@ -65,9 +65,10 @@ This lives in `~/.cvkeharness/state.db` and stores:
 - model approvals
 - command approvals
 - memory entry metadata
+- memory observation counts and recency
 - snapshots for rollback
 
-Markdown stays readable; SQLite is the source of truth for scoring, routing, and memory metadata.
+Markdown is the readable notebook. SQLite is the source of truth for routing stats, approvals, and structured memory metadata such as scope, recency, and how often a finding has been observed.
 
 ## Quick Start
 
@@ -208,6 +209,9 @@ Retrieval ranks by:
 - current model
 - actual served model
 - recent tool trouble or policy denial
+- lexical overlap with the current task
+
+Entries are only injected when there is a meaningful relevance signal for the current run. A note that does not match the task, tool, model, or current trouble pattern is left out of the prompt.
 
 When repeated tool failure or a policy denial occurs, the runtime is allowed one refresh of learned context during the run.
 
@@ -248,8 +252,8 @@ The current default tool surface is intentionally small.
 The shell tool:
 
 - validates shell syntax
-- parses supported chaining operators like `&&`, `||`, and `;`
-- blocks unsupported shell constructs such as pipes, redirection, substitution, and backgrounding
+- parses supported chaining operators like `&&`, `||`, `;`, and `|`
+- blocks unsupported shell constructs such as redirection, substitution, and backgrounding
 - checks both the static allowlist and the learned approved-command list
 - routes unknown commands through either an LLM judge or direct user confirmation, depending on config
 - persists approved command segments for reuse in future runs
@@ -263,6 +267,7 @@ The memory note tool:
 - is meant for reusable environment facts, stable user preferences, and tool heuristics discovered mid-run
 - should not be used for raw logs, speculative thoughts, or verbose summaries
 - keeps ad hoc notes provisional; repeated or curated lessons may later be promoted into `memory.md`
+- updates SQLite observation metadata so repeated findings can be promoted without cluttering the markdown files
 
 This keeps the runtime provider-agnostic while still allowing policy-sensitive shell access behind a narrow gate.
 
@@ -358,6 +363,7 @@ The harness now supports model-aware memory and routed execution with local lear
 - routing is heuristic, not fully autonomous
 - the default tool surface is narrow
 - memory is markdown-first and local
+- markdown is optimized for readability, while SQLite carries the machine-structured memory bookkeeping
 - provider support is focused on a shared abstraction rather than provider-specific features
 
 That keeps the system easy to inspect, test, and extend.

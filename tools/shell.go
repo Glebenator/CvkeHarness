@@ -153,7 +153,7 @@ func (s *ShellTool) Parameters() json.RawMessage {
 }
 
 // ValidateShellCommand rejects unsupported shell syntax while allowing simple
-// command chaining through &&, ||, and ;.
+// command chaining through &&, ||, ;, and pipelines.
 func ValidateShellCommand(command string) error {
 	_, err := ParseShellCommand(command)
 	return err
@@ -320,7 +320,9 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 				i++
 				continue
 			}
-			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "|")
+			if err := flush("|"); err != nil {
+				return ParsedShellCommand{}, err
+			}
 		case '&':
 			if i+1 < len(cmd) && cmd[i+1] == '&' {
 				if err := flush("&&"); err != nil {

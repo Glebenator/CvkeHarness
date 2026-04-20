@@ -12,7 +12,7 @@ func (s *Store) SaveMemoryEntries(ctx context.Context, entries []MemoryEntry) er
 	if !s.Available() {
 		return s.Err()
 	}
-	return s.saveMemoryEntriesTx(ctx, nil, entries)
+	return s.saveMemoryEntriesTx(ctx, nil, entries, true)
 }
 
 // SyncMemoryEntries upserts the current entries for the given source files and
@@ -48,13 +48,13 @@ func (s *Store) SyncMemoryEntries(ctx context.Context, sourceFiles []string, ent
 		}
 	}
 
-	if err := s.saveMemoryEntriesTx(ctx, tx, entries); err != nil {
+	if err := s.saveMemoryEntriesTx(ctx, tx, entries, false); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *Store) saveMemoryEntriesTx(ctx context.Context, tx *sql.Tx, entries []MemoryEntry) error {
+func (s *Store) saveMemoryEntriesTx(ctx context.Context, tx *sql.Tx, entries []MemoryEntry, incrementSeen bool) error {
 	var err error
 	ownTx := false
 	if tx == nil {
@@ -79,11 +79,20 @@ func (s *Store) saveMemoryEntriesTx(ctx context.Context, tx *sql.Tx, entries []M
 		if entry.Status == "" {
 			entry.Status = "active"
 		}
+		if entry.SeenCount <= 0 {
+			entry.SeenCount = 1
+		}
+
+		onConflictSeenCount := "seen_count = CASE WHEN memory_entries.seen_count > excluded.seen_count THEN memory_entries.seen_count ELSE excluded.seen_count END"
+		if incrementSeen {
+			onConflictSeenCount = "seen_count = memory_entries.seen_count + 1"
+		}
+
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO memory_entries (
 				id, source_file, scope, provider, model, tool_name, task_class, phase, status, confidence,
-				body, normalized, snapshot_id, created_at, updated_at, last_seen_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				seen_count, body, normalized, snapshot_id, created_at, updated_at, last_seen_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				scope = excluded.scope,
 				provider = excluded.provider,
@@ -93,14 +102,15 @@ func (s *Store) saveMemoryEntriesTx(ctx context.Context, tx *sql.Tx, entries []M
 				phase = excluded.phase,
 				status = excluded.status,
 				confidence = excluded.confidence,
+				`+onConflictSeenCount+`,
 				body = excluded.body,
 				normalized = excluded.normalized,
 				snapshot_id = excluded.snapshot_id,
 				updated_at = excluded.updated_at,
 				last_seen_at = excluded.last_seen_at`,
 			entry.ID, entry.SourceFile, entry.Scope, entry.Provider, entry.Model, entry.ToolName,
-			string(entry.TaskClass), string(entry.Phase), entry.Status, entry.Confidence, entry.Body,
-			entry.Normalized, entry.SnapshotID, entry.CreatedAt.UTC(), entry.UpdatedAt.UTC(), entry.LastSeenAt.UTC(),
+			string(entry.TaskClass), string(entry.Phase), entry.Status, entry.Confidence, entry.SeenCount,
+			entry.Body, entry.Normalized, entry.SnapshotID, entry.CreatedAt.UTC(), entry.UpdatedAt.UTC(), entry.LastSeenAt.UTC(),
 		); err != nil {
 			return err
 		}
@@ -119,7 +129,7 @@ func (s *Store) ListMemoryEntries(ctx context.Context, filter MemoryFilter) ([]M
 	}
 
 	query := `
-		SELECT id, source_file, scope, provider, model, tool_name, task_class, phase, status, confidence,
+		SELECT id, source_file, scope, provider, model, tool_name, task_class, phase, status, confidence, seen_count,
 		       body, normalized, snapshot_id, created_at, updated_at, last_seen_at
 		FROM memory_entries
 		WHERE 1=1`
@@ -168,7 +178,7 @@ func (s *Store) ListMemoryEntries(ctx context.Context, filter MemoryFilter) ([]M
 		var item MemoryEntry
 		if err := rows.Scan(
 			&item.ID, &item.SourceFile, &item.Scope, &item.Provider, &item.Model, &item.ToolName,
-			&item.TaskClass, &item.Phase, &item.Status, &item.Confidence, &item.Body, &item.Normalized,
+			&item.TaskClass, &item.Phase, &item.Status, &item.Confidence, &item.SeenCount, &item.Body, &item.Normalized,
 			&item.SnapshotID, &item.CreatedAt, &item.UpdatedAt, &item.LastSeenAt,
 		); err != nil {
 			return nil, err

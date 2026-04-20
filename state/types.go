@@ -76,6 +76,7 @@ type MemoryEntry struct {
 	Phase      core.Phase
 	Status     string
 	Confidence float64
+	SeenCount  int
 	Body       string
 	Normalized string
 	SnapshotID string
