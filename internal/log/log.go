@@ -22,6 +22,16 @@ const (
 // "off" discards all log output (default for clean agent-only terminal output).
 // format should be "json" or "text".
 func Init(level, format string) {
+	InitWithWriter(level, format, os.Stderr)
+}
+
+// InitWithWriter initializes the global logger, directing output to the
+// provided writer.
+func InitWithWriter(level, format string, out io.Writer) {
+	if out == nil {
+		out = os.Stderr
+	}
+
 	// "off" silences all structured logs so only agent output reaches the terminal.
 	if strings.ToLower(level) == "off" {
 		handler := slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError})
@@ -42,12 +52,20 @@ func Init(level, format string) {
 	}
 
 	opts := &slog.HandlerOptions{Level: lvl}
+	if strings.ToLower(format) != "json" {
+		opts.ReplaceAttr = func(_ []string, attr slog.Attr) slog.Attr {
+			if attr.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return attr
+		}
+	}
 
 	var handler slog.Handler
 	if strings.ToLower(format) == "json" {
-		handler = slog.NewJSONHandler(os.Stderr, opts)
+		handler = slog.NewJSONHandler(out, opts)
 	} else {
-		handler = slog.NewTextHandler(os.Stderr, opts)
+		handler = slog.NewTextHandler(out, opts)
 	}
 
 	slog.SetDefault(slog.New(handler))

@@ -10,15 +10,19 @@ import (
 	"github.com/coolcake/cvkeharness/agent"
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/cli"
 	"github.com/coolcake/cvkeharness/internal/log"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/router"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var explainRouting bool
+var streamShell bool
+var streamMode string
 
 var runCmd = &cobra.Command{
 	Use:   "run [task]",
@@ -33,7 +37,12 @@ var runCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		log.Init(cfg.LogLevel, "text")
+		console := streamConsole()
+		if console != nil {
+			log.InitWithWriter(cfg.LogLevel, "text", console)
+		} else {
+			log.Init(cfg.LogLevel, "text")
+		}
 		ctx := context.Background()
 		logger := log.FromContext(ctx)
 		logger.Info("CvkeHarness starting up", "default_model", cfg.PrimaryModel())
@@ -73,6 +82,7 @@ var runCmd = &cobra.Command{
 			ProviderName:     cfg.Provider,
 			ProviderResolver: providerResolver{cfg: cfg},
 			ToolRegistry:     registry,
+			EventObserver:    console,
 			DefaultModel:     cfg.PrimaryModel(),
 			MaxIterations:    cfg.MaxIterations,
 			MaxTokens:        cfg.MaxTokens,
@@ -91,21 +101,25 @@ var runCmd = &cobra.Command{
 			printRoutingExplanation(result.Routing)
 		}
 		if err != nil {
-			fmt.Printf("\nAgent failed: %v\n", err)
+			fmt.Printf("\nAgent Failure\n-------------\n%v\n", err)
 			if result.Output != "" {
-				fmt.Println("\nPartial Result:")
+				fmt.Println("\nPartial Agent Output")
+				fmt.Println("--------------------")
 				fmt.Println(result.Output)
 			}
 			os.Exit(1)
 		}
 
-		fmt.Println("\nResult:")
+		fmt.Println("\nAgent Output")
+		fmt.Println("------------")
 		fmt.Println(result.Output)
 	},
 }
 
 func init() {
 	runCmd.Flags().BoolVar(&explainRouting, "explain-routing", false, "show why each phase/model choice was made")
+	runCmd.Flags().BoolVar(&streamShell, "stream-shell", true, "stream shell tool output to stderr while commands run")
+	runCmd.Flags().StringVar(&streamMode, "stream-mode", "auto", "shell transcript rendering mode: auto, plain, or rich")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -147,5 +161,41 @@ func printRoutingExplanation(selections []core.RoutingSelection) {
 		if selection.Recommendation != nil && selection.RecommendationReason != "" {
 			fmt.Printf("  Recommendation: %s\n", selection.RecommendationReason)
 		}
+	}
+}
+
+func streamConsole() *cli.TranscriptRenderer {
+	if !streamShell {
+		return nil
+	}
+
+	mode, ok := resolveStreamMode(streamMode)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Warning: unsupported stream mode %q, falling back to auto\n", streamMode)
+		mode, ok = resolveStreamMode("auto")
+	}
+	if !ok {
+		return nil
+	}
+
+	return cli.NewTranscriptRenderer(os.Stderr, mode)
+}
+
+func resolveStreamMode(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "plain":
+		return "plain", true
+	case "rich":
+		return "rich", true
+	case "", "auto":
+		if !term.IsTerminal(int(os.Stderr.Fd())) {
+			return "", false
+		}
+		if strings.TrimSpace(os.Getenv("NO_COLOR")) != "" || strings.EqualFold(os.Getenv("TERM"), "dumb") {
+			return "plain", true
+		}
+		return "rich", true
+	default:
+		return "", false
 	}
 }

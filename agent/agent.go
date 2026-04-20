@@ -47,6 +47,7 @@ type Options struct {
 	ProviderName     string
 	ProviderResolver ProviderResolver
 	ToolRegistry     *tools.Registry
+	EventObserver    tools.EventObserver
 	DefaultModel     string
 	MaxIterations    int
 	MaxTokens        int
@@ -77,6 +78,7 @@ func New(opts Options) *Agent {
 // Run executes the harness loop for a given prompt.
 func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err error) {
 	logger := log.FromContext(ctx)
+	ctx = tools.WithEventObserver(ctx, a.opts.EventObserver)
 	taskClass := core.ClassifyTask(prompt)
 	toolNames := []string{}
 	if a.opts.ToolRegistry != nil {
@@ -262,7 +264,12 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 
 		for _, call := range resp.Message.ToolCalls {
 			toolStart := time.Now()
-			resultStr, toolErr := a.opts.ToolRegistry.ExecuteTool(telemetry.WithModel(iterCtx, actualModel), call)
+			toolCtx := tools.WithToolCallContext(telemetry.WithModel(iterCtx, actualModel), call.ID, call.Function.Name)
+			tools.EmitEvent(toolCtx, tools.Event{
+				Type:    tools.EventToolCallStarted,
+				Success: true,
+			})
+			resultStr, toolErr := a.opts.ToolRegistry.ExecuteTool(toolCtx, call)
 			durationMs := time.Since(toolStart).Milliseconds()
 
 			outcome := state.ToolOutcome{
@@ -302,6 +309,12 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				}
 			}
 
+			tools.EmitEvent(toolCtx, tools.Event{
+				Type:         tools.EventToolCallFinished,
+				Success:      toolErr == nil,
+				Duration:     time.Duration(durationMs) * time.Millisecond,
+				ErrorMessage: outcome.ErrorMessage,
+			})
 			toolOutcomes = append(toolOutcomes, outcome)
 			chat.AddToolResult(call.ID, resultStr)
 		}

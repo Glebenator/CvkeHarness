@@ -5,10 +5,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/coolcake/cvkeharness/state"
 )
+
+type recordingObserver struct {
+	mu     sync.Mutex
+	events []Event
+}
+
+func (r *recordingObserver) Observe(event Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+func (r *recordingObserver) snapshot() []Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	out := make([]Event, len(r.events))
+	copy(out, r.events)
+	return out
+}
 
 func TestValidateShellCommand_AllowsSafeDiagnostics(t *testing.T) {
 	t.Parallel()
@@ -182,6 +203,54 @@ func TestShellTool_BlocksUnsupportedSyntaxBeforeApproval(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `blocked shell syntax "|"`) {
 		t.Fatalf("expected pipe syntax rejection, got %v", err)
+	}
+}
+
+func TestShellTool_StreamsEventsWhilePreservingOutput(t *testing.T) {
+	t.Parallel()
+
+	observer := &recordingObserver{}
+	ctx := WithEventObserver(WithToolCallContext(context.Background(), "call-1", "shell_execute"), observer)
+	tool := NewShellToolWithApprover([]string{"echo"}, nil, "primary")
+
+	result, err := tool.Execute(ctx, json.RawMessage(`{"command":"echo hello"}`))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "hello") {
+		t.Fatalf("expected command output to be preserved, got %q", result)
+	}
+
+	events := observer.snapshot()
+	if len(events) == 0 {
+		t.Fatal("expected shell execution to emit events")
+	}
+
+	var sawStart, sawApproval, sawOutput, sawFinish bool
+	for _, event := range events {
+		switch event.Type {
+		case EventShellCommandStarted:
+			sawStart = event.Command == "echo hello" && event.ToolCallID == "call-1"
+		case EventShellApproval:
+			sawApproval = event.ApprovalMode == "allowlist"
+		case EventShellOutput:
+			sawOutput = sawOutput || strings.Contains(event.Output, "hello")
+		case EventShellCommandFinished:
+			sawFinish = event.Success && event.ExitCodeKnown && event.ExitCode == 0
+		}
+	}
+
+	if !sawStart {
+		t.Fatal("expected shell command start event")
+	}
+	if !sawApproval {
+		t.Fatal("expected shell approval event for allowlist execution")
+	}
+	if !sawOutput {
+		t.Fatal("expected shell output event to include command output")
+	}
+	if !sawFinish {
+		t.Fatal("expected successful shell finish event")
 	}
 }
 

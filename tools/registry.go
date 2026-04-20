@@ -77,5 +77,5 @@ func (r *Registry) ExecuteTool(ctx context.Context, call provider.ToolCall) (str
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
 	}
 
-	return t.Execute(ctx, json.RawMessage(call.Function.Arguments))
+	return t.Execute(WithToolCallContext(ctx, call.ID, call.Function.Name), json.RawMessage(call.Function.Arguments))
 }

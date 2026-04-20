@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coolcake/cvkeharness/internal/log"
@@ -40,6 +41,59 @@ type ShellSegment struct {
 type ParsedShellCommand struct {
 	Segments  []ShellSegment
 	Operators []string
+}
+
+type streamCaptureWriter struct {
+	ctx       context.Context
+	limit     int
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	truncated bool
+}
+
+func newStreamCaptureWriter(ctx context.Context, limit int) *streamCaptureWriter {
+	return &streamCaptureWriter{
+		ctx:   ctx,
+		limit: limit,
+	}
+}
+
+func (w *streamCaptureWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	EmitEvent(w.ctx, Event{
+		Type:   EventShellOutput,
+		Output: string(p),
+	})
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	remaining := w.limit - w.buf.Len()
+	if remaining <= 0 {
+		w.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		_, _ = w.buf.Write(p[:remaining])
+		w.truncated = true
+		return len(p), nil
+	}
+	_, _ = w.buf.Write(p)
+	return len(p), nil
+}
+
+func (w *streamCaptureWriter) Result() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	result := w.buf.String()
+	if w.truncated {
+		result += "\n... (output truncated)"
+	}
+	return result
 }
 
 // NewShellTool creates a shell tool constrained to an allowlist and LLM judge.
@@ -394,6 +448,28 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	approvedByUser := false
 	approvalMode := "allowlist"
 	historyNote := ""
+	exitCode := 0
+	exitCodeKnown := false
+
+	if cmdStr != "" {
+		EmitEvent(ctx, Event{
+			Type:    EventShellCommandStarted,
+			Command: cmdStr,
+			Success: true,
+		})
+		defer func() {
+			EmitEvent(ctx, Event{
+				Type:          EventShellCommandFinished,
+				Command:       cmdStr,
+				ApprovalMode:  approvalMode,
+				Success:       execErr == nil,
+				ExitCode:      exitCode,
+				ExitCodeKnown: exitCodeKnown,
+				Duration:      time.Since(start),
+				ErrorMessage:  errorString(execErr),
+			})
+		}()
+	}
 
 	defer func() {
 		model := telemetry.ModelFromContext(ctx)
@@ -449,6 +525,12 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		logger.Info("command approved by secondary gate", "command", cmdStr, "mode", decision.Mode)
 		s.rememberApprovedSegments(ctx, parsedCommand, decision)
 	}
+	EmitEvent(ctx, Event{
+		Type:         EventShellApproval,
+		Command:      cmdStr,
+		ApprovalMode: approvalMode,
+		Success:      true,
+	})
 
 	logger.Info("executing shell command", "command", cmdStr)
 
@@ -457,18 +539,19 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "sh", "-c", cmdStr)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	const maxOutput = 4096
+	stream := newStreamCaptureWriter(ctx, maxOutput)
+	cmd.Stdout = stream
+	cmd.Stderr = stream
 
 	err = cmd.Run()
-	result := out.String()
-
-	// Truncate if output is too long to save token cost and prevent context explosion
-	const maxOutput = 4096
-	if len(result) > maxOutput {
-		result = result[:maxOutput] + "\n... (output truncated)"
+	if cmd.ProcessState != nil {
+		if code := cmd.ProcessState.ExitCode(); code >= 0 {
+			exitCode = code
+			exitCodeKnown = true
+		}
 	}
+	result := stream.Result()
 	if historyNote != "" {
 		if result == "" {
 			result = historyNote
@@ -516,4 +599,11 @@ func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedS
 			log.FromContext(ctx).Warn("failed to persist command approval", "command", segment.Normalized, "error", err)
 		}
 	}
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
