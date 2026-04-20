@@ -1,12 +1,12 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/provider"
 )
 
@@ -26,6 +26,7 @@ type ShellApprovalDecision struct {
 	Approved    bool
 	Mode        string
 	HistoryNote string
+	Remember    bool
 }
 
 // ShellApprover decides whether a non-allowlisted command may run.
@@ -70,12 +71,13 @@ func (a *llmJudgeApprover) Approve(ctx context.Context, req ShellApprovalRequest
 	return ShellApprovalDecision{
 		Approved: true,
 		Mode:     SafetyModeLLMJudge,
+		Remember: true,
 	}, nil
 }
 
 // UserPromptApprover asks the terminal user to approve a gated command.
 type UserPromptApprover struct {
-	in  *bufio.Reader
+	in  io.Reader
 	out io.Writer
 }
 
@@ -85,29 +87,45 @@ func NewUserPromptApprover(in io.Reader, out io.Writer) ShellApprover {
 		return nil
 	}
 	return &UserPromptApprover{
-		in:  bufio.NewReader(in),
+		in:  in,
 		out: out,
 	}
 }
 
 func (a *UserPromptApprover) Approve(_ context.Context, req ShellApprovalRequest) (ShellApprovalDecision, error) {
-	if _, err := fmt.Fprintf(a.out, "\nCommand requires manual approval.\nCommand: %s\nReason: %s\nApprove and run it? [y/N]: ", req.Command, req.ValidationError); err != nil {
-		return ShellApprovalDecision{}, err
-	}
-
-	line, err := a.in.ReadString('\n')
+	idx, err := termui.Select(termui.SelectOptions{
+		Title: "Command requires approval",
+		Details: []string{
+			"Command: " + req.Command,
+			"Reason: " + req.ValidationError,
+		},
+		Choices: []termui.Choice{
+			{Label: "Reject command", Description: "Keep this run within the current approval policy"},
+			{Label: "Approve once", Description: "Run this command now, then ask again next time"},
+			{Label: "Approve and remember", Description: "Run it now and reuse this approval for matching command segments"},
+		},
+		InitialIndex: 0,
+		In:           a.in,
+		Out:          a.out,
+	})
 	if err != nil {
 		return ShellApprovalDecision{}, err
 	}
-
-	answer := strings.ToLower(strings.TrimSpace(line))
-	if answer != "y" && answer != "yes" {
+	if idx == 0 {
 		return ShellApprovalDecision{}, fmt.Errorf("safety constraint violated: user denied command execution")
+	}
+
+	historyNote := "Command required manual approval and was approved by the user for this run only."
+	remember := false
+	if idx == 2 {
+		historyNote = "Command required manual approval and was approved by the user for reuse."
+		remember = true
 	}
 
 	return ShellApprovalDecision{
 		Approved:    true,
 		Mode:        SafetyModeUserConfirm,
-		HistoryNote: "Command required manual approval and was approved by the user for this run.",
+		HistoryNote: historyNote,
+		Remember:    remember,
 	}, nil
 }

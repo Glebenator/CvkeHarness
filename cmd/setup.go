@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,214 +10,60 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 // ─── ANSI styling ─────────────────────────────────────────────────────────────
 
 const (
-	ansiReset = "\033[0m"
-	ansiBold  = "\033[1m"
-	ansiDim   = "\033[2m"
+	ansiReset = termui.ANSIReset
+	ansiBold  = termui.ANSIBold
+	ansiDim   = termui.ANSIDim
 
-	fgWhite  = "\033[97m"
-	fgGray   = "\033[38;5;250m" // visible on both light and dark terminals
-	fgMuted  = "\033[38;5;244m" // secondary text — legible but not dominant
-	fgAccent = "\033[38;5;45m"  // electric cyan-blue
-	fgGreen  = "\033[38;5;82m"
-	fgYellow = "\033[38;5;220m"
-	fgRed    = "\033[38;5;196m"
+	fgWhite  = termui.FGWhite
+	fgGray   = termui.FGGray
+	fgMuted  = termui.FGMuted
+	fgAccent = termui.FGAccent
+	fgGreen  = termui.FGGreen
+	fgYellow = termui.FGYellow
+	fgRed    = termui.FGRed
 
-	bgSelected = "\033[48;5;237m" // subtle dark highlight for selected row
-
-	hideCursor  = "\033[?25l"
-	showCursor  = "\033[?25h"
-	clearScreen = "\033[2J\033[H"
-
-	hSep = "  ──────────────────────────────────────────────────────"
+	clearScreen = termui.ClearScreen
+	hSep        = termui.HeaderSeparator
 )
 
 // goBack is returned by selectList when the user presses Backspace.
-const goBack = -1
-
-// ─── Key events ───────────────────────────────────────────────────────────────
-
-type keyKind int
-
-const (
-	kUnknown keyKind = iota
-	kUp
-	kDown
-	kEnter
-	kCtrlC
-	kBackspace
-	kRune
-)
-
-type keyEvent struct {
-	kind keyKind
-	r    rune
-}
-
-// nextKey blocks until a key is available. Must be called while in raw mode.
-func nextKey() keyEvent {
-	buf := make([]byte, 4)
-	n, err := os.Stdin.Read(buf)
-	if err != nil || n == 0 {
-		return keyEvent{kind: kUnknown}
-	}
-	switch {
-	case n == 1 && (buf[0] == 3 || buf[0] == 4):
-		return keyEvent{kind: kCtrlC}
-	case n == 1 && (buf[0] == 13 || buf[0] == 10):
-		return keyEvent{kind: kEnter}
-	case n == 1 && (buf[0] == 127 || buf[0] == 8):
-		return keyEvent{kind: kBackspace}
-	case n >= 3 && buf[0] == 27 && buf[1] == '[' && buf[2] == 'A':
-		return keyEvent{kind: kUp}
-	case n >= 3 && buf[0] == 27 && buf[1] == '[' && buf[2] == 'B':
-		return keyEvent{kind: kDown}
-	case n == 1 && buf[0] >= 32:
-		return keyEvent{kind: kRune, r: rune(buf[0])}
-	}
-	return keyEvent{kind: kUnknown}
-}
+const goBack = termui.GoBack
 
 // ─── UI components ────────────────────────────────────────────────────────────
 
 func renderHeader() {
-	fmt.Print(clearScreen)
-	fmt.Println()
-	fmt.Printf("%s%s%s\n", fgAccent+ansiBold, hSep, ansiReset)
-	fmt.Printf("  %s%s◆  C V K E H A R N E S S%s\n", ansiBold, fgWhite, ansiReset)
-	fmt.Printf("  %sAI DevOps Agent  ·  Configuration Wizard%s\n", fgMuted, ansiReset)
-	fmt.Printf("%s%s%s\n\n", fgAccent+ansiBold, hSep, ansiReset)
+	termui.RenderWizardHeader("C V K E H A R N E S S", "AI DevOps Agent  ·  Configuration Wizard")
 }
 
 func renderStep(step, total int, title string) {
-	var sb strings.Builder
-	for i := 1; i <= total; i++ {
-		switch {
-		case i == step:
-			sb.WriteString(fgAccent + ansiBold + "●" + ansiReset + " ")
-		case i < step:
-			sb.WriteString(fgGreen + "●" + ansiReset + " ")
-		default:
-			sb.WriteString(fgMuted + "○" + ansiReset + " ")
-		}
-	}
-	fmt.Printf("  %sStep %d of %d%s  %s\n", fgGray, step, total, ansiReset, sb.String())
-	fmt.Printf("  %s%s%s%s\n\n", ansiBold, fgWhite, title, ansiReset)
-}
-
-// numberedFallback is used when the terminal does not support raw mode.
-func numberedFallback(items [][2]string, initial int, canGoBack bool) int {
-	for i, it := range items {
-		mark := "   "
-		if i == initial {
-			mark = fgAccent + ansiBold + " ▶ " + ansiReset
-		}
-		fmt.Printf("  %s%s%s%d%s  %-42s  %s%s%s\n",
-			mark, ansiBold, fgGray, i+1, ansiReset,
-			fgWhite+it[0]+ansiReset,
-			ansiDim+fgMuted, it[1], ansiReset)
-	}
-	hint := fmt.Sprintf("\n  %sEnter number [1–%d] (↵ default %d)", fgGray, len(items), initial+1)
-	if canGoBack {
-		hint += "  ·  0 to go back"
-	}
-	fmt.Printf("%s:%s ", hint, ansiReset)
-	fmt.Print(fgWhite + ansiBold)
-	reader := bufio.NewReader(os.Stdin)
-	line, _ := reader.ReadString('\n')
-	fmt.Print(ansiReset)
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return initial
-	}
-	if line == "0" && canGoBack {
-		return goBack
-	}
-	n, err := strconv.Atoi(line)
-	if err != nil || n < 1 || n > len(items) {
-		return initial
-	}
-	return n - 1
+	termui.RenderWizardStep(step, total, title)
 }
 
 // selectList renders an arrow-key navigable list and returns the chosen index,
 // or goBack (-1) when the user presses Backspace and canGoBack is true.
 func selectList(items [][2]string, initial int, canGoBack bool) int {
-	selected := initial
-	fd := int(os.Stdin.Fd())
-	oldState, err := term.MakeRaw(fd)
+	listItems := make([]termui.ListItem, 0, len(items))
+	for _, item := range items {
+		listItems = append(listItems, termui.ListItem{Label: item[0], Description: item[1]})
+	}
+	idx, err := termui.SelectList(listItems, initial, canGoBack)
+	if err == termui.ErrInterrupted {
+		fmt.Print(clearScreen)
+		fmt.Printf("\n  %s%s  Setup cancelled.%s Goodbye!\n\n", ansiBold, fgYellow, ansiReset)
+		os.Exit(0)
+	}
 	if err != nil {
-		return numberedFallback(items, initial, canGoBack)
+		return initial
 	}
-	defer term.Restore(fd, oldState)
-
-	fmt.Print(hideCursor)
-	defer fmt.Print(showCursor)
-
-	lineCount := len(items) + 2
-
-	buildHint := func() string {
-		parts := []string{"↑↓ navigate", "Return select", "^C quit"}
-		if canGoBack {
-			parts = append([]string{"← Backspace: back"}, parts...)
-		}
-		return strings.Join(parts, "   ")
-	}
-
-	render := func() {
-		for i, item := range items {
-			fmt.Print("\033[2K\r")
-			if i == selected {
-				fmt.Printf("  %s%s ▶  %-42s%s  %s%s%s\n",
-					bgSelected, fgAccent+ansiBold, item[0], ansiReset,
-					bgSelected+fgGray, item[1], ansiReset)
-			} else {
-				fmt.Printf("     %s%-42s%s  %s%s%s\n",
-					fgMuted, item[0], ansiReset,
-					ansiDim+fgMuted, item[1], ansiReset)
-			}
-		}
-		fmt.Print("\033[2K\r\n")
-		fmt.Print("\033[2K\r")
-		fmt.Printf("  %s%s%s\n", fgGray, buildHint(), ansiReset)
-	}
-
-	render()
-
-	for {
-		ev := nextKey()
-		switch ev.kind {
-		case kUp:
-			if selected > 0 {
-				selected--
-			}
-		case kDown:
-			if selected < len(items)-1 {
-				selected++
-			}
-		case kEnter:
-			return selected
-		case kBackspace:
-			if canGoBack {
-				return goBack
-			}
-		case kCtrlC:
-			fmt.Print(showCursor)
-			term.Restore(fd, oldState)
-			fmt.Print(clearScreen)
-			fmt.Printf("\n  %s%s  Setup cancelled.%s Goodbye!\n\n", ansiBold, fgYellow, ansiReset)
-			os.Exit(0)
-		}
-		fmt.Printf("\033[%dA", lineCount)
-		render()
-	}
+	return idx
 }
 
 // promptText renders a styled text-input prompt in cooked mode.
@@ -228,33 +73,11 @@ func selectList(items [][2]string, initial int, canGoBack bool) int {
 //   - Pressing Enter with an empty field and no default goes back.
 //   - Pressing Enter with an empty field that has a default uses the default.
 func promptText(label, defaultVal string, canGoBack bool) (string, bool) {
-	fmt.Printf("  %s%s%s\n", fgGray, label, ansiReset)
-	if defaultVal != "" {
-		fmt.Printf("  %s(default: %s%s%s%s)%s\n",
-			fgMuted, fgAccent+ansiBold, defaultVal, ansiReset, fgMuted, ansiReset)
-		if canGoBack {
-			fmt.Printf("  %stype :back to return to the previous step%s\n", fgMuted+ansiDim, ansiReset)
-		}
-	} else if canGoBack {
-		fmt.Printf("  %sleave blank to go back%s\n", fgMuted+ansiDim, ansiReset)
-	}
-	fmt.Printf("\n  %s%s╰▶%s  ", fgAccent, ansiBold, ansiReset)
-	fmt.Print(fgWhite + ansiBold)
-	reader := bufio.NewReader(os.Stdin)
-	val, _ := reader.ReadString('\n')
-	fmt.Print(ansiReset)
-	val = strings.TrimSpace(val)
-
-	if canGoBack && val == ":back" {
-		return "", true
-	}
-	if canGoBack && val == "" && defaultVal == "" {
-		return "", true
-	}
-	if val == "" {
+	val, back, err := termui.PromptText(label, defaultVal, canGoBack)
+	if err != nil {
 		return defaultVal, false
 	}
-	return val, false
+	return val, back
 }
 
 func optionIndexByValue(items [][2]string, value string) int {

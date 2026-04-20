@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/coolcake/cvkeharness/core"
 )
 
 func TestOpenGracefullyHandlesMissingPath(t *testing.T) {
@@ -66,4 +69,108 @@ func TestSaveAndListCommandApprovals(t *testing.T) {
 	if approvals[0].Command != "echo hello" {
 		t.Fatalf("expected persisted command approval, got %#v", approvals[0])
 	}
+}
+
+func TestChatPersistenceUsesDedicatedTables(t *testing.T) {
+	t.Parallel()
+
+	store := Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+
+	sessionID, err := store.StartChatSession(context.Background(), ChatSession{
+		Provider:       "openrouter",
+		PinnedModel:    "chat-model",
+		RoutingEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("StartChatSession returned error: %v", err)
+	}
+
+	_, err = store.AppendChatTurn(context.Background(), sessionID, ChatTurn{
+		UserInput:      "hello",
+		TaskClass:      core.TaskClassGeneral,
+		RequestedModel: "chat-model",
+		ActualModel:    "chat-model",
+		Success:        true,
+		LatencyMs:      25,
+		PromptTokens:   10,
+		TotalTokens:    20,
+	}, []ChatMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi there"},
+	})
+	if err != nil {
+		t.Fatalf("AppendChatTurn returned error: %v", err)
+	}
+
+	if err := store.FinishChatSession(context.Background(), sessionID, timeNowForTest(), "user_exit"); err != nil {
+		t.Fatalf("FinishChatSession returned error: %v", err)
+	}
+
+	var runs, sessions, turns, messages int
+	if err := store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM runs`).Scan(&runs); err != nil {
+		t.Fatalf("count runs returned error: %v", err)
+	}
+	if err := store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM chat_sessions`).Scan(&sessions); err != nil {
+		t.Fatalf("count chat_sessions returned error: %v", err)
+	}
+	if err := store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM chat_turns`).Scan(&turns); err != nil {
+		t.Fatalf("count chat_turns returned error: %v", err)
+	}
+	if err := store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM chat_messages`).Scan(&messages); err != nil {
+		t.Fatalf("count chat_messages returned error: %v", err)
+	}
+
+	if runs != 0 {
+		t.Fatalf("expected chat persistence to avoid runs table, got %d rows", runs)
+	}
+	if sessions != 1 || turns != 1 || messages != 2 {
+		t.Fatalf("expected dedicated chat tables to be populated, got sessions=%d turns=%d messages=%d", sessions, turns, messages)
+	}
+}
+
+func TestRecordChatPhaseStatsUsesChatPhaseOnly(t *testing.T) {
+	t.Parallel()
+
+	store := Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+
+	err := store.RecordChatPhaseStats(context.Background(), core.TaskClassGeneral, PhaseRecord{
+		Phase:          core.PhaseChat,
+		Provider:       "openrouter",
+		RequestedModel: "chat-model",
+		ActualModel:    "chat-model",
+		Success:        true,
+		LatencyMs:      12,
+	}, []ToolOutcome{
+		{
+			Phase:    core.PhaseChat,
+			ToolName: "shell_execute",
+			Toolset:  core.ToolsetKey([]string{"shell_execute"}),
+			Success:  true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordChatPhaseStats returned error: %v", err)
+	}
+
+	chatStats, err := store.ListModelStats(context.Background(), core.PhaseChat, core.TaskClassGeneral, core.ToolsetKey([]string{"shell_execute"}))
+	if err != nil {
+		t.Fatalf("ListModelStats(chat) returned error: %v", err)
+	}
+	execStats, err := store.ListModelStats(context.Background(), core.PhaseExecution, core.TaskClassGeneral, core.ToolsetKey([]string{"shell_execute"}))
+	if err != nil {
+		t.Fatalf("ListModelStats(execution) returned error: %v", err)
+	}
+
+	if len(chatStats) != 1 {
+		t.Fatalf("expected one chat stat row, got %d", len(chatStats))
+	}
+	if len(execStats) != 0 {
+		t.Fatalf("expected no execution stat rows from chat recording, got %d", len(execStats))
+	}
+}
+
+func timeNowForTest() time.Time {
+	return time.Now().UTC()
 }

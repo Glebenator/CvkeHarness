@@ -130,6 +130,50 @@ type CommandApproval struct {
 	ApprovedAt time.Time
 }
 
+// ChatSession stores one interactive chat lifecycle.
+type ChatSession struct {
+	ID             int64
+	StartedAt      time.Time
+	FinishedAt     time.Time
+	Provider       string
+	PinnedModel    string
+	RoutingEnabled bool
+	ExitReason     string
+}
+
+// ChatTurn stores one user-driven turn inside a chat session.
+type ChatTurn struct {
+	ID               int64
+	SessionID        int64
+	TurnIndex        int
+	UserInput        string
+	TaskClass        core.TaskClass
+	RequestedModel   string
+	ActualModel      string
+	Success          bool
+	ErrorMessage     string
+	LatencyMs        int64
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+	CreatedAt        time.Time
+}
+
+// ChatMessage stores one persisted transcript message in session order.
+type ChatMessage struct {
+	ID            int64
+	SessionID     int64
+	TurnID        int64
+	MessageIndex  int
+	Role          string
+	Content       string
+	ToolCallID    string
+	ToolName      string
+	ToolArguments string
+	ToolCallsJSON string
+	CreatedAt     time.Time
+}
+
 // Snapshot records a pre-write copy of a managed memory file.
 type Snapshot struct {
 	ID         string

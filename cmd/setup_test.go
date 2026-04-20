@@ -67,6 +67,21 @@ func TestRootIncludesSettingsCommand(t *testing.T) {
 	}
 }
 
+func TestRootIncludesChatCommand(t *testing.T) {
+	t.Parallel()
+
+	cmd, _, err := rootCmd.Find([]string{"chat"})
+	if err != nil {
+		t.Fatalf("Find returned error: %v", err)
+	}
+	if cmd == nil {
+		t.Fatal("expected chat command to be registered")
+	}
+	if cmd.Use != "chat" {
+		t.Fatalf("expected chat command, got %q", cmd.Use)
+	}
+}
+
 func TestRootIncludesCommandsCommand(t *testing.T) {
 	t.Parallel()
 
@@ -98,6 +113,7 @@ func TestDefaultHelpListsRegisteredCommands(t *testing.T) {
 	helpText := out.String() + errOut.String()
 	expectedSnippets := []string{
 		"Available Commands:",
+		"chat",
 		"commands",
 		"memory",
 		"models",
@@ -108,6 +124,23 @@ func TestDefaultHelpListsRegisteredCommands(t *testing.T) {
 	for _, snippet := range expectedSnippets {
 		if !strings.Contains(helpText, snippet) {
 			t.Fatalf("expected help output to contain %q, got:\n%s", snippet, helpText)
+		}
+	}
+}
+
+func TestParseChatSlashAction(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]chatSlashAction{
+		"/help":  chatSlashHelp,
+		"/clear": chatSlashClear,
+		"/exit":  chatSlashExit,
+		"hello":  chatSlashNone,
+	}
+
+	for input, want := range cases {
+		if got := parseChatSlashAction(input); got != want {
+			t.Fatalf("parseChatSlashAction(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

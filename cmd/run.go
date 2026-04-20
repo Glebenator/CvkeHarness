@@ -1,9 +1,9 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -12,6 +12,7 @@ import (
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/cli"
 	"github.com/coolcake/cvkeharness/internal/log"
+	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/router"
 	"github.com/coolcake/cvkeharness/state"
@@ -124,19 +125,32 @@ func init() {
 }
 
 func promptModelApproval(ref core.ModelRef, reason string) (bool, error) {
-	fmt.Printf("\nRouting recommendation: use %s\n", ref.String())
-	if strings.TrimSpace(reason) != "" {
-		fmt.Printf("Reason: %s\n", reason)
-	}
-	fmt.Print("Approve for this run? [y/N]: ")
+	return promptModelApprovalWithIO(os.Stdin, os.Stdout, ref, reason)
+}
 
-	reader := bufio.NewReader(os.Stdin)
-	line, err := reader.ReadString('\n')
+func promptModelApprovalWithIO(in io.Reader, out io.Writer, ref core.ModelRef, reason string) (bool, error) {
+	details := []string{
+		fmt.Sprintf("Recommended model: %s", ref.String()),
+	}
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		details = append(details, "Reason: "+trimmed)
+	}
+
+	idx, err := termui.Select(termui.SelectOptions{
+		Title:   "Routing recommendation",
+		Details: details,
+		Choices: []termui.Choice{
+			{Label: "Stay on approved model", Description: "Reject this recommendation for now"},
+			{Label: "Approve model for this run", Description: "Use the recommended model once"},
+		},
+		InitialIndex: 0,
+		In:           in,
+		Out:          out,
+	})
 	if err != nil {
 		return false, err
 	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
+	return idx == 1, nil
 }
 
 func printRoutingExplanation(selections []core.RoutingSelection) {

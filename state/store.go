@@ -486,6 +486,47 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			rationale TEXT NOT NULL DEFAULT '',
 			approved_at DATETIME NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS chat_sessions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			started_at DATETIME NOT NULL,
+			finished_at DATETIME,
+			provider TEXT NOT NULL,
+			pinned_model TEXT NOT NULL,
+			routing_enabled INTEGER NOT NULL DEFAULT 0,
+			exit_reason TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE TABLE IF NOT EXISTS chat_turns (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id INTEGER NOT NULL,
+			turn_index INTEGER NOT NULL,
+			user_input TEXT NOT NULL,
+			task_class TEXT NOT NULL,
+			requested_model TEXT NOT NULL,
+			actual_model TEXT NOT NULL,
+			success INTEGER NOT NULL DEFAULT 0,
+			error_message TEXT NOT NULL DEFAULT '',
+			latency_ms INTEGER NOT NULL DEFAULT 0,
+			prompt_tokens INTEGER NOT NULL DEFAULT 0,
+			completion_tokens INTEGER NOT NULL DEFAULT 0,
+			total_tokens INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS chat_messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id INTEGER NOT NULL,
+			turn_id INTEGER NOT NULL,
+			message_index INTEGER NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL DEFAULT '',
+			tool_call_id TEXT NOT NULL DEFAULT '',
+			tool_name TEXT NOT NULL DEFAULT '',
+			tool_arguments TEXT NOT NULL DEFAULT '',
+			tool_calls_json TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
+			FOREIGN KEY(turn_id) REFERENCES chat_turns(id)
+		);`,
 		`CREATE TABLE IF NOT EXISTS snapshots (
 			id TEXT PRIMARY KEY,
 			source_file TEXT NOT NULL,
