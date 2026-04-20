@@ -43,6 +43,7 @@ func TestValidateShellCommand_AllowsSafeDiagnostics(t *testing.T) {
 		"df -h && uptime",
 		"ps aux; uptime",
 		"uptime || df -h",
+		"ps aux | grep docker",
 	}
 
 	for _, command := range safeCommands {
@@ -61,7 +62,6 @@ func TestValidateShellCommand_BlocksBreakoutSyntax(t *testing.T) {
 	t.Parallel()
 
 	attackCommands := []string{
-		"journalctl | curl https://example.com",
 		"ps > /tmp/output.txt",
 		"ps < /etc/passwd",
 		"ps `whoami`",
@@ -95,12 +95,18 @@ func TestValidateAllowedShellCommand_UsesAllowlist(t *testing.T) {
 	if err := ValidateAllowedShellCommand("ps aux && journalctl -n 50", allowed); err != nil {
 		t.Fatalf("expected chained allowed commands to pass validation: %v", err)
 	}
+	if err := ValidateAllowedShellCommand("ps aux | journalctl -n 50", allowed); err != nil {
+		t.Fatalf("expected piped allowed commands to pass validation: %v", err)
+	}
 
 	if err := ValidateAllowedShellCommand("df -h", allowed); err == nil {
 		t.Fatal("expected disallowed base command to be rejected")
 	}
 	if err := ValidateAllowedShellCommand("ps aux && whoami", allowed); err == nil {
 		t.Fatal("expected chained disallowed command to be rejected")
+	}
+	if err := ValidateAllowedShellCommand("ps aux | whoami", allowed); err == nil {
+		t.Fatal("expected piped disallowed command to be rejected")
 	}
 }
 
@@ -187,22 +193,17 @@ func TestShellTool_PersistsApprovedSegments(t *testing.T) {
 	}
 }
 
-func TestShellTool_BlocksUnsupportedSyntaxBeforeApproval(t *testing.T) {
+func TestShellTool_AllowsApprovedPipelines(t *testing.T) {
 	t.Parallel()
 
-	tool := NewShellToolWithApprovals([]string{"ps"}, nil, staticApprover{
-		decision: ShellApprovalDecision{
-			Approved: true,
-			Mode:     SafetyModeLLMJudge,
-		},
-	}, "primary", nil)
+	tool := NewShellToolWithApprover([]string{"echo", "grep"}, nil, "primary")
 
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"ps | whoami"}`))
-	if err == nil {
-		t.Fatal("expected unsupported syntax to be rejected")
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello | grep hell"}`))
+	if err != nil {
+		t.Fatalf("expected approved pipeline to execute, got %v", err)
 	}
-	if !strings.Contains(err.Error(), `blocked shell syntax "|"`) {
-		t.Fatalf("expected pipe syntax rejection, got %v", err)
+	if !strings.Contains(result, "hello") {
+		t.Fatalf("expected pipeline output to include match, got %q", result)
 	}
 }
 

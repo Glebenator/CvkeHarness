@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/state"
@@ -92,6 +93,7 @@ func scoreEntries(input core.RetrievalContext, entries []state.MemoryEntry) []st
 	actualModel := strings.TrimSpace(input.ActualModel.Model)
 	activeProvider := strings.TrimSpace(input.ActiveModel.Provider)
 	actualProvider := strings.TrimSpace(input.ActualModel.Provider)
+	taskTerms := significantTerms(input.Task)
 
 	for _, entry := range entries {
 		if entry.Status != "" && entry.Status != "active" {
@@ -105,45 +107,61 @@ func scoreEntries(input core.RetrievalContext, entries []state.MemoryEntry) []st
 		}
 
 		score := entry.Confidence
-		if entry.SourceFile == FindingsFile {
-			score += 0.2
-		}
+		relevant := false
 		if entry.Phase == input.Phase {
-			score += 1.2
+			score += 0.4
 		}
 		if entry.TaskClass != "" && entry.TaskClass == input.TaskClass {
-			score += 1.0
+			score += 1.2
+			relevant = true
 		}
 		if entry.Provider != "" && entry.Provider == activeProvider {
-			score += 1.0
+			score += 0.7
+			relevant = true
 		}
 		if entry.Provider != "" && actualProvider != "" && entry.Provider == actualProvider && entry.Provider != activeProvider {
-			score += 1.0
+			score += 0.7
+			relevant = true
 		}
 		if entry.Model != "" && entry.Model == activeModel {
-			score += 1.4
+			score += 1.1
+			relevant = true
 		}
 		if entry.Model != "" && actualModel != "" && entry.Model == actualModel && entry.Model != activeModel {
-			score += 1.6
+			score += 1.2
+			relevant = true
 		}
 		for _, tool := range input.ToolNames {
 			if entry.ToolName != "" && entry.ToolName == tool {
-				score += 0.8
+				score += 1.2
+				relevant = true
 			}
 		}
 		if input.Trouble != nil {
 			if entry.ToolName != "" && entry.ToolName == input.Trouble.Tool {
 				score += 1.0
+				relevant = true
 			}
 			if input.Trouble.DenialClass != "" && strings.Contains(strings.ToLower(entry.Body), strings.ToLower(input.Trouble.DenialClass)) {
 				score += 0.6
+				relevant = true
 			}
 			if input.Trouble.Repeated {
 				score += 0.3
 			}
 		}
+		if overlap := lexicalOverlapScore(taskTerms, entry.Body); overlap > 0 {
+			score += overlap
+			relevant = true
+		}
 		if entry.Scope == "global" {
-			score += 0.3
+			score += 0.1
+		}
+		if entry.SourceFile == MemoryFile {
+			score += 0.2
+		}
+		if !relevant {
+			continue
 		}
 
 		scoredEntries = append(scoredEntries, scored{entry: entry, score: score})
@@ -227,8 +245,8 @@ Every run receives instructions in this order:
 
 - operator.md: Stable harness-specific operating guidance. User-editable.
 - soul.md: Persona, tone, and collaboration style. User-editable and never auto-edited by the harness.
-- memory.md: Durable lessons promoted from repeated findings. Agent-managed.
-- findings.md: Recent short-lived lessons from runs and ad hoc agent notes. Agent-managed.
+- memory.md: Durable lessons promoted from repeated or clearly stable findings. Keep it concise and readable.
+- findings.md: Provisional notes that may help a future run. Most runs should not add anything.
 
 ## Dependency Handling
 
@@ -250,6 +268,7 @@ Write a finding when all of these are true:
 1. The note is verified, not speculative.
 2. The note is likely to help a future run, not just the current turn.
 3. The note can be stated as a short reusable lesson, preference, or environment fact.
+4. You would still want this note a few runs from now.
 
 Good candidates:
 
@@ -268,7 +287,7 @@ Do not write a finding for:
 ## Memory Discipline
 
 Prefer ad hoc notes in ` + "`findings.md`" + ` rather than durable memory.
-Treat ` + "`findings.md`" + ` as a scratchpad for reusable but still-provisional notes.
+Treat ` + "`findings.md`" + ` as a short list of provisional notes, not a log.
 Treat ` + "`memory.md`" + ` as durable memory that should emerge after repetition or later curation.
 When in doubt, write nothing or write a narrow finding instead of a broad permanent rule.
 Edit operator.md or soul.md only when the user explicitly wants to change durable instructions or persona.
@@ -296,4 +315,50 @@ func matchesAny(value string, options ...string) bool {
 		}
 	}
 	return false
+}
+
+func lexicalOverlapScore(taskTerms map[string]bool, body string) float64 {
+	if len(taskTerms) == 0 {
+		return 0
+	}
+
+	matches := 0
+	for term := range significantTerms(body) {
+		if taskTerms[term] {
+			matches++
+		}
+	}
+	if matches == 0 {
+		return 0
+	}
+
+	score := 0.8 + (0.25 * float64(matches-1))
+	if score > 1.3 {
+		return 1.3
+	}
+	return score
+}
+
+func significantTerms(text string) map[string]bool {
+	replacer := strings.NewReplacer("/", " ", "-", " ", "_", " ", ".", " ", ",", " ", ":", " ", ";", " ", "(", " ", ")", " ")
+	text = replacer.Replace(strings.ToLower(text))
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+
+	stopWords := map[string]bool{
+		"the": true, "and": true, "for": true, "with": true, "that": true, "this": true,
+		"from": true, "into": true, "when": true, "then": true, "just": true, "your": true,
+		"have": true, "after": true, "before": true, "need": true, "does": true, "about": true,
+		"agent": true, "memory": true, "findings": true,
+	}
+
+	out := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		if len(field) < 4 || stopWords[field] {
+			continue
+		}
+		out[field] = true
+	}
+	return out
 }

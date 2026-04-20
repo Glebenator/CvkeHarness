@@ -39,7 +39,7 @@ func (t *MemoryRecordFindingTool) Name() string {
 }
 
 func (t *MemoryRecordFindingTool) Description() string {
-	return "Writes a concise verified ad hoc finding into findings.md for future runs. Use for reusable environment facts, preferences, or tool heuristics."
+	return "Writes a concise verified ad hoc finding into findings.md for future runs. Use sparingly for reusable environment facts, preferences, or tool heuristics."
 }
 
 func (t *MemoryRecordFindingTool) Parameters() json.RawMessage {

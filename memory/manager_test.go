@@ -323,3 +323,100 @@ func TestReindexMarksDeletedMemoryInactive(t *testing.T) {
 		t.Fatalf("expected deleted memory to be inactive after reindex, got %q", got.Learned)
 	}
 }
+
+func TestPersistLessonsKeepsReadableFindingsWithoutDuplicates(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := state.Open(filepath.Join(dir, "state.db"))
+	defer store.Close()
+
+	manager := NewManager(dir, store, 3)
+	if err := manager.EnsureFiles(); err != nil {
+		t.Fatalf("EnsureFiles returned error: %v", err)
+	}
+
+	lesson := Lesson{
+		Body:       "Docker is not available in this environment.",
+		Scope:      "global",
+		Phase:      core.PhaseExecution,
+		Confidence: 0.9,
+	}
+	if err := manager.PersistLessons(context.Background(), []Lesson{lesson}); err != nil {
+		t.Fatalf("first PersistLessons returned error: %v", err)
+	}
+	if err := manager.PersistLessons(context.Background(), []Lesson{lesson}); err != nil {
+		t.Fatalf("second PersistLessons returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, FindingsFile))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "<!-- cvkeharness:") {
+		t.Fatalf("expected readable findings format, got %q", content)
+	}
+	if strings.Count(content, "Docker is not available in this environment.") != 1 {
+		t.Fatalf("expected duplicate finding to be collapsed, got %q", content)
+	}
+
+	entries, err := store.ListMemoryEntries(context.Background(), state.MemoryFilter{
+		SourceFiles: []string{FindingsFile},
+		OnlyActive:  true,
+	})
+	if err != nil {
+		t.Fatalf("ListMemoryEntries returned error: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 active finding entry, got %d", len(entries))
+	}
+	if entries[0].SeenCount != 2 {
+		t.Fatalf("expected seen_count=2 after repeat, got %d", entries[0].SeenCount)
+	}
+}
+
+func TestRetrieveOnlyInjectsRelevantGlobalFindings(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := state.Open(filepath.Join(dir, "state.db"))
+	defer store.Close()
+
+	manager := NewManager(dir, store, 3)
+	if err := manager.EnsureFiles(); err != nil {
+		t.Fatalf("EnsureFiles returned error: %v", err)
+	}
+
+	if err := manager.PersistLessons(context.Background(), []Lesson{
+		{Body: "Docker is not available in this environment.", Scope: "global", Phase: core.PhaseExecution, Confidence: 0.9},
+	}); err != nil {
+		t.Fatalf("PersistLessons returned error: %v", err)
+	}
+
+	unrelated, err := manager.Retrieve(context.Background(), core.RetrievalContext{
+		Task:        "explain the Go test failure",
+		TaskClass:   core.TaskClassDebugging,
+		Phase:       core.PhaseExecution,
+		ActiveModel: core.NewModelRef("openrouter", "model-a"),
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if strings.Contains(unrelated.Learned, "Docker is not available") {
+		t.Fatalf("expected unrelated task to skip docker finding, got %q", unrelated.Learned)
+	}
+
+	related, err := manager.Retrieve(context.Background(), core.RetrievalContext{
+		Task:        "debug why docker compose cannot start",
+		TaskClass:   core.TaskClassDebugging,
+		Phase:       core.PhaseExecution,
+		ActiveModel: core.NewModelRef("openrouter", "model-a"),
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if !strings.Contains(related.Learned, "Docker is not available in this environment.") {
+		t.Fatalf("expected related task to inject docker finding, got %q", related.Learned)
+	}
+}

@@ -448,6 +448,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			phase TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'active',
 			confidence REAL NOT NULL DEFAULT 0,
+			seen_count INTEGER NOT NULL DEFAULT 1,
 			body TEXT NOT NULL,
 			normalized TEXT NOT NULL DEFAULT '',
 			snapshot_id TEXT NOT NULL DEFAULT '',
@@ -498,6 +499,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE memory_entries ADD COLUMN seen_count INTEGER NOT NULL DEFAULT 1`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return err
 	}
 	return nil
 }

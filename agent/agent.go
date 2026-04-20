@@ -147,7 +147,7 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 		err = execErr
 	}
 
-	curationLessons := heuristicLessons(prompt, taskClass, output, toolOutcomes, execErr, phaseRecord)
+	var curationLessons []memory.Lesson
 	if a.opts.MemoryCurator != nil {
 		if a.opts.RoutingConfig.Enabled && a.opts.Router != nil {
 			curationSelection, curationRecord, modelLessons, curErr := a.runCurationPhase(ctx, prompt, taskClass, output, toolOutcomes, execErr)
@@ -160,8 +160,10 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 				curationLessons = modelLessons
 			}
 		}
-		if persistErr := a.opts.MemoryCurator.PersistLessons(ctx, curationLessons); persistErr != nil {
-			logger.Warn("failed to persist lessons", "error", persistErr)
+		if len(curationLessons) > 0 {
+			if persistErr := a.opts.MemoryCurator.PersistLessons(ctx, curationLessons); persistErr != nil {
+				logger.Warn("failed to persist lessons", "error", persistErr)
+			}
 		}
 	}
 
@@ -337,7 +339,7 @@ func (a *Agent) runCurationPhase(ctx context.Context, prompt string, taskClass c
 		"tool_events": tools,
 	}
 	payload, _ := json.Marshal(summary)
-	curPrompt := "Produce up to 3 concise lessons as JSON with shape {\"lessons\":[{\"body\":\"...\",\"scope\":\"global|model|tool|model_tool\",\"tool_name\":\"\",\"confidence\":0.0}]}. Focus on provider/model/tool/task heuristics that would improve future runs.\n\nRun summary:\n" + string(payload)
+	curPrompt := "Review the run summary and return only concrete reusable lessons that are clearly worth remembering for future runs. Prefer verified environment facts, stable user preferences explicitly stated by the user, or narrow tool/model heuristics tied to an observed failure. Do not return generic advice, summaries of the task, or lessons that are only useful for this single run. It is valid to return zero lessons.\n\nReturn JSON with shape {\"lessons\":[{\"body\":\"...\",\"scope\":\"global|model|tool|model_tool|task_class\",\"tool_name\":\"\",\"confidence\":0.0}]}\n\nRun summary:\n" + string(payload)
 
 	content, record, actualModel, err := a.singleModelCall(ctx, core.PhaseCuration, selection, taskClass, nil, curPrompt)
 	if err != nil {
@@ -487,66 +489,6 @@ func classifyPolicyDenial(err error) (bool, string) {
 	default:
 		return false, ""
 	}
-}
-
-func heuristicLessons(prompt string, taskClass core.TaskClass, output string, toolsUsed []state.ToolOutcome, execErr error, phase state.PhaseRecord) []memory.Lesson {
-	var lessons []memory.Lesson
-	seen := map[string]bool{}
-
-	add := func(lesson memory.Lesson) {
-		key := strings.TrimSpace(strings.ToLower(lesson.Body))
-		if key == "" || seen[key] {
-			return
-		}
-		seen[key] = true
-		lessons = append(lessons, lesson)
-	}
-
-	for _, outcome := range toolsUsed {
-		if outcome.PolicyDenied {
-			add(memory.Lesson{
-				Body:       fmt.Sprintf("When %s is denied with %s, switch to a narrower diagnostic command instead of retrying the same action.", outcome.ToolName, outcome.DenialClass),
-				Scope:      "model_tool",
-				Provider:   phase.Provider,
-				Model:      phase.ActualModel,
-				ToolName:   outcome.ToolName,
-				TaskClass:  taskClass,
-				Phase:      core.PhaseExecution,
-				Confidence: 0.7,
-			})
-		} else if !outcome.Success {
-			add(memory.Lesson{
-				Body:       fmt.Sprintf("If %s fails repeatedly, refresh context and simplify the next tool request before escalating.", outcome.ToolName),
-				Scope:      "tool",
-				ToolName:   outcome.ToolName,
-				TaskClass:  taskClass,
-				Phase:      core.PhaseExecution,
-				Confidence: 0.55,
-			})
-		}
-	}
-
-	if execErr == nil && strings.TrimSpace(output) != "" && taskClass == core.TaskClassSummarization {
-		add(memory.Lesson{
-			Body:       "For summarization tasks, favor concise final answers once the needed evidence is gathered.",
-			Scope:      "task_class",
-			TaskClass:  taskClass,
-			Phase:      core.PhaseExecution,
-			Confidence: 0.55,
-		})
-	}
-
-	if execErr != nil && strings.Contains(strings.ToLower(prompt), "shell") {
-		add(memory.Lesson{
-			Body:       "Shell-heavy tasks benefit from one command per tool call so failures stay easy to recover from.",
-			Scope:      "task_class",
-			TaskClass:  core.TaskClassShellHeavy,
-			Phase:      core.PhaseExecution,
-			Confidence: 0.6,
-		})
-	}
-
-	return lessons
 }
 
 func errString(err error) string {

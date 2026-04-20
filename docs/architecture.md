@@ -427,7 +427,7 @@ The registry currently exposes:
 `shell_execute` is the most security-sensitive path in the codebase. Its architecture is layered:
 
 1. Parse and segment the shell command.
-2. Reject unsupported syntax such as pipes, redirects, command substitution, and malformed chaining.
+2. Reject unsupported syntax such as redirects, command substitution, backgrounding, and malformed chaining.
 3. Validate each segment against:
    - the static allowlist from config,
    - previously approved normalized segments from SQLite.
