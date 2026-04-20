@@ -428,6 +428,9 @@ func initialSystemMessages(retrieved memory.RetrievalResult, planningNotes strin
 	if strings.TrimSpace(retrieved.BuiltInRules) != "" {
 		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.BuiltInRules)})
 	}
+	if strings.TrimSpace(retrieved.Operator) != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.Operator)})
+	}
 	if strings.TrimSpace(retrieved.Soul) != "" {
 		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.Soul)})
 	}

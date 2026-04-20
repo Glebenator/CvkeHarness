@@ -49,7 +49,6 @@ var runCmd = &cobra.Command{
 			fmt.Printf("Warning: state DB unavailable, continuing with file-only memory fallback (%v)\n", store.Err())
 		}
 		defer store.Close()
-		registry := tools.NewDefaultRegistryWithStore(cfg.AllowedCommands, store, p, cfg.SafetyMode, cfg.SafetyModel, cfg.PrimaryModel())
 
 		mem := memory.NewManager(cfg.MemoryDir, store, cfg.MemoryMaxSnippets)
 		if err := mem.EnsureFiles(); err != nil {
@@ -59,6 +58,7 @@ var runCmd = &cobra.Command{
 		if err := mem.Reindex(ctx); err != nil {
 			logger.Warn("failed to reindex memory metadata", "error", err)
 		}
+		registry := tools.NewDefaultRegistryWithStoreAndMemory(cfg.AllowedCommands, store, mem, p, cfg.SafetyMode, cfg.SafetyModel, cfg.PrimaryModel())
 
 		routingCfg := routingConfigFromConfig(cfg, store)
 		r := router.New(routingCfg, store, func(ctx context.Context, selection core.RoutingSelection) (bool, error) {
