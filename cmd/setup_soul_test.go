@@ -77,7 +77,7 @@ func TestWriteSetupSoulEnsuresOtherMemoryFilesExist(t *testing.T) {
 		t.Fatalf("writeSetupSoul returned error: %v", err)
 	}
 
-	for _, name := range []string{memory.SoulFile, memory.MemoryFile, memory.FindingsFile} {
+	for _, name := range []string{memory.OperatorFile, memory.SoulFile, memory.MemoryFile, memory.FindingsFile} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("expected %s to exist after setup, got %v", name, err)
 		}

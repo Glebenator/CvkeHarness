@@ -60,6 +60,59 @@ func TestRetrieveUsesModelScopedMemory(t *testing.T) {
 	}
 }
 
+func TestEnsureFilesCreatesOperatorGuide(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	manager := NewManager(dir, state.Open(""), 3)
+
+	if err := manager.EnsureFiles(); err != nil {
+		t.Fatalf("EnsureFiles returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, OperatorFile))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, "## Dependency Handling") {
+		t.Fatalf("expected operator guide to include dependency handling instructions, got %q", content)
+	}
+	if !strings.Contains(content, "perform the install yourself") {
+		t.Fatalf("expected operator guide to prefer proactive install help, got %q", content)
+	}
+}
+
+func TestRetrieveIncludesOperatorGuide(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	manager := NewManager(dir, state.Open(""), 3)
+	if err := manager.EnsureFiles(); err != nil {
+		t.Fatalf("EnsureFiles returned error: %v", err)
+	}
+
+	got, err := manager.Retrieve(context.Background(), core.RetrievalContext{
+		Task:        "inspect runtime instructions",
+		TaskClass:   core.TaskClassInspection,
+		Phase:       core.PhaseExecution,
+		ActiveModel: core.NewModelRef("openrouter", "model-a"),
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if !strings.Contains(got.Operator, "## File Roles") {
+		t.Fatalf("expected operator guide to be retrieved, got %q", got.Operator)
+	}
+	if !strings.Contains(got.Operator, filepath.Join(dir, FindingsFile)) {
+		t.Fatalf("expected operator guide to expose the findings path, got %q", got.Operator)
+	}
+	if !strings.Contains(got.Operator, "memory_record_finding") {
+		t.Fatalf("expected operator guide to mention the ad hoc finding tool, got %q", got.Operator)
+	}
+}
+
 func TestRepeatedCrossModelLessonPromotesToGlobalMemory(t *testing.T) {
 	t.Parallel()
 

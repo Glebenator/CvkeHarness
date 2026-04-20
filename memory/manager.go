@@ -18,6 +18,7 @@ import (
 
 const (
 	// File names exposed to the user.
+	OperatorFile = "operator.md"
 	SoulFile     = "soul.md"
 	MemoryFile   = "memory.md"
 	FindingsFile = "findings.md"
@@ -26,6 +27,7 @@ const (
 // RetrievalResult contains the system-facing context injected into a run.
 type RetrievalResult struct {
 	BuiltInRules string
+	Operator     string
 	Soul         string
 	Learned      string
 	Snippets     []state.MemoryEntry
@@ -78,6 +80,7 @@ func (m *Manager) EnsureFiles() error {
 	}
 
 	seed := map[string]string{
+		filepath.Join(m.dir, OperatorFile): defaultOperatorMarkdown(),
 		filepath.Join(m.dir, SoulFile):     "# Soul\n\n",
 		filepath.Join(m.dir, MemoryFile):   "# Memory\n\n",
 		filepath.Join(m.dir, FindingsFile): "# Findings\n\n",
@@ -109,6 +112,11 @@ func (m *Manager) Retrieve(ctx context.Context, input core.RetrievalContext) (Re
 	if err != nil {
 		return RetrievalResult{}, err
 	}
+	operatorPath := filepath.Join(m.dir, OperatorFile)
+	operatorBytes, err := os.ReadFile(operatorPath)
+	if err != nil {
+		return RetrievalResult{}, err
+	}
 
 	entries, err := m.lookupEntries(ctx, input)
 	if err != nil {
@@ -126,6 +134,7 @@ func (m *Manager) Retrieve(ctx context.Context, input core.RetrievalContext) (Re
 	learned := formatLearnedContext(input, entries)
 	return RetrievalResult{
 		BuiltInRules: builtInRules(),
+		Operator:     formatOperatorContext(m.dir, string(operatorBytes)),
 		Soul:         strings.TrimSpace(string(soulBytes)),
 		Learned:      learned,
 		Snippets:     entries,
@@ -413,7 +422,7 @@ func (m *Manager) Show(ctx context.Context) (string, error) {
 	}
 
 	var sections []string
-	for _, name := range []string{SoulFile, MemoryFile, FindingsFile} {
+	for _, name := range []string{OperatorFile, SoulFile, MemoryFile, FindingsFile} {
 		path := filepath.Join(m.dir, name)
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -589,7 +598,106 @@ func (m *Manager) snapshotFile(ctx context.Context, sourceName, path, reason str
 func builtInRules() string {
 	return `You are CvkeHarness.
 Keep the runtime rules compact and invariant.
-Use tools deliberately, read errors carefully, and adapt before repeating a failed action.`
+Use tools deliberately, read errors carefully, and adapt before repeating a failed action.
+If a required dependency is missing, confirm what is missing, ask before installing or otherwise mutating the system, and once approved perform the install instead of only handing the user manual steps.`
+}
+
+func formatOperatorContext(dir, operator string) string {
+	operator = strings.TrimSpace(operator)
+	if operator == "" {
+		return ""
+	}
+
+	var parts []string
+	parts = append(parts, "Runtime file locations:")
+	parts = append(parts, "- Memory directory: "+dir)
+	parts = append(parts, "- operator.md: "+filepath.Join(dir, OperatorFile))
+	parts = append(parts, "- soul.md: "+filepath.Join(dir, SoulFile))
+	parts = append(parts, "- memory.md: "+filepath.Join(dir, MemoryFile))
+	parts = append(parts, "- findings.md: "+filepath.Join(dir, FindingsFile))
+	parts = append(parts, "")
+	parts = append(parts, operator)
+	return strings.Join(parts, "\n")
+}
+
+func defaultOperatorMarkdown() string {
+	return `# Operator Guide
+
+Stable runtime guidance for how CvkeHarness is structured and how it should operate.
+
+## Prompt Stack
+
+Every run receives instructions in this order:
+
+1. Built-in runtime rules
+2. operator.md
+3. soul.md
+4. learned snippets from memory.md and findings.md
+
+## File Roles
+
+- operator.md: Stable harness-specific operating guidance. User-editable.
+- soul.md: Persona, tone, and collaboration style. User-editable and never auto-edited by the harness.
+- memory.md: Durable lessons promoted from repeated findings. Agent-managed.
+- findings.md: Recent short-lived lessons from runs and ad hoc agent notes. Agent-managed.
+
+## Dependency Handling
+
+If a task is blocked because a required tool, package, binary, or service is missing:
+
+1. Confirm what is missing from the actual error or from a lightweight check.
+2. Explain the install or system change you want to make.
+3. Ask the user for permission before installing or otherwise mutating the system.
+4. Once approved, perform the install yourself instead of only telling the user what to type.
+5. Verify the dependency is available and then continue the original task.
+
+## Ad Hoc Findings
+
+You are allowed to write your own ad hoc findings during execution by calling the ` + "`memory_record_finding`" + ` tool.
+That tool writes a concise note into ` + "`findings.md`" + `.
+
+Write a finding when all of these are true:
+
+1. The note is verified, not speculative.
+2. The note is likely to help a future run, not just the current turn.
+3. The note can be stated as a short reusable lesson, preference, or environment fact.
+
+Good candidates:
+
+1. A missing dependency, setup quirk, or local environment requirement you confirmed.
+2. A tool-usage heuristic that clearly improved recovery after failure or denial.
+3. A stable user preference that should affect future behavior.
+4. A non-obvious fix whose key takeaway is likely to matter again.
+
+Do not write a finding for:
+
+1. Raw command output, logs, or transcripts.
+2. Guesses, tentative theories, or unverified suspicions.
+3. One-off status updates that will not matter in a later run.
+4. Verbose summaries that belong in the final answer instead of memory.
+
+## Memory Discipline
+
+Prefer ad hoc notes in ` + "`findings.md`" + ` rather than durable memory.
+Treat ` + "`findings.md`" + ` as a scratchpad for reusable but still-provisional notes.
+Treat ` + "`memory.md`" + ` as durable memory that should emerge after repetition or later curation.
+When in doubt, write nothing or write a narrow finding instead of a broad permanent rule.
+Edit operator.md or soul.md only when the user explicitly wants to change durable instructions or persona.
+
+## Approval Boundary
+
+Shell commands outside the allowlist may trigger a secondary approval gate.
+Treat that as a normal boundary of the harness, not as a reason to stop helping.
+If a safe install or setup step needs approval, ask for it clearly and continue once it is granted.
+
+## Writing Style For Findings
+
+Keep findings short, concrete, and future-facing.
+Prefer one sentence.
+Prefer narrow scope over broad scope.
+Use ` + "`scope=tool`" + ` with a tool name when the lesson is tool-specific.
+Use ` + "`scope=global`" + ` only when the lesson really applies across tasks.
+`
 }
 
 func defaultScope(lesson Lesson) string {

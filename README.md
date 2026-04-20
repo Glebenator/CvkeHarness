@@ -28,6 +28,7 @@ For each run, the harness:
 2. Chooses a model for the active phase from the configured default or the learned approved shortlist
 3. Loads:
    - built-in runtime rules
+   - `operator.md`
    - `soul.md`
    - the top relevant learned snippets from memory/findings
 4. Executes the model/tool loop
@@ -43,6 +44,8 @@ CvkeHarness keeps both readable files and structured machine state.
 
 These live under `~/.cvkeharness/`:
 
+- `operator.md`
+  Stable harness-specific operating guidance such as prompt-stack structure, file ownership, and dependency/install behavior. User-managed.
 - `soul.md`
   The primary persona and long-lived behavioral guidance. User-managed.
 - `memory.md`
@@ -130,7 +133,7 @@ Show why routing chose a model:
 ### Memory commands
 
 - `cvkeharness memory show`
-  Show `soul.md`, `memory.md`, `findings.md`, and snapshot summary
+  Show `operator.md`, `soul.md`, `memory.md`, `findings.md`, and snapshot summary
 - `cvkeharness memory rollback <snapshot>`
   Restore a managed memory file from a snapshot and reindex state
 - `cvkeharness memory reindex`
@@ -208,6 +211,19 @@ Retrieval ranks by:
 
 When repeated tool failure or a policy denial occurs, the runtime is allowed one refresh of learned context during the run.
 
+## Prompt Stack
+
+For execution runs, the system prompt is layered in this order:
+
+1. Built-in runtime rules
+2. `operator.md`
+3. `soul.md`
+4. Retrieved snippets from `memory.md` and `findings.md`
+
+Use `operator.md` for durable harness-operating instructions such as approval expectations, memory ownership boundaries, and how the agent should respond to missing dependencies.
+
+`operator.md` also defines when the agent may write an ad hoc note to `findings.md`: only for concise verified lessons, stable preferences, or confirmed environment facts that are likely to help on a future run.
+
 ## Routing Heuristics
 
 Routing is intentionally deterministic and local-first.
@@ -238,6 +254,15 @@ The shell tool:
 - routes unknown commands through either an LLM judge or direct user confirmation, depending on config
 - persists approved command segments for reuse in future runs
 - records telemetry and tool outcomes
+
+### `memory_record_finding`
+
+The memory note tool:
+
+- writes a concise verified note directly into `findings.md`
+- is meant for reusable environment facts, stable user preferences, and tool heuristics discovered mid-run
+- should not be used for raw logs, speculative thoughts, or verbose summaries
+- keeps ad hoc notes provisional; repeated or curated lessons may later be promoted into `memory.md`
 
 This keeps the runtime provider-agnostic while still allowing policy-sensitive shell access behind a narrow gate.
 
