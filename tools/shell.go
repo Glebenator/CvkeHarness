@@ -524,8 +524,10 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		historyNote = strings.TrimSpace(decision.HistoryNote)
 		approvedByJudge = decision.Mode == SafetyModeLLMJudge
 		approvedByUser = decision.Mode == SafetyModeUserConfirm
-		logger.Info("command approved by secondary gate", "command", cmdStr, "mode", decision.Mode)
-		s.rememberApprovedSegments(ctx, parsedCommand, decision)
+		logger.Info("command approved by secondary gate", "command", cmdStr, "mode", decision.Mode, "remember", decision.Remember)
+		if decision.Remember {
+			s.rememberApprovedSegments(ctx, parsedCommand, decision)
+		}
 	}
 	EmitEvent(ctx, Event{
 		Type:         EventShellApproval,

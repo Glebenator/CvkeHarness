@@ -12,6 +12,7 @@ type Phase string
 const (
 	PhasePlanning  Phase = "planning"
 	PhaseExecution Phase = "execution"
+	PhaseChat      Phase = "chat"
 	PhaseCuration  Phase = "memory_curation"
 )
 

@@ -126,7 +126,7 @@ func TestShellTool_UsesManualApprovalPath(t *testing.T) {
 		decision: ShellApprovalDecision{
 			Approved:    true,
 			Mode:        SafetyModeUserConfirm,
-			HistoryNote: "Command required manual approval and was approved by the user for this run.",
+			HistoryNote: "Command required manual approval and was approved by the user for this run only.",
 		},
 	}, "primary")
 
@@ -170,6 +170,7 @@ func TestShellTool_PersistsApprovedSegments(t *testing.T) {
 			Approved:    true,
 			Mode:        SafetyModeLLMJudge,
 			HistoryNote: "Approved by the safety model.",
+			Remember:    true,
 		},
 	}, "primary", store)
 
@@ -190,6 +191,41 @@ func TestShellTool_PersistsApprovedSegments(t *testing.T) {
 	}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello && echo goodbye"}`)); err != nil {
 		t.Fatalf("expected remembered approval to bypass secondary gate, got %v", err)
+	}
+}
+
+func TestShellTool_ApproveOnceDoesNotPersistSegments(t *testing.T) {
+	t.Parallel()
+
+	store := state.Open(t.TempDir() + "/state.db")
+	defer store.Close()
+
+	tool := NewShellToolWithApprovals([]string{"ps"}, nil, staticApprover{
+		decision: ShellApprovalDecision{
+			Approved:    true,
+			Mode:        SafetyModeUserConfirm,
+			HistoryNote: "Command required manual approval and was approved by the user for this run only.",
+			Remember:    false,
+		},
+	}, "primary", store)
+
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello"}`)); err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+
+	approvals, err := store.ListCommandApprovals(context.Background())
+	if err != nil {
+		t.Fatalf("ListCommandApprovals returned unexpected error: %v", err)
+	}
+	if len(approvals) != 0 {
+		t.Fatalf("expected approve-once path to skip persistence, got %#v", approvals)
+	}
+
+	tool.approver = staticApprover{
+		err: fmt.Errorf("approval path reached again as expected"),
+	}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello"}`)); err == nil {
+		t.Fatal("expected second execution to request approval again")
 	}
 }
 
@@ -258,7 +294,7 @@ func TestShellTool_StreamsEventsWhilePreservingOutput(t *testing.T) {
 func TestUserPromptApproverApprovesYes(t *testing.T) {
 	t.Parallel()
 
-	approver := NewUserPromptApprover(strings.NewReader("yes\n"), &strings.Builder{})
+	approver := NewUserPromptApprover(strings.NewReader("2\n"), &strings.Builder{})
 	decision, err := approver.Approve(context.Background(), ShellApprovalRequest{
 		Command:         "echo hello",
 		ValidationError: `command "echo" is not in the allowlist`,
@@ -271,6 +307,25 @@ func TestUserPromptApproverApprovesYes(t *testing.T) {
 	}
 	if decision.Mode != SafetyModeUserConfirm {
 		t.Fatalf("expected user confirm mode, got %q", decision.Mode)
+	}
+	if decision.Remember {
+		t.Fatal("expected approve once to avoid remembering the command")
+	}
+}
+
+func TestUserPromptApproverCanApproveAndRemember(t *testing.T) {
+	t.Parallel()
+
+	approver := NewUserPromptApprover(strings.NewReader("3\n"), &strings.Builder{})
+	decision, err := approver.Approve(context.Background(), ShellApprovalRequest{
+		Command:         "echo hello",
+		ValidationError: `command "echo" is not in the allowlist`,
+	})
+	if err != nil {
+		t.Fatalf("Approve returned unexpected error: %v", err)
+	}
+	if !decision.Remember {
+		t.Fatal("expected third option to remember the approval")
 	}
 }
 
