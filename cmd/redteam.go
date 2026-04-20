@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/safety"
 	"github.com/spf13/cobra"
 )
@@ -23,7 +22,7 @@ var redteamCmd = &cobra.Command{
 			return err
 		}
 
-		p, err := providerFromConfig(cfg)
+		p, err := resolveProvider(cfg, "")
 		if err != nil {
 			return err
 		}
@@ -67,15 +66,4 @@ func init() {
 	redteamCmd.Flags().StringVar(&redteamOutputDir, "output-dir", "docs", "directory to write generated red-team report files into")
 	redteamCmd.Flags().StringVar(&redteamPrompt, "prompt", "", "override the default live red-team prompt")
 	rootCmd.AddCommand(redteamCmd)
-}
-
-func providerFromConfig(cfg *config.Config) (provider.Provider, error) {
-	switch cfg.Provider {
-	case "openrouter":
-		return provider.NewOpenRouter(cfg.GetAPIKey("openrouter")), nil
-	case "lmstudio":
-		return provider.NewLMStudio(cfg.BaseURL), nil
-	default:
-		return nil, fmt.Errorf("unsupported provider %q", cfg.Provider)
-	}
 }

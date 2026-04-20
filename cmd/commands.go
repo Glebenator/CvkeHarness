@@ -93,7 +93,7 @@ var commandsApproveCmd = &cobra.Command{
 		for _, segment := range parsed.Segments {
 			if err := store.SaveCommandApproval(context.Background(), state.CommandApproval{
 				Command:    segment.Normalized,
-				Status:     "approved",
+				Status:     state.ApprovalStatusApproved,
 				Source:     "cli",
 				Rationale:  "user approved via commands approve",
 				ApprovedAt: now,

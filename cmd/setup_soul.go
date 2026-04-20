@@ -81,6 +81,15 @@ func soulProfileItems() [][2]string {
 	return items
 }
 
+func soulProfileIndexByID(id string) int {
+	for i, profile := range soulProfiles {
+		if profile.ID == id {
+			return i
+		}
+	}
+	return 0
+}
+
 func soulFilePath(memoryDir string) string {
 	return filepath.Join(memoryDir, memory.SoulFile)
 }

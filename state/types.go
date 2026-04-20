@@ -137,3 +137,8 @@ type Snapshot struct {
 	Reason     string
 	CreatedAt  time.Time
 }
+
+const (
+	ApprovalStatusApproved     = "approved"
+	ApprovalStatusApprovedOnce = "approved_once"
+)

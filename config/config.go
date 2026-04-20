@@ -16,7 +16,7 @@ type Config struct {
 	// never has to re-enter a key they already validated.
 	APIKeys              map[string]string `yaml:"api_keys,omitempty"`
 	BaseURL              string            `yaml:"base_url,omitempty"` // Used for local providers (e.g. LM Studio)
-	Model                string            `yaml:"model,omitempty"`    // legacy compatibility
+	Model                string            `yaml:"model,omitempty"`    // legacy read compatibility only
 	DefaultModel         string            `yaml:"default_model,omitempty"`
 	PlanningModel        string            `yaml:"planning_model,omitempty"`
 	ExecutionModel       string            `yaml:"execution_model,omitempty"`
@@ -60,6 +60,42 @@ func (c *Config) PrimaryModel() string {
 	return c.Model
 }
 
+// Normalize applies defaults and backward-compatible migrations in memory.
+func (c *Config) Normalize() {
+	// Preserve support for older configs that only set `model`, but treat
+	// `default_model` as the canonical field going forward.
+	if c.DefaultModel == "" {
+		c.DefaultModel = c.Model
+	}
+
+	// Fallback for safety model if not found
+	if c.SafetyModel == "" {
+		c.SafetyModel = "x-ai/grok-4.1-fast"
+	}
+	if c.SafetyMode == "" {
+		c.SafetyMode = "llm_judge"
+	}
+	if c.RoutingMode == "" {
+		c.RoutingMode = "auto_within_policy"
+	}
+	if c.MemoryMaxSnippets <= 0 {
+		c.MemoryMaxSnippets = 3
+	}
+	if c.RoutingMinConfidence <= 0 {
+		c.RoutingMinConfidence = 0.55
+	}
+	if c.MemoryDir == "" {
+		c.MemoryDir = defaultHarnessPath("memory")
+	}
+	if c.StateDBPath == "" {
+		c.StateDBPath = defaultHarnessPath("state.db")
+	}
+	if len(c.ApprovedModels) == 0 && c.DefaultModel != "" && c.Provider != "" {
+		c.ApprovedModels = []string{c.Provider + "/" + c.DefaultModel}
+	}
+	ensureAllowedCommand(c, "echo")
+}
+
 // ConfigPath returns the path to the config file (~/.cvkeharness/config.yaml).
 func ConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -99,38 +135,7 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Fallback for safety model if not found
-	if cfg.SafetyModel == "" {
-		cfg.SafetyModel = "x-ai/grok-4.1-fast"
-	}
-	if cfg.SafetyMode == "" {
-		cfg.SafetyMode = "llm_judge"
-	}
-	if cfg.DefaultModel == "" {
-		cfg.DefaultModel = cfg.Model
-	}
-	if cfg.Model == "" {
-		cfg.Model = cfg.DefaultModel
-	}
-	if cfg.RoutingMode == "" {
-		cfg.RoutingMode = "auto_within_policy"
-	}
-	if cfg.MemoryMaxSnippets <= 0 {
-		cfg.MemoryMaxSnippets = 3
-	}
-	if cfg.RoutingMinConfidence <= 0 {
-		cfg.RoutingMinConfidence = 0.55
-	}
-	if cfg.MemoryDir == "" {
-		cfg.MemoryDir = defaultHarnessPath("memory")
-	}
-	if cfg.StateDBPath == "" {
-		cfg.StateDBPath = defaultHarnessPath("state.db")
-	}
-	if len(cfg.ApprovedModels) == 0 && cfg.DefaultModel != "" && cfg.Provider != "" {
-		cfg.ApprovedModels = []string{cfg.Provider + "/" + cfg.DefaultModel}
-	}
-	ensureAllowedCommand(&cfg, "echo")
+	cfg.Normalize()
 
 	return &cfg, nil
 }
@@ -146,10 +151,9 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	if c.DefaultModel == "" {
-		c.DefaultModel = c.Model
-	}
-	c.Model = c.DefaultModel
+	c.Normalize()
+	// Keep reading legacy `model`, but stop actively persisting it.
+	c.Model = ""
 
 	data, err := yaml.Marshal(c)
 	if err != nil {
@@ -163,7 +167,6 @@ func (c *Config) Save() error {
 func DefaultConfig() *Config {
 	return &Config{
 		Provider:             "openrouter",
-		Model:                "anthropic/claude-sonnet-4.6",
 		DefaultModel:         "anthropic/claude-sonnet-4.6",
 		SafetyMode:           "llm_judge",
 		SafetyModel:          "x-ai/grok-4.1-fast",

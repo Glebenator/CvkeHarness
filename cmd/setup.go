@@ -257,6 +257,73 @@ func promptText(label, defaultVal string, canGoBack bool) (string, bool) {
 	return val, false
 }
 
+func optionIndexByValue(items [][2]string, value string) int {
+	for i, item := range items {
+		if item[0] == value {
+			return i
+		}
+	}
+	return 0
+}
+
+func promptCustomValue(step int, title, label, defaultValue string, intro ...string) (string, bool) {
+	renderHeader()
+	renderStep(step, totalSteps, title)
+	for _, line := range intro {
+		if strings.TrimSpace(line) == "" {
+			fmt.Println()
+			continue
+		}
+		fmt.Println(line)
+	}
+	if len(intro) > 0 {
+		fmt.Println()
+	}
+	return promptText(label, defaultValue, true)
+}
+
+func chooseNumericOption(step int, title, customTitle, promptLabel string, options [][2]string, current int) (int, bool) {
+	renderHeader()
+	renderStep(step, totalSteps, title)
+
+	idx := selectList(options, optionIndexByValue(options, strconv.Itoa(current)), true)
+	if idx == goBack {
+		return 0, true
+	}
+
+	if options[idx][0] != "[ custom ]" {
+		val, _ := strconv.Atoi(options[idx][0])
+		return val, false
+	}
+
+	raw, back := promptCustomValue(
+		step,
+		customTitle,
+		promptLabel,
+		strconv.Itoa(current),
+		fmt.Sprintf("  %sEnter any positive integer.%s", fgGray, ansiReset),
+	)
+	if back {
+		return 0, true
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return current, false
+	}
+	return n, false
+}
+
+func loadedModelCount(items [][2]string) int {
+	count := 0
+	for _, item := range items {
+		if strings.Contains(item[1], "Loaded model") {
+			count++
+		}
+	}
+	return count
+}
+
 // maskKey returns a partially masked representation of an API key.
 func maskKey(key string) string {
 	if len(key) <= 8 {
@@ -756,41 +823,31 @@ func wizardModel(cfg *config.Config, result modelsResult) bool {
 		res := fetchLMStudioModels(cfg.BaseURL)
 		items = res.items
 		if res.isLive {
-			loadedCount := 0
-			for _, item := range items {
-				if strings.Contains(item[1], "Loaded model") {
-					loadedCount++
-				}
-			}
+			loadedCount := loadedModelCount(items)
 			fmt.Printf("  %s✔  Found %d loaded / %d total models on local server%s\n\n", fgGreen+ansiBold, loadedCount, len(items)-1, ansiReset)
 		} else {
 			fmt.Printf("  %s⊙  Could not verify loaded models on local server%s\n\n", fgYellow+ansiDim, ansiReset)
-			cfg.Model = "local-model"
+			cfg.DefaultModel = "local-model"
 		}
 	} else {
 		items = result.items
 		renderModelStatus(result)
 	}
 
-	initial := 0
-	for i, it := range items {
-		if it[0] == cfg.PrimaryModel() {
-			initial = i
-			break
-		}
-	}
-
-	idx := selectList(items, initial, true)
+	idx := selectList(items, optionIndexByValue(items, cfg.PrimaryModel()), true)
 	if idx == goBack {
 		return false
 	}
 
 	if items[idx][0] == "[ custom model ]" {
-		renderHeader()
-		renderStep(3, totalSteps, "Custom Model Identifier")
-		fmt.Printf("  %sEnter the exact model ID used by your provider.%s\n", fgGray, ansiReset)
-		fmt.Printf("  %sExample: %santhropic/claude-sonnet-4.6%s\n\n", fgGray, fgAccent+ansiBold, ansiReset)
-		val, back := promptText("Model ID:", cfg.PrimaryModel(), true)
+		val, back := promptCustomValue(
+			3,
+			"Custom Model Identifier",
+			"Model ID:",
+			cfg.PrimaryModel(),
+			fmt.Sprintf("  %sEnter the exact model ID used by your provider.%s", fgGray, ansiReset),
+			fmt.Sprintf("  %sExample: %santhropic/claude-sonnet-4.6%s", fgGray, fgAccent+ansiBold, ansiReset),
+		)
 		if back {
 			return false
 		}
@@ -802,37 +859,11 @@ func wizardModel(cfg *config.Config, result modelsResult) bool {
 }
 
 func wizardTokens(cfg *config.Config) bool {
-	renderHeader()
-	renderStep(6, totalSteps, "Max Response Length  (Tokens)")
-
-	initial := 2 // 4096 by default
-	for i, it := range maxTokenOptions {
-		if it[0] == strconv.Itoa(cfg.MaxTokens) {
-			initial = i
-			break
-		}
-	}
-
-	idx := selectList(maxTokenOptions, initial, true)
-	if idx == goBack {
+	value, back := chooseNumericOption(6, "Max Response Length  (Tokens)", "Custom Token Limit", "Max tokens:", maxTokenOptions, cfg.MaxTokens)
+	if back {
 		return false
 	}
-
-	if maxTokenOptions[idx][0] == "[ custom ]" {
-		renderHeader()
-		renderStep(6, totalSteps, "Custom Token Limit")
-		fmt.Printf("  %sEnter any positive integer.%s\n\n", fgGray, ansiReset)
-		raw, back := promptText("Max tokens:", strconv.Itoa(cfg.MaxTokens), true)
-		if back {
-			return false
-		}
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			cfg.MaxTokens = n
-		}
-	} else {
-		val, _ := strconv.Atoi(maxTokenOptions[idx][0])
-		cfg.MaxTokens = val
-	}
+	cfg.MaxTokens = value
 	return true
 }
 
@@ -863,25 +894,20 @@ func wizardSafetyModel(cfg *config.Config) bool {
 		fmt.Printf("  %sThe safety model reviews shell commands before execution.%s\n", fgGray, ansiReset)
 		fmt.Printf("  %sIt should be a capable, instruction-following model from your provider.%s\n\n", fgMuted+ansiDim, ansiReset)
 
-		initial := 0
-		for i, it := range safetyModelOptions {
-			if it[0] == cfg.SafetyModel {
-				initial = i
-				break
-			}
-		}
-
-		idx := selectList(safetyModelOptions, initial, true)
+		idx := selectList(safetyModelOptions, optionIndexByValue(safetyModelOptions, cfg.SafetyModel), true)
 		if idx == goBack {
 			continue
 		}
 
 		if safetyModelOptions[idx][0] == "[ custom model ]" {
-			renderHeader()
-			renderStep(4, totalSteps, "Custom Safety Model Identifier")
-			fmt.Printf("  %sEnter the exact model ID used by your provider.%s\n", fgGray, ansiReset)
-			fmt.Printf("  %sExample: %santhropic/claude-3.5-sonnet%s\n\n", fgGray, fgAccent+ansiBold, ansiReset)
-			val, back := promptText("Safety Model ID:", cfg.SafetyModel, true)
+			val, back := promptCustomValue(
+				4,
+				"Custom Safety Model Identifier",
+				"Safety Model ID:",
+				cfg.SafetyModel,
+				fmt.Sprintf("  %sEnter the exact model ID used by your provider.%s", fgGray, ansiReset),
+				fmt.Sprintf("  %sExample: %santhropic/claude-3.5-sonnet%s", fgGray, fgAccent+ansiBold, ansiReset),
+			)
 			if back {
 				continue
 			}
@@ -900,12 +926,12 @@ func wizardRouting(cfg *config.Config) bool {
 	fmt.Printf("  %sRouting can use different approved models for planning, execution, and memory curation.%s\n", fgGray, ansiReset)
 	fmt.Printf("  %sUnapproved recommendations still require a prompt before use.%s\n\n", fgMuted+ansiDim, ansiReset)
 
-	initial := 0
+	current := "auto_within_policy"
 	if !cfg.RoutingEnabled || cfg.RoutingMode == "disabled" {
-		initial = 1
+		current = "disabled"
 	}
 
-	idx := selectList(routingOptions, initial, true)
+	idx := selectList(routingOptions, optionIndexByValue(routingOptions, current), true)
 	if idx == goBack {
 		return false
 	}
@@ -922,37 +948,11 @@ func wizardRouting(cfg *config.Config) bool {
 }
 
 func wizardIterations(cfg *config.Config) bool {
-	renderHeader()
-	renderStep(7, totalSteps, "Max Iterations")
-
-	initial := 1
-	for i, it := range maxIterationOptions {
-		if it[0] == strconv.Itoa(cfg.MaxIterations) {
-			initial = i
-			break
-		}
-	}
-
-	idx := selectList(maxIterationOptions, initial, true)
-	if idx == goBack {
+	value, back := chooseNumericOption(7, "Max Iterations", "Custom Iteration Limit", "Max iterations:", maxIterationOptions, cfg.MaxIterations)
+	if back {
 		return false
 	}
-
-	if maxIterationOptions[idx][0] == "[ custom ]" {
-		renderHeader()
-		renderStep(7, totalSteps, "Custom Iteration Limit")
-		fmt.Printf("  %sEnter any positive integer.%s\n\n", fgGray, ansiReset)
-		raw, back := promptText("Max iterations:", strconv.Itoa(cfg.MaxIterations), true)
-		if back {
-			return false
-		}
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			cfg.MaxIterations = n
-		}
-	} else {
-		val, _ := strconv.Atoi(maxIterationOptions[idx][0])
-		cfg.MaxIterations = val
-	}
+	cfg.MaxIterations = value
 	return true
 }
 
@@ -960,15 +960,7 @@ func wizardLogLevel(cfg *config.Config) bool {
 	renderHeader()
 	renderStep(8, totalSteps, "Log Verbosity")
 
-	initial := 0
-	for i, it := range logLevelOptions {
-		if it[0] == cfg.LogLevel {
-			initial = i
-			break
-		}
-	}
-
-	idx := selectList(logLevelOptions, initial, true)
+	idx := selectList(logLevelOptions, optionIndexByValue(logLevelOptions, cfg.LogLevel), true)
 	if idx == goBack {
 		return false
 	}
@@ -999,15 +991,7 @@ func wizardSoulProfile(cfg *config.Config, profile *soulProfile) bool {
 	fmt.Printf("  %sChoose the starting voice and working style for the generated %s.%s\n", fgGray, fgAccent+ansiBold+"soul.md"+ansiReset+fgGray, ansiReset)
 	fmt.Printf("  %sThis mainly tunes tone, autonomy, risk posture, and explanation depth.%s\n\n", fgMuted+ansiDim, ansiReset)
 
-	initial := 0
-	for i, option := range soulProfiles {
-		if option.ID == profile.ID {
-			initial = i
-			break
-		}
-	}
-
-	idx := selectList(soulProfileItems(), initial, true)
+	idx := selectList(soulProfileItems(), soulProfileIndexByID(profile.ID), true)
 	if idx == goBack {
 		return false
 	}
@@ -1043,7 +1027,6 @@ func wizardConfirm(cfg *config.Config, profile soulProfile) bool {
 
 func setDefaultModel(cfg *config.Config, model string) {
 	model = strings.TrimSpace(model)
-	cfg.Model = model
 	cfg.DefaultModel = model
 	ensureDefaultApproved(cfg)
 }
@@ -1079,7 +1062,6 @@ func loadWizardConfig() *config.Config {
 		cfg.Provider = existingCfg.Provider
 	}
 	if existingCfg.PrimaryModel() != "" {
-		cfg.Model = existingCfg.PrimaryModel()
 		cfg.DefaultModel = existingCfg.PrimaryModel()
 	}
 	// Carry over the full key map so every provider's credential is
@@ -1186,10 +1168,7 @@ func runSetupWizard(mode string) {
 		// step == 1 and back pressed → stays at 1 (no previous step)
 	}
 
-	if cfg.DefaultModel == "" {
-		cfg.DefaultModel = cfg.Model
-	}
-	cfg.Model = cfg.PrimaryModel()
+	cfg.Normalize()
 	if cfg.RoutingMode == "" {
 		cfg.RoutingMode = "auto_within_policy"
 	}

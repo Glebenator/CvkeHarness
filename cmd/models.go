@@ -95,7 +95,7 @@ var modelsApproveCmd = &cobra.Command{
 			if err := store.SaveModelApproval(context.Background(), state.ModelApproval{
 				Provider:  ref.Provider,
 				Model:     ref.Model,
-				Status:    "approved",
+				Status:    state.ApprovalStatusApproved,
 				Source:    "cli",
 				Rationale: "user approved via models approve",
 			}); err != nil {

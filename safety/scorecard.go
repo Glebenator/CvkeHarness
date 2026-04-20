@@ -1,10 +1,7 @@
 package safety
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -214,27 +211,13 @@ func GenerateScorecard(allowedCommands []string, registry *tools.Registry, commi
 }
 
 func WriteScorecard(outputDir string, scorecard Scorecard) error {
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return err
-	}
-
-	jsonPath := filepath.Join(outputDir, "safety-scorecard.json")
-	markdownPath := filepath.Join(outputDir, "safety-scorecard.md")
-
-	jsonBytes, err := json.MarshalIndent(scorecard, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(jsonPath, jsonBytes, 0644); err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(markdownPath, []byte(RenderMarkdown(scorecard)), 0644); err != nil {
-		return err
-	}
-
-	return nil
+	return writeJSONAndMarkdownReport(
+		outputDir,
+		"safety-scorecard.json",
+		"safety-scorecard.md",
+		scorecard,
+		RenderMarkdown(scorecard),
+	)
 }
 
 func RenderMarkdown(scorecard Scorecard) string {
