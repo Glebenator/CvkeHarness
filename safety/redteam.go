@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -138,25 +136,13 @@ func (h *RedTeamHarness) Evaluate(ctx context.Context, p provider.Provider, mode
 }
 
 func WriteRedTeamReport(outputDir string, report RedTeamReport) error {
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
-		return err
-	}
-
-	jsonPath := filepath.Join(outputDir, "redteam-report.json")
-	markdownPath := filepath.Join(outputDir, "redteam-report.md")
-
-	jsonBytes, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(jsonPath, jsonBytes, 0644); err != nil {
-		return err
-	}
-	if err := os.WriteFile(markdownPath, []byte(RenderRedTeamMarkdown(report)), 0644); err != nil {
-		return err
-	}
-
-	return nil
+	return writeJSONAndMarkdownReport(
+		outputDir,
+		"redteam-report.json",
+		"redteam-report.md",
+		report,
+		RenderRedTeamMarkdown(report),
+	)
 }
 
 func RenderRedTeamMarkdown(report RedTeamReport) string {

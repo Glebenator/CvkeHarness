@@ -8,7 +8,7 @@ import (
 	"github.com/coolcake/cvkeharness/config"
 )
 
-func TestSetDefaultModelUpdatesBothFieldsAndApprovedModels(t *testing.T) {
+func TestSetDefaultModelUpdatesCanonicalFieldAndApprovedModels(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
@@ -22,9 +22,6 @@ func TestSetDefaultModelUpdatesBothFieldsAndApprovedModels(t *testing.T) {
 
 	if cfg.DefaultModel != "openrouter/auto" {
 		t.Fatalf("expected default model to update, got %q", cfg.DefaultModel)
-	}
-	if cfg.Model != "openrouter/auto" {
-		t.Fatalf("expected legacy model field to stay in sync, got %q", cfg.Model)
 	}
 
 	found := false

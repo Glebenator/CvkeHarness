@@ -16,13 +16,24 @@ type providerResolver struct {
 }
 
 func (r providerResolver) Resolve(providerName string) (provider.Provider, error) {
+	return resolveProvider(r.cfg, providerName)
+}
+
+func resolveProvider(cfg *config.Config, providerName string) (provider.Provider, error) {
 	switch strings.TrimSpace(providerName) {
+	case "", cfg.Provider:
+		switch cfg.Provider {
+		case "openrouter":
+			return provider.NewOpenRouter(cfg.GetAPIKey("openrouter")), nil
+		case "lmstudio":
+			return provider.NewLMStudio(cfg.BaseURL), nil
+		default:
+			return nil, fmt.Errorf("unsupported provider %q", cfg.Provider)
+		}
 	case "openrouter":
-		return provider.NewOpenRouter(r.cfg.GetAPIKey("openrouter")), nil
+		return provider.NewOpenRouter(cfg.GetAPIKey("openrouter")), nil
 	case "lmstudio":
-		return provider.NewLMStudio(r.cfg.BaseURL), nil
-	case "":
-		return providerFromConfig(r.cfg)
+		return provider.NewLMStudio(cfg.BaseURL), nil
 	default:
 		return nil, fmt.Errorf("unsupported provider %q", providerName)
 	}
@@ -39,11 +50,8 @@ func routingConfigFromConfig(cfg *config.Config, store *state.Store) core.Routin
 	}
 
 	if store != nil && store.Available() {
-		if approvals, err := store.ListModelApprovals(context.Background()); err == nil {
+		if approvals, err := store.ListApprovedModelApprovals(context.Background()); err == nil {
 			for _, approval := range approvals {
-				if approval.Status != "approved" && approval.Status != "approved_once" {
-					continue
-				}
 				ref := core.NewModelRef(approval.Provider, approval.Model)
 				if ref.IsZero() {
 					continue

@@ -138,7 +138,7 @@ func (r *Router) Select(ctx context.Context, phase core.Phase, task string, task
 					_ = r.store.SaveModelApproval(ctx, state.ModelApproval{
 						Provider:   top.ref.Provider,
 						Model:      top.ref.Model,
-						Status:     "approved_once",
+						Status:     state.ApprovalStatusApprovedOnce,
 						Source:     "prompt",
 						Rationale:  top.reason,
 						ApprovedAt: time.Now().UTC(),

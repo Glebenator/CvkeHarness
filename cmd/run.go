@@ -38,7 +38,7 @@ var runCmd = &cobra.Command{
 		logger := log.FromContext(ctx)
 		logger.Info("CvkeHarness starting up", "default_model", cfg.PrimaryModel())
 
-		p, err := providerFromConfig(cfg)
+		p, err := resolveProvider(cfg, "")
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)

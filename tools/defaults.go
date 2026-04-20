@@ -35,11 +35,8 @@ func NewDefaultRegistryWithStoreAndMemory(allowedCommands []string, store *state
 
 	var approvedCommands []string
 	if store != nil && store.Available() {
-		if approvals, err := store.ListCommandApprovals(context.Background()); err == nil {
+		if approvals, err := store.ListApprovedCommandApprovals(context.Background()); err == nil {
 			for _, approval := range approvals {
-				if approval.Status != "approved" && approval.Status != "approved_once" {
-					continue
-				}
 				approvedCommands = append(approvedCommands, approval.Command)
 			}
 		}

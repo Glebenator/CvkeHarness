@@ -508,7 +508,7 @@ func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedS
 		}
 		if err := s.approvalStore.SaveCommandApproval(ctx, state.CommandApproval{
 			Command:    segment.Normalized,
-			Status:     "approved",
+			Status:     state.ApprovalStatusApproved,
 			Source:     source,
 			Rationale:  rationale,
 			ApprovedAt: time.Now().UTC(),
