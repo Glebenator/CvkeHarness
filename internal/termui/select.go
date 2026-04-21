@@ -75,6 +75,12 @@ func Select(opts SelectOptions) (int, error) {
 		opts.InitialIndex = 0
 	}
 
+	title := strings.TrimSpace(opts.Title)
+	if title == "" {
+		title = "Choose an action"
+	}
+	NotifyInputRequested(opts.Out, title, "Selection is waiting in the terminal.")
+
 	if file, ok := opts.In.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
 		return selectRaw(file, opts.Out, opts)
 	}

@@ -27,6 +27,7 @@ func PromptText(label, defaultVal string, canGoBack bool) (string, bool, error) 
 
 	fmt.Printf("\n  %s%s╰▶%s  ", FGAccent, ANSIBold, ANSIReset)
 	fmt.Print(FGWhite + ANSIBold)
+	NotifyInputRequested(os.Stdout, label, "Response needed in the terminal.")
 
 	reader := bufio.NewReader(os.Stdin)
 	val, err := reader.ReadString('\n')

@@ -68,6 +68,7 @@ func SelectList(items []ListItem, initial int, canGoBack bool) (int, error) {
 	}
 
 	render()
+	NotifyInputRequested(os.Stdout, "Choose an option", "Selection is waiting in the terminal.")
 
 	for {
 		ev := nextListKey()
@@ -114,6 +115,7 @@ func numberedFallback(items []ListItem, initial int, canGoBack bool) (int, error
 	}
 	fmt.Printf("%s:%s ", hint, ANSIReset)
 	fmt.Print(FGWhite + ANSIBold)
+	NotifyInputRequested(os.Stdout, "Choose an option", "Selection is waiting in the terminal.")
 
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
