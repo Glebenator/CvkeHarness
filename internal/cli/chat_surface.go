@@ -25,6 +25,7 @@ type ChatSurface struct {
 	rich  bool
 
 	mu          sync.Mutex
+	shells      map[string]*shellRenderState
 	logPending  string
 	statusRun   bool
 	statusLabel string
@@ -41,8 +42,9 @@ func NewChatSurface(out io.Writer) *ChatSurface {
 	}
 
 	surface := &ChatSurface{
-		out:   out,
-		width: 96,
+		out:    out,
+		width:  96,
+		shells: make(map[string]*shellRenderState),
 	}
 
 	if file, ok := out.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
@@ -80,40 +82,62 @@ func (c *ChatSurface) Observe(event tools.Event) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if !c.statusRun {
-		return
-	}
-
 	switch event.Type {
 	case tools.EventToolCallStarted:
 		if event.ToolName == "shell_execute" {
-			c.statusLabel = "Running shell command"
-			c.statusInfo = ""
+			if c.statusRun {
+				c.statusLabel = "Running shell command"
+				c.statusInfo = ""
+			}
 			return
 		}
-		c.statusLabel = "Using " + humanizeToolName(event.ToolName)
-		c.statusInfo = ""
+		if c.statusRun {
+			c.statusLabel = "Using " + humanizeToolName(event.ToolName)
+			c.statusInfo = ""
+		}
 	case tools.EventToolCallFinished:
-		c.statusLabel = "Thinking through results"
-		c.statusInfo = ""
+		if c.statusRun {
+			c.statusLabel = "Thinking through results"
+			c.statusInfo = ""
+		}
 	case tools.EventShellCommandStarted:
-		c.statusLabel = "Running shell command"
-		c.statusInfo = truncateRunes(strings.TrimSpace(event.Command), c.width-28)
+		if c.statusRun {
+			c.statusLabel = "Running shell command"
+			c.statusInfo = truncateRunes(strings.TrimSpace(event.Command), c.width-28)
+		}
+		c.writeLinesLocked(c.renderShellHeaderLines(event.Command))
 	case tools.EventShellApproval:
-		c.statusLabel = "Waiting for shell approval"
-		c.statusInfo = strings.ReplaceAll(strings.TrimSpace(event.ApprovalMode), "_", " ")
+		if c.statusRun {
+			c.statusLabel = "Waiting for shell approval"
+			c.statusInfo = strings.ReplaceAll(strings.TrimSpace(event.ApprovalMode), "_", " ")
+		}
+		if event.ApprovalMode != "" && event.ApprovalMode != "allowlist" {
+			c.writeLinesLocked([]string{c.renderShellMetaLine("approval", strings.ReplaceAll(strings.TrimSpace(event.ApprovalMode), "_", " "))})
+		}
 	case tools.EventShellOutput:
 		if strings.TrimSpace(event.Output) != "" {
-			c.statusLabel = "Reading command output"
+			if c.statusRun {
+				c.statusLabel = "Reading command output"
+			}
 		}
+		state := c.shellState(event)
+		c.writeShellOutputLocked(state, event.Output)
 	case tools.EventShellCommandFinished:
+		state := c.shellState(event)
+		c.flushShellOutputLocked(state)
 		if event.Success {
-			c.statusLabel = "Integrating tool results"
-			c.statusInfo = fmt.Sprintf("exit %s in %s", formatExitCode(event), formatDuration(event.Duration))
+			if c.statusRun {
+				c.statusLabel = "Integrating tool results"
+				c.statusInfo = fmt.Sprintf("exit %s in %s", formatExitCode(event), formatDuration(event.Duration))
+			}
+			c.writeLinesLocked([]string{c.renderShellStatusLine("done", fmt.Sprintf("exit %s in %s", formatExitCode(event), formatDuration(event.Duration)))})
 			return
 		}
-		c.statusLabel = "Tool reported an error"
-		c.statusInfo = compactError("shell", summarizeShellError(event.ErrorMessage))
+		if c.statusRun {
+			c.statusLabel = "Tool reported an error"
+			c.statusInfo = compactError("shell", summarizeShellError(event.ErrorMessage))
+		}
+		c.writeLinesLocked([]string{c.renderShellStatusLine("fail", compactError(fmt.Sprintf("exit %s in %s", formatExitCode(event), formatDuration(event.Duration)), summarizeShellError(event.ErrorMessage)))})
 	}
 }
 
@@ -335,6 +359,79 @@ func (c *ChatSurface) writeLinesLocked(lines []string) {
 	if c.statusRun {
 		c.renderStatusLocked()
 	}
+}
+
+func (c *ChatSurface) shellState(event tools.Event) *shellRenderState {
+	key := event.ToolCallID
+	if key == "" {
+		key = event.ToolName
+	}
+	state, ok := c.shells[key]
+	if !ok {
+		state = &shellRenderState{}
+		c.shells[key] = state
+	}
+	return state
+}
+
+func (c *ChatSurface) writeShellOutputLocked(state *shellRenderState, chunk string) {
+	if chunk == "" {
+		return
+	}
+
+	text := state.pending + normalizeChunk(chunk)
+	lines := strings.Split(text, "\n")
+	state.pending = lines[len(lines)-1]
+	for _, line := range lines[:len(lines)-1] {
+		c.writeLinesLocked([]string{c.renderShellOutputLine(line)})
+	}
+}
+
+func (c *ChatSurface) flushShellOutputLocked(state *shellRenderState) {
+	if state.pending == "" {
+		return
+	}
+	c.writeLinesLocked([]string{c.renderShellOutputLine(state.pending)})
+	state.pending = ""
+}
+
+func (c *ChatSurface) renderShellHeaderLines(command string) []string {
+	command = strings.TrimSpace(command)
+	if !c.rich {
+		return []string{
+			"Shell:",
+			"  $ " + command,
+		}
+	}
+	return []string{
+		termui.FGAccent + termui.ANSIBold + "• Shell" + termui.ANSIReset,
+		"  " + termui.FGMuted + "│" + termui.ANSIReset + " " + termui.FGWhite + termui.ANSIBold + "$" + termui.ANSIReset + " " + command,
+	}
+}
+
+func (c *ChatSurface) renderShellMetaLine(label, value string) string {
+	if !c.rich {
+		return "  " + label + ": " + value
+	}
+	return "  " + termui.FGMuted + "│" + termui.ANSIReset + " " + termui.FGMuted + label + ":" + termui.ANSIReset + " " + value
+}
+
+func (c *ChatSurface) renderShellOutputLine(line string) string {
+	if !c.rich {
+		return "  | " + line
+	}
+	return "  " + termui.FGMuted + "│" + termui.ANSIReset + " " + line
+}
+
+func (c *ChatSurface) renderShellStatusLine(kind, message string) string {
+	if !c.rich {
+		return "  " + kind + ": " + message
+	}
+	tone := termui.FGGreen
+	if kind == "fail" {
+		tone = termui.FGRed
+	}
+	return "  " + termui.FGMuted + "│" + termui.ANSIReset + " " + tone + kind + ":" + termui.ANSIReset + " " + message
 }
 
 func (c *ChatSurface) renderStatusLocked() {

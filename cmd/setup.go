@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +42,16 @@ const goBack = termui.GoBack
 
 func renderHeader() {
 	termui.RenderWizardHeader("C V K E H A R N E S S", "AI DevOps Agent  ·  Configuration Wizard")
+}
+
+func renderSettingsHeader(dirty bool) {
+	termui.RenderWizardHeader("C V K E H A R N E S S", "AI DevOps Agent  ·  Interactive Settings")
+	fmt.Printf("  %sJump straight to any setting. Each change returns here, so you can update one thing and leave.%s\n", fgGray, ansiReset)
+	if dirty {
+		fmt.Printf("  %s● Unsaved changes%s\n\n", fgYellow+ansiBold, ansiReset)
+		return
+	}
+	fmt.Printf("  %sNo unsaved changes yet.%s\n\n", fgMuted+ansiDim, ansiReset)
 }
 
 func renderStep(step, total int, title string) {
@@ -868,6 +879,321 @@ func ensureDefaultApproved(cfg *config.Config) {
 	cfg.ApprovedModels = append(cfg.ApprovedModels, entry)
 }
 
+func cloneConfig(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return nil
+	}
+
+	clone := *cfg
+	if len(cfg.APIKeys) > 0 {
+		clone.APIKeys = make(map[string]string, len(cfg.APIKeys))
+		for key, value := range cfg.APIKeys {
+			clone.APIKeys[key] = value
+		}
+	}
+	if len(cfg.AllowedCommands) > 0 {
+		clone.AllowedCommands = append([]string(nil), cfg.AllowedCommands...)
+	}
+	if len(cfg.ApprovedModels) > 0 {
+		clone.ApprovedModels = append([]string(nil), cfg.ApprovedModels...)
+	}
+	return &clone
+}
+
+func configChanged(before, after *config.Config) bool {
+	return !reflect.DeepEqual(before, after)
+}
+
+func ensureFetchedModels(modelsCh <-chan modelsResult, fetched *modelsResult) modelsResult {
+	if fetched.items != nil {
+		return *fetched
+	}
+
+	select {
+	case result := <-modelsCh:
+		*fetched = result
+	case <-time.After(100 * time.Millisecond):
+		renderHeader()
+		renderStep(3, totalSteps, "Select a Model")
+		fmt.Printf("  %s%s⟳  Fetching latest models …%s\n", ansiDim, fgGray, ansiReset)
+		*fetched = <-modelsCh
+	}
+
+	return *fetched
+}
+
+type settingsMenuAction int
+
+const (
+	settingsEditProvider settingsMenuAction = iota
+	settingsEditConnection
+	settingsEditModel
+	settingsEditSafety
+	settingsEditRouting
+	settingsEditTokens
+	settingsEditIterations
+	settingsEditLogLevel
+	settingsEditSoul
+	settingsReviewAndSave
+	settingsDiscardAndExit
+)
+
+type settingsMenuEntry struct {
+	Label       string
+	Description string
+	Action      settingsMenuAction
+}
+
+func providerSummary(cfg *config.Config) string {
+	switch cfg.Provider {
+	case "lmstudio":
+		return "LM Studio"
+	default:
+		return "OpenRouter"
+	}
+}
+
+func connectionLabel(cfg *config.Config) string {
+	if cfg.Provider == "lmstudio" {
+		return "Connection"
+	}
+	return "API Key"
+}
+
+func connectionSummary(cfg *config.Config) string {
+	if cfg.Provider == "lmstudio" {
+		if strings.TrimSpace(cfg.BaseURL) == "" {
+			return "Not configured"
+		}
+		return cfg.BaseURL
+	}
+
+	key := cfg.GetAPIKey("openrouter")
+	if strings.TrimSpace(key) == "" {
+		return "Not configured"
+	}
+	return maskKey(key)
+}
+
+func approvalSummary(cfg *config.Config) string {
+	if cfg.SafetyMode == tools.SafetyModeUserConfirm {
+		return "Manual user confirmation"
+	}
+	if strings.TrimSpace(cfg.SafetyModel) == "" {
+		return "LLM judge"
+	}
+	return "LLM judge via " + cfg.SafetyModel
+}
+
+func routingSummary(cfg *config.Config) string {
+	if !cfg.RoutingEnabled || cfg.RoutingMode == "disabled" {
+		return "Default model only"
+	}
+	return "Auto within approved models"
+}
+
+func soulSummary(cfg *config.Config, profile soulProfile) (string, bool) {
+	needsBootstrap, err := soulBootstrapRequired(cfg.MemoryDir)
+	if err != nil {
+		return "Soul file needs review", true
+	}
+	if !needsBootstrap {
+		return "Existing soul.md is preserved", false
+	}
+	return "Bootstrap with " + profile.Label + " profile", true
+}
+
+func settingsMenuEntries(cfg *config.Config, profile soulProfile) []settingsMenuEntry {
+	entries := []settingsMenuEntry{
+		{
+			Label:       "Provider",
+			Description: providerSummary(cfg),
+			Action:      settingsEditProvider,
+		},
+		{
+			Label:       connectionLabel(cfg),
+			Description: connectionSummary(cfg),
+			Action:      settingsEditConnection,
+		},
+		{
+			Label:       "Default Model",
+			Description: cfg.PrimaryModel(),
+			Action:      settingsEditModel,
+		},
+		{
+			Label:       "Command Approval",
+			Description: approvalSummary(cfg),
+			Action:      settingsEditSafety,
+		},
+		{
+			Label:       "Routing",
+			Description: routingSummary(cfg),
+			Action:      settingsEditRouting,
+		},
+		{
+			Label:       "Max Tokens",
+			Description: strconv.Itoa(cfg.MaxTokens),
+			Action:      settingsEditTokens,
+		},
+		{
+			Label:       "Max Iterations",
+			Description: strconv.Itoa(cfg.MaxIterations),
+			Action:      settingsEditIterations,
+		},
+		{
+			Label:       "Log Level",
+			Description: cfg.LogLevel,
+			Action:      settingsEditLogLevel,
+		},
+	}
+
+	if summary, editable := soulSummary(cfg, profile); editable {
+		entries = append(entries, settingsMenuEntry{
+			Label:       "Agent Soul",
+			Description: summary,
+			Action:      settingsEditSoul,
+		})
+	}
+
+	entries = append(entries,
+		settingsMenuEntry{
+			Label:       "Review & Save",
+			Description: "Write changes and exit",
+			Action:      settingsReviewAndSave,
+		},
+		settingsMenuEntry{
+			Label:       "Cancel",
+			Description: "Exit without saving",
+			Action:      settingsDiscardAndExit,
+		},
+	)
+
+	return entries
+}
+
+func selectSettingsAction(cfg *config.Config, profile soulProfile, initial int, dirty bool) (settingsMenuAction, int) {
+	renderSettingsHeader(dirty)
+
+	entries := settingsMenuEntries(cfg, profile)
+	items := make([][2]string, 0, len(entries))
+	for _, entry := range entries {
+		items = append(items, [2]string{entry.Label, entry.Description})
+	}
+
+	idx := selectList(items, initial, false)
+	if idx < 0 || idx >= len(entries) {
+		return settingsDiscardAndExit, len(entries) - 1
+	}
+	return entries[idx].Action, idx
+}
+
+func runProviderEditor(cfg *config.Config, modelsCh <-chan modelsResult, fetched *modelsResult) bool {
+	before := cloneConfig(cfg)
+	previousProvider := cfg.Provider
+
+	if !wizardProvider(cfg) {
+		return false
+	}
+	if cfg.Provider == previousProvider {
+		return configChanged(before, cfg)
+	}
+	if !wizardAPIKey(cfg) {
+		*cfg = *before
+		return false
+	}
+	if !wizardModel(cfg, ensureFetchedModels(modelsCh, fetched)) {
+		*cfg = *before
+		return false
+	}
+	return configChanged(before, cfg)
+}
+
+func runConnectionEditor(cfg *config.Config) bool {
+	before := cloneConfig(cfg)
+	if !wizardAPIKey(cfg) {
+		return false
+	}
+	return configChanged(before, cfg)
+}
+
+func runModelEditor(cfg *config.Config, modelsCh <-chan modelsResult, fetched *modelsResult) bool {
+	before := cloneConfig(cfg)
+	if !wizardModel(cfg, ensureFetchedModels(modelsCh, fetched)) {
+		return false
+	}
+	return configChanged(before, cfg)
+}
+
+func runSafetyEditor(cfg *config.Config) bool {
+	before := cloneConfig(cfg)
+	if !wizardSafetyModel(cfg) {
+		return false
+	}
+	return configChanged(before, cfg)
+}
+
+func runRoutingEditor(cfg *config.Config) bool {
+	before := cloneConfig(cfg)
+	if !wizardRouting(cfg) {
+		return false
+	}
+	return configChanged(before, cfg)
+}
+
+func runTokensEditor(cfg *config.Config) bool {
+	before := cloneConfig(cfg)
+	if !wizardTokens(cfg) {
+		return false
+	}
+	return configChanged(before, cfg)
+}
+
+func runIterationsEditor(cfg *config.Config) bool {
+	before := cloneConfig(cfg)
+	if !wizardIterations(cfg) {
+		return false
+	}
+	return configChanged(before, cfg)
+}
+
+func runLogLevelEditor(cfg *config.Config) bool {
+	before := cloneConfig(cfg)
+	if !wizardLogLevel(cfg) {
+		return false
+	}
+	return configChanged(before, cfg)
+}
+
+func runSoulEditor(cfg *config.Config, profile *soulProfile) bool {
+	beforeProfile := *profile
+	if !wizardSoulProfile(cfg, profile) {
+		return false
+	}
+	return beforeProfile.ID != profile.ID
+}
+
+func reviewSettingsChanges(cfg *config.Config, profile soulProfile, dirty bool) bool {
+	renderHeader()
+	title := "Review Current Settings"
+	if dirty {
+		title = "Review & Save"
+	}
+	renderStep(10, totalSteps, title)
+	renderReview(cfg)
+	fmt.Println()
+
+	if summary, editable := soulSummary(cfg, profile); editable {
+		fmt.Printf("  %sSoul:%s  %s%s%s\n\n", fgMuted, ansiReset, ansiBold, fgWhite, summary+ansiReset)
+	}
+
+	choices := [][2]string{
+		{"Save and exit", "Write configuration to disk"},
+		{"Keep editing", "Return to the settings menu"},
+	}
+	idx := selectList(choices, 0, false)
+	return idx == 0
+}
+
 // ─── Command ──────────────────────────────────────────────────────────────────
 
 func loadWizardConfig() *config.Config {
@@ -955,18 +1281,7 @@ func runSetupWizard(mode string) {
 			// Step 2: API key (OpenRouter) or base URL (LM Studio).
 			advanced = wizardAPIKey(cfg)
 		case 3:
-			// Ensure the model list is ready before rendering.
-			if fetchedModels.items == nil {
-				select {
-				case fetchedModels = <-modelsCh:
-				case <-time.After(100 * time.Millisecond):
-					renderHeader()
-					renderStep(3, totalSteps, "Select a Model")
-					fmt.Printf("  %s%s⟳  Fetching latest models …%s\n", ansiDim, fgGray, ansiReset)
-					fetchedModels = <-modelsCh
-				}
-			}
-			advanced = wizardModel(cfg, fetchedModels)
+			advanced = wizardModel(cfg, ensureFetchedModels(modelsCh, &fetchedModels))
 		case 4:
 			advanced = wizardSafetyModel(cfg)
 		case 5:
@@ -991,6 +1306,10 @@ func runSetupWizard(mode string) {
 		// step == 1 and back pressed → stays at 1 (no previous step)
 	}
 
+	finalizeSetup(mode, cfg, selectedSoulProfile)
+}
+
+func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProfile) {
 	cfg.Normalize()
 	if cfg.RoutingMode == "" {
 		cfg.RoutingMode = "auto_within_policy"
@@ -1017,7 +1336,6 @@ func runSetupWizard(mode string) {
 		actionLabel = "Settings"
 	}
 
-	// ── Success banner ─────────────────────────────────────────────────
 	fmt.Print(clearScreen)
 	fmt.Println()
 	fmt.Printf("%s%s%s\n", fgGreen+ansiBold, hSep, ansiReset)
@@ -1041,6 +1359,54 @@ func runSetupWizard(mode string) {
 		fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
 }
 
+func runSettingsMenu() {
+	cfg := loadWizardConfig()
+
+	modelsCh := make(chan modelsResult, 1)
+	go func() { modelsCh <- fetchOpenRouterModels() }()
+
+	var fetchedModels modelsResult
+	selectedSoulProfile := defaultSoulProfile()
+	dirty := false
+	selectedIndex := 0
+
+	for {
+		action, idx := selectSettingsAction(cfg, selectedSoulProfile, selectedIndex, dirty)
+		selectedIndex = idx
+
+		switch action {
+		case settingsEditProvider:
+			dirty = runProviderEditor(cfg, modelsCh, &fetchedModels) || dirty
+		case settingsEditConnection:
+			dirty = runConnectionEditor(cfg) || dirty
+		case settingsEditModel:
+			dirty = runModelEditor(cfg, modelsCh, &fetchedModels) || dirty
+		case settingsEditSafety:
+			dirty = runSafetyEditor(cfg) || dirty
+		case settingsEditRouting:
+			dirty = runRoutingEditor(cfg) || dirty
+		case settingsEditTokens:
+			dirty = runTokensEditor(cfg) || dirty
+		case settingsEditIterations:
+			dirty = runIterationsEditor(cfg) || dirty
+		case settingsEditLogLevel:
+			dirty = runLogLevelEditor(cfg) || dirty
+		case settingsEditSoul:
+			dirty = runSoulEditor(cfg, &selectedSoulProfile) || dirty
+		case settingsReviewAndSave:
+			if reviewSettingsChanges(cfg, selectedSoulProfile, dirty) {
+				finalizeSetup("settings", cfg, selectedSoulProfile)
+				return
+			}
+		case settingsDiscardAndExit:
+			fmt.Print(clearScreen)
+			fmt.Printf("\n  %s%s  Settings closed.%s No changes were saved.\n\n",
+				ansiBold, fgYellow, ansiReset)
+			return
+		}
+	}
+}
+
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Interactive onboarding wizard to configure the agent",
@@ -1053,7 +1419,7 @@ var settingsCmd = &cobra.Command{
 	Use:   "settings",
 	Short: "Interactive settings editor for the agent",
 	Run: func(cmd *cobra.Command, args []string) {
-		runSetupWizard("settings")
+		runSettingsMenu()
 	},
 }
 

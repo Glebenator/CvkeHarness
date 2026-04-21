@@ -13,6 +13,7 @@ import (
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/cli"
 	"github.com/coolcake/cvkeharness/internal/log"
+	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/router"
 	"github.com/coolcake/cvkeharness/state"
@@ -110,8 +111,13 @@ func runChat() {
 	}()
 
 	ui.RenderBanner(session.Selection())
+	notifyOnPrompt := false
 
 	for {
+		if notifyOnPrompt {
+			termui.NotifyInputRequested(os.Stdout, "CvkeHarness", "Assistant is waiting for your input.")
+			notifyOnPrompt = false
+		}
 		fmt.Print(ui.Prompt())
 		line, readErr := reader.ReadString('\n')
 		if readErr != nil {
@@ -167,6 +173,7 @@ func runChat() {
 		if result.CurationError != nil {
 			logger.Warn("chat curation failed", "error", result.CurationError)
 		}
+		notifyOnPrompt = true
 	}
 }
 
