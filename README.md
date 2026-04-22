@@ -302,7 +302,7 @@ This keeps the runtime provider-agnostic while still allowing policy-sensitive s
 - `safety/`
   Red-team harness and safety scorecard generation
 - `docs/`
-  Generated reports and safety planning docs
+  Generated reports, architecture docs, and the visual project guide
 
 ## Key Code Paths
 
@@ -320,6 +320,11 @@ If you are reading the code for the first time, these are the best entry points:
   The SQLite schema and persistence layer
 - `config/config.go`
   Config shape and defaults
+
+For a visual walkthrough of the current runtime, see:
+
+- `docs/project-visual-guide.md`
+- `docs/architecture.md`
 
 ## Development
 
