@@ -1,6 +1,8 @@
 package memory
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -9,23 +11,51 @@ import (
 )
 
 const (
-	// File names exposed to the user.
-	OperatorFile = "operator.md"
-	SoulFile     = "soul.md"
-	MemoryFile   = "memory.md"
-	FindingsFile = "findings.md"
+	OperatorFile     = "operator.md"
+	SoulFile         = "soul.md"
+	TargetsFile      = "targets.md"
+	HostFile         = "host.md"
+	PlaybooksFile    = "playbooks.md"
+	FindingsFile     = "findings.md"
+	CautionsFile     = "cautions.md"
+	LegacyMemoryFile = "memory.md"
 )
 
-// RetrievalResult contains the system-facing context injected into a run.
+const (
+	TargetKindRuntime        = "runtime"
+	TargetKindSSH            = "ssh"
+	TargetKindLocalContainer = "local_container"
+	TargetKindUnknown        = "unknown"
+)
+
+const (
+	IntentInspectLogs          = "inspect_logs"
+	IntentInspectServiceStatus = "inspect_service_status"
+	IntentRestartService       = "restart_service"
+	IntentInstallDependency    = "install_dependency"
+	IntentDockerRecovery       = "docker_recovery"
+	IntentPortConflict         = "port_conflict"
+	IntentNetworkDebug         = "network_debug"
+	IntentBuildFix             = "build_fix"
+	IntentTestFix              = "test_fix"
+	IntentConfigEdit           = "config_edit"
+	IntentSSHConnectivity      = "ssh_connectivity"
+	IntentGeneral              = "general"
+)
+
+// RetrievalResult contains the compact prompt-ready memory brief.
 type RetrievalResult struct {
-	BuiltInRules string
-	Operator     string
-	Soul         string
-	Learned      string
-	Snippets     []state.MemoryEntry
+	BuiltInRules       string
+	Operator           string
+	Soul               string
+	RuntimeHostSummary string
+	TargetSummary      string
+	PlaybookBrief      string
+	CautionBrief       string
+	FallbackBrief      string
 }
 
-// Lesson is a curated memory candidate.
+// Lesson keeps backward-compatible ad hoc finding writes available to tools.
 type Lesson struct {
 	Body       string
 	Scope      string
@@ -37,12 +67,66 @@ type Lesson struct {
 	Confidence float64
 }
 
-// Manager handles readable memory files plus machine metadata.
+// TargetResolutionInput carries deterministic clues for resolving a target.
+type TargetResolutionInput struct {
+	Task    string
+	Command string
+}
+
+// TargetResolution is the resolved runtime and active target identity.
+type TargetResolution struct {
+	RuntimeHostID string
+	TargetID      string
+	TargetKind    string
+	PrimaryName   string
+}
+
+// ObservedToolCall captures a tool invocation for post-run curation.
+type ObservedToolCall struct {
+	ToolName     string
+	Command      string
+	Result       string
+	Success      bool
+	PolicyDenied bool
+	DenialClass  string
+	DurationMs   int64
+}
+
+// RunOutcome is the structured input to deterministic memory curation.
+type RunOutcome struct {
+	Task           string
+	TaskClass      core.TaskClass
+	Intent         string
+	Target         TargetResolution
+	Output         string
+	ExecutionError string
+	ToolCalls      []ObservedToolCall
+}
+
+type fileState struct {
+	Targets          []targetRecord
+	RuntimeHostID    string
+	RuntimeHostFacts []state.HostFact
+	Playbooks        []state.Playbook
+	Findings         []state.Finding
+	Cautions         []state.Caution
+}
+
+type targetRecord struct {
+	Target    state.Target
+	Aliases   []string
+	Hostnames []string
+	IPs       []string
+	Facts     []state.HostFact
+}
+
+// Manager handles target-aware readable memory files plus structured state.
 type Manager struct {
 	dir         string
 	store       *state.Store
 	maxSnippets int
 	now         func() time.Time
+	hostname    func() string
 }
 
 // NewManager creates a new memory manager.
@@ -57,6 +141,13 @@ func NewManager(dir string, store *state.Store, maxSnippets int) *Manager {
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
+		hostname: func() string {
+			name, err := os.Hostname()
+			if err != nil || name == "" {
+				return "localhost"
+			}
+			return name
+		},
 	}
 }
 
@@ -69,10 +160,20 @@ func (m *Manager) managedPath(name string) string {
 	return filepath.Join(m.dir, name)
 }
 
-func managedSourceFiles() []string {
-	return []string{MemoryFile, FindingsFile}
+func structuredManagedFiles() []string {
+	return []string{TargetsFile, HostFile, PlaybooksFile, FindingsFile, CautionsFile}
 }
 
 func allManagedFiles() []string {
-	return []string{OperatorFile, SoulFile, MemoryFile, FindingsFile}
+	return []string{OperatorFile, SoulFile, TargetsFile, HostFile, PlaybooksFile, FindingsFile, CautionsFile}
+}
+
+func (m *Manager) loadState(ctx context.Context) (fileState, error) {
+	if m.store != nil && m.store.Available() {
+		mem, err := m.store.LoadOperationalMemory(ctx)
+		if err == nil && (len(mem.Targets) > 0 || len(mem.Playbooks) > 0 || len(mem.Findings) > 0 || len(mem.Cautions) > 0 || len(mem.HostFacts) > 0) {
+			return stateFromOperationalMemory(mem), nil
+		}
+	}
+	return m.parseManagedFiles()
 }

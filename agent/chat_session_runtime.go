@@ -31,6 +31,8 @@ type ChatTurnResult struct {
 	TaskClass     core.TaskClass
 	Phase         state.PhaseRecord
 	Tools         []state.ToolOutcome
+	Observed      []memory.ObservedToolCall
+	Target        memory.TargetResolution
 	Transcript    []provider.Message
 	Routing       core.RoutingSelection
 	Curation      []memory.Lesson
@@ -61,12 +63,16 @@ func (a *Agent) StartChat(ctx context.Context) (*ChatConversation, core.RoutingS
 		}
 	}
 
+	targetResolution := a.resolveTarget(ctx, memory.TargetResolutionInput{Task: "interactive chat session"})
 	retrieved, err := a.retrieveMemory(ctx, core.RetrievalContext{
-		Task:        "interactive chat session",
-		TaskClass:   core.TaskClassGeneral,
-		Phase:       core.PhaseChat,
-		ActiveModel: selection.Requested,
-		ToolNames:   toolNames,
+		Task:          "interactive chat session",
+		TaskClass:     core.TaskClassGeneral,
+		Phase:         core.PhaseChat,
+		ActiveModel:   selection.Requested,
+		RuntimeHostID: targetResolution.RuntimeHostID,
+		TargetID:      targetResolution.TargetID,
+		TargetKind:    targetResolution.TargetKind,
+		ToolNames:     toolNames,
 	})
 	if err != nil {
 		return nil, core.RoutingSelection{}, err
@@ -87,24 +93,41 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 	ctx = tools.WithEventObserver(ctx, c.agent.opts.EventObserver)
 
 	taskClass := core.ClassifyTask(prompt)
-	phaseRecord, toolOutcomes, transcript, output, execErr := c.runChatTurn(ctx, prompt, taskClass)
+	phaseRecord, toolOutcomes, observedCalls, targetResolution, transcript, output, execErr := c.runChatTurn(ctx, prompt, taskClass)
 	result := ChatTurnResult{
 		Output:       output,
 		TaskClass:    taskClass,
 		Phase:        phaseRecord,
 		Tools:        toolOutcomes,
+		Observed:     observedCalls,
+		Target:       targetResolution,
 		Transcript:   transcript,
 		Routing:      c.selection,
 		ExecutionErr: execErr,
 	}
 
-	if c.agent.opts.MemoryCurator != nil && c.agent.opts.Router != nil {
-		_, _, lessons, curErr := c.agent.runCurationPhase(ctx, prompt, taskClass, output, toolOutcomes, execErr)
-		result.Curation = lessons
-		result.CurationError = curErr
-		if curErr == nil && len(lessons) > 0 {
-			if persistErr := c.agent.opts.MemoryCurator.PersistLessons(ctx, lessons); persistErr != nil {
-				logger.Warn("failed to persist chat lessons", "error", persistErr)
+	if c.agent.opts.MemoryCurator != nil {
+		if curator, ok := c.agent.opts.MemoryCurator.(structuredMemoryCurator); ok {
+			curErr := curator.CurateRunOutcome(ctx, memory.RunOutcome{
+				Task:           prompt,
+				TaskClass:      taskClass,
+				Target:         targetResolution,
+				Output:         output,
+				ExecutionError: errString(execErr),
+				ToolCalls:      observedCalls,
+			})
+			result.CurationError = curErr
+			if curErr != nil {
+				logger.Warn("failed to curate chat outcome", "error", curErr)
+			}
+		} else if c.agent.opts.Router != nil {
+			_, _, lessons, curErr := c.agent.runCurationPhase(ctx, prompt, taskClass, output, toolOutcomes, execErr)
+			result.Curation = lessons
+			result.CurationError = curErr
+			if curErr == nil && len(lessons) > 0 {
+				if persistErr := c.agent.opts.MemoryCurator.PersistLessons(ctx, lessons); persistErr != nil {
+					logger.Warn("failed to persist chat lessons", "error", persistErr)
+				}
 			}
 		}
 	}
@@ -112,22 +135,26 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 	return result, execErr
 }
 
-func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskClass core.TaskClass) (state.PhaseRecord, []state.ToolOutcome, []provider.Message, string, error) {
+func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskClass core.TaskClass) (state.PhaseRecord, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, []provider.Message, string, error) {
 	logger := log.FromContext(ctx)
+	targetResolution := c.agent.resolveTarget(ctx, memory.TargetResolutionInput{Task: prompt})
 	retrieved, err := c.agent.retrieveMemory(ctx, core.RetrievalContext{
-		Task:        prompt,
-		TaskClass:   taskClass,
-		Phase:       core.PhaseChat,
-		ActiveModel: c.selection.Requested,
-		ToolNames:   c.toolNames,
+		Task:          prompt,
+		TaskClass:     taskClass,
+		Phase:         core.PhaseChat,
+		ActiveModel:   c.selection.Requested,
+		RuntimeHostID: targetResolution.RuntimeHostID,
+		TargetID:      targetResolution.TargetID,
+		TargetKind:    targetResolution.TargetKind,
+		ToolNames:     c.toolNames,
 	})
 	if err != nil {
-		return state.PhaseRecord{}, nil, nil, "", err
+		return state.PhaseRecord{}, nil, nil, targetResolution, nil, "", err
 	}
 
 	execProvider, err := c.agent.resolveProvider(c.selection.Requested.Provider)
 	if err != nil {
-		return state.PhaseRecord{}, nil, nil, "", err
+		return state.PhaseRecord{}, nil, nil, targetResolution, nil, "", err
 	}
 
 	userMessage := provider.Message{Role: "user", Content: prompt}
@@ -135,10 +162,10 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 	transcript := []provider.Message{userMessage}
 
 	systemMessages := append([]provider.Message(nil), c.seed...)
-	if strings.TrimSpace(retrieved.Learned) != "" {
+	if text := retrievedBrief(retrieved); strings.TrimSpace(text) != "" {
 		systemMessages = append(systemMessages, provider.Message{
 			Role:    "system",
-			Content: "Turn context:\n" + strings.TrimSpace(retrieved.Learned),
+			Content: "Turn context:\n" + text,
 		})
 	}
 
@@ -157,6 +184,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 	var refreshed bool
 	failuresByTool := make(map[string]int)
 	var toolOutcomes []state.ToolOutcome
+	var observedCalls []memory.ObservedToolCall
 
 	for iter := 1; iter <= c.agent.opts.MaxIterations; iter++ {
 		iterCtx := log.WithIteration(ctx, iter)
@@ -186,7 +214,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				DurationMs:   duration.Milliseconds(),
 				ErrorMessage: err.Error(),
 			})
-			return phaseRecord, toolOutcomes, transcript, "", fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
+			return phaseRecord, toolOutcomes, observedCalls, targetResolution, transcript, "", fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
 		}
 
 		if resp.Model != "" {
@@ -201,10 +229,17 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		if len(resp.Message.ToolCalls) == 0 {
 			logger.Info("chat turn finished")
 			phaseRecord.Success = true
-			return phaseRecord, toolOutcomes, transcript, resp.Message.Content, nil
+			return phaseRecord, toolOutcomes, observedCalls, targetResolution, transcript, resp.Message.Content, nil
 		}
 
 		for _, call := range resp.Message.ToolCalls {
+			command := commandForToolCall(call)
+			if command != "" {
+				targetResolution = c.agent.resolveTarget(ctx, memory.TargetResolutionInput{
+					Task:    prompt,
+					Command: command,
+				})
+			}
 			toolStart := time.Now()
 			toolCtx := tools.WithToolCallContext(telemetry.WithModel(iterCtx, actualModel), call.ID, call.Function.Name)
 			tools.EmitEvent(toolCtx, tools.Event{
@@ -233,20 +268,25 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				if !refreshed && (outcome.PolicyDenied || failuresByTool[call.Function.Name] >= 2) {
 					refreshed = true
 					refresh, refreshErr := c.agent.retrieveMemory(ctx, core.RetrievalContext{
-						Task:        prompt,
-						TaskClass:   taskClass,
-						Phase:       core.PhaseChat,
-						ActiveModel: c.selection.Requested,
-						ActualModel: core.NewModelRef(c.selection.Requested.Provider, actualModel),
-						ToolNames:   c.toolNames,
+						Task:          prompt,
+						TaskClass:     taskClass,
+						Phase:         core.PhaseChat,
+						ActiveModel:   c.selection.Requested,
+						ActualModel:   core.NewModelRef(c.selection.Requested.Provider, actualModel),
+						RuntimeHostID: targetResolution.RuntimeHostID,
+						TargetID:      targetResolution.TargetID,
+						TargetKind:    targetResolution.TargetKind,
+						ToolNames:     c.toolNames,
 						Trouble: &core.ToolTrouble{
 							Tool:        call.Function.Name,
 							DenialClass: outcome.DenialClass,
 							Repeated:    failuresByTool[call.Function.Name] >= 2,
 						},
 					})
-					if refreshErr == nil && strings.TrimSpace(refresh.Learned) != "" {
-						turnChat.AddSystem("Refreshed learned context after tool trouble:\n" + refresh.Learned)
+					if refreshErr == nil {
+						if refreshedText := retrievedBrief(refresh); strings.TrimSpace(refreshedText) != "" {
+							turnChat.AddSystem("Refreshed learned context after tool trouble:\n" + refreshedText)
+						}
 					}
 				}
 			}
@@ -259,6 +299,15 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 			})
 
 			toolOutcomes = append(toolOutcomes, outcome)
+			observedCalls = append(observedCalls, memory.ObservedToolCall{
+				ToolName:     call.Function.Name,
+				Command:      command,
+				Result:       resultStr,
+				Success:      toolErr == nil,
+				PolicyDenied: outcome.PolicyDenied,
+				DenialClass:  outcome.DenialClass,
+				DurationMs:   durationMs,
+			})
 			toolMessage := provider.Message{
 				Role:       "tool",
 				ToolCallID: call.ID,
@@ -270,7 +319,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		}
 	}
 
-	return phaseRecord, toolOutcomes, transcript, "", fmt.Errorf("agent exceeded max iterations (%d) without completing the task", c.agent.opts.MaxIterations)
+	return phaseRecord, toolOutcomes, observedCalls, targetResolution, transcript, "", fmt.Errorf("agent exceeded max iterations (%d) without completing the task", c.agent.opts.MaxIterations)
 }
 
 // Selection returns the pinned routing decision for the active chat session.

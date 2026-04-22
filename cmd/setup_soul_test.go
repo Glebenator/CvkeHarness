@@ -69,15 +69,23 @@ func TestWriteSetupSoulEnsuresOtherMemoryFilesExist(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	if _, err := os.Stat(filepath.Join(dir, memory.MemoryFile)); !os.IsNotExist(err) {
-		t.Fatalf("expected memory.md to start missing, stat err=%v", err)
+	if _, err := os.Stat(filepath.Join(dir, memory.PlaybooksFile)); !os.IsNotExist(err) {
+		t.Fatalf("expected playbooks.md to start missing, stat err=%v", err)
 	}
 
 	if _, err := writeSetupSoul(dir, 5, defaultSoulProfile()); err != nil {
 		t.Fatalf("writeSetupSoul returned error: %v", err)
 	}
 
-	for _, name := range []string{memory.OperatorFile, memory.SoulFile, memory.MemoryFile, memory.FindingsFile} {
+	for _, name := range []string{
+		memory.OperatorFile,
+		memory.SoulFile,
+		memory.TargetsFile,
+		memory.HostFile,
+		memory.PlaybooksFile,
+		memory.FindingsFile,
+		memory.CautionsFile,
+	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("expected %s to exist after setup, got %v", name, err)
 		}
