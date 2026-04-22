@@ -18,6 +18,22 @@ import (
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// SessionSummary captures the close-out stats for an interactive chat session.
+type SessionSummary struct {
+	Duration          time.Duration
+	TurnCount         int
+	ExitReason        string
+	ModelsUsed        []string
+	PromptTokens      int
+	CompletionTokens  int
+	TotalTokens       int
+	CachedTokens      int
+	CachedTokensKnown bool
+	ToolCalls         int
+	SuccessfulTools   int
+	FailedTools       int
+}
+
 // ChatSurface renders a richer interactive chat experience in the terminal.
 type ChatSurface struct {
 	out   io.Writer
@@ -199,6 +215,16 @@ func (c *ChatSurface) PrintUser(text string) {
 func (c *ChatSurface) PrintAssistant(text string, phase state.PhaseRecord, toolCount int) {
 	meta := assistantMetaLines(phase, toolCount, c.width-6)
 	c.printMessage("Assistant", termui.FGAccent, text, meta)
+}
+
+// PrintSessionSummary renders a compact end-of-session summary.
+func (c *ChatSurface) PrintSessionSummary(summary SessionSummary) {
+	c.printNote("Session Summary", termui.FGAccent, summaryLines(summary))
+}
+
+// PrintRunSummary renders a compact end-of-run summary.
+func (c *ChatSurface) PrintRunSummary(summary SessionSummary) {
+	c.printNote("Run Summary", termui.FGAccent, summaryLines(summary))
 }
 
 // StartThinking starts the live status spinner for an assistant turn.
@@ -559,6 +585,49 @@ func humanizeToolName(name string) string {
 		parts[i] = strings.ToUpper(part[:1]) + part[1:]
 	}
 	return strings.Join(parts, " ")
+}
+
+func summaryLines(summary SessionSummary) []string {
+	lines := []string{
+		fmt.Sprintf("Duration: %s", formatDuration(summary.Duration)),
+		fmt.Sprintf("Turns: %d", summary.TurnCount),
+	}
+
+	if reason := strings.TrimSpace(summary.ExitReason); reason != "" {
+		lines = append(lines, "Exit: "+reason)
+	}
+
+	if len(summary.ModelsUsed) > 0 {
+		lines = append(lines, "Models: "+strings.Join(summary.ModelsUsed, ", "))
+	}
+
+	if summary.TotalTokens > 0 || summary.PromptTokens > 0 || summary.CompletionTokens > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"Tokens: %d prompt, %d completion, %d total",
+			summary.PromptTokens,
+			summary.CompletionTokens,
+			summary.TotalTokens,
+		))
+	}
+
+	if summary.CachedTokensKnown {
+		lines = append(lines, fmt.Sprintf("Cached tokens: %d", summary.CachedTokens))
+	}
+
+	if summary.ToolCalls > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"Tool calls: %d total, %d succeeded, %d failed",
+			summary.ToolCalls,
+			summary.SuccessfulTools,
+			summary.FailedTools,
+		))
+	}
+
+	if summary.TurnCount == 0 {
+		lines = append(lines, "No turns were completed in this session.")
+	}
+
+	return lines
 }
 
 func wrapText(text string, width int) []string {

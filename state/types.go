@@ -23,17 +23,19 @@ type RunRecord struct {
 
 // PhaseRecord captures one routed phase invocation.
 type PhaseRecord struct {
-	Phase            core.Phase
-	Provider         string
-	RequestedModel   string
-	ActualModel      string
-	Success          bool
-	LatencyMs        int64
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-	Confidence       float64
-	Explanation      string
+	Phase             core.Phase
+	Provider          string
+	RequestedModel    string
+	ActualModel       string
+	Success           bool
+	LatencyMs         int64
+	PromptTokens      int
+	CompletionTokens  int
+	TotalTokens       int
+	CachedTokens      int
+	CachedTokensKnown bool
+	Confidence        float64
+	Explanation       string
 }
 
 // ToolOutcome records an individual tool result.

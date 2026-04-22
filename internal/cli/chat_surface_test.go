@@ -95,3 +95,42 @@ func TestChatSurfaceStreamsShellOutputInRichMode(t *testing.T) {
 		t.Fatalf("expected rich chat surface gutter styling, got %q", got)
 	}
 }
+
+func TestChatSurfacePrintsSessionSummaryInPlainMode(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+	surface := NewChatSurface(&out)
+
+	surface.PrintSessionSummary(SessionSummary{
+		Duration:          1500 * time.Millisecond,
+		TurnCount:         3,
+		ExitReason:        "Exited by user",
+		ModelsUsed:        []string{"openrouter/model-a x2", "openrouter/model-b"},
+		PromptTokens:      120,
+		CompletionTokens:  45,
+		TotalTokens:       165,
+		CachedTokens:      32,
+		CachedTokensKnown: true,
+		ToolCalls:         4,
+		SuccessfulTools:   3,
+		FailedTools:       1,
+	})
+
+	got := out.String()
+	if !strings.Contains(got, "Session Summary:") {
+		t.Fatalf("expected session summary title, got %q", got)
+	}
+	if !strings.Contains(got, "Duration: 1.5s") {
+		t.Fatalf("expected duration line, got %q", got)
+	}
+	if !strings.Contains(got, "Models: openrouter/model-a x2, openrouter/model-b") {
+		t.Fatalf("expected models line, got %q", got)
+	}
+	if !strings.Contains(got, "Cached tokens: 32") {
+		t.Fatalf("expected cached tokens line, got %q", got)
+	}
+	if !strings.Contains(got, "Tool calls: 4 total, 3 succeeded, 1 failed") {
+		t.Fatalf("expected tool counts line, got %q", got)
+	}
+}

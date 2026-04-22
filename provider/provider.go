@@ -64,7 +64,22 @@ type ChatResponse struct {
 
 // Usage tracking for tokens.
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens       int                 `json:"prompt_tokens"`
+	CompletionTokens   int                 `json:"completion_tokens"`
+	TotalTokens        int                 `json:"total_tokens"`
+	PromptTokenDetails *PromptTokenDetails `json:"prompt_tokens_details,omitempty"`
+}
+
+// PromptTokenDetails captures optional provider-specific prompt token details.
+type PromptTokenDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
+}
+
+// CachedTokens returns the number of cached prompt tokens when the provider
+// reports them.
+func (u Usage) CachedTokens() (int, bool) {
+	if u.PromptTokenDetails == nil {
+		return 0, false
+	}
+	return u.PromptTokenDetails.CachedTokens, true
 }

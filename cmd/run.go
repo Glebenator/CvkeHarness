@@ -2,10 +2,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/coolcake/cvkeharness/agent"
 	"github.com/coolcake/cvkeharness/config"
@@ -24,6 +27,11 @@ import (
 var explainRouting bool
 var streamShell bool
 var streamMode string
+
+type runOutcome struct {
+	result agent.RunResult
+	err    error
+}
 
 var runCmd = &cobra.Command{
 	Use:   "run [task]",
@@ -94,15 +102,59 @@ var runCmd = &cobra.Command{
 			RunRecorder:      store,
 		})
 
+		ui := cli.NewChatSurface(os.Stdout)
+		signals := make(chan os.Signal, 2)
+		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(signals)
+
 		fmt.Printf("\nExecuting task: %s\n", task)
 		fmt.Println("----------------------------------------")
 
-		result, err := a.Run(ctx, task)
+		runCtx, cancelRun := context.WithCancel(ctx)
+		defer cancelRun()
+
+		outcomeCh := make(chan runOutcome, 1)
+		go func() {
+			result, runErr := a.Run(runCtx, task)
+			outcomeCh <- runOutcome{result: result, err: runErr}
+		}()
+
+		var result agent.RunResult
+		interrupted := false
+		exitReason := ""
+		select {
+		case sig := <-signals:
+			interrupted = true
+			exitReason = signalExitReason(sig)
+			cancelRun()
+			fmt.Println()
+			ui.PrintInfo("Interrupt", []string{"Stopping the current run and waiting for cleanup..."})
+			select {
+			case outcome := <-outcomeCh:
+				result = outcome.result
+				err = outcome.err
+			case sig := <-signals:
+				exitReason = signalExitReason(sig)
+				err = context.Canceled
+			}
+		case outcome := <-outcomeCh:
+			result = outcome.result
+			err = outcome.err
+		}
+		if interrupted && exitReason == "" {
+			exitReason = "interrupt"
+		}
+
 		if explainRouting {
 			printRoutingExplanation(result.Routing)
 		}
+		printRunSummary(ui, summarizeRunResult(result, exitReason))
 		if err != nil {
-			fmt.Printf("\nAgent Failure\n-------------\n%v\n", err)
+			if interrupted || errors.Is(err, context.Canceled) {
+				fmt.Printf("\nRun Interrupted\n---------------\n%s\n", humanizeChatExitReason(exitReason))
+			} else {
+				fmt.Printf("\nAgent Failure\n-------------\n%v\n", err)
+			}
 			if result.Output != "" {
 				fmt.Println("\nPartial Agent Output")
 				fmt.Println("--------------------")
@@ -176,6 +228,54 @@ func printRoutingExplanation(selections []core.RoutingSelection) {
 			fmt.Printf("  Recommendation: %s\n", selection.RecommendationReason)
 		}
 	}
+}
+
+func summarizeRunResult(result agent.RunResult, exitReason string) cli.SessionSummary {
+	run := result.Run
+	modelCounts := make(map[string]int)
+	summary := cli.SessionSummary{
+		ExitReason: humanizeChatExitReason(exitReason),
+	}
+
+	if summary.ExitReason == humanizeChatExitReason("interrupt") && strings.TrimSpace(exitReason) == "" {
+		summary.ExitReason = "Completed"
+	}
+
+	if !run.StartedAt.IsZero() && !run.FinishedAt.IsZero() && !run.FinishedAt.Before(run.StartedAt) {
+		summary.Duration = run.FinishedAt.Sub(run.StartedAt)
+	}
+
+	for _, phase := range run.Phases {
+		summary.PromptTokens += phase.PromptTokens
+		summary.CompletionTokens += phase.CompletionTokens
+		summary.TotalTokens += phase.TotalTokens
+		if phase.CachedTokensKnown {
+			summary.CachedTokensKnown = true
+			summary.CachedTokens += phase.CachedTokens
+		}
+		if label := chatModelLabel(phase); label != "" {
+			modelCounts[label]++
+		}
+	}
+
+	summary.ModelsUsed = summarizeModelCounts(modelCounts)
+	summary.ToolCalls = len(run.Tools)
+	for _, tool := range run.Tools {
+		if tool.Success {
+			summary.SuccessfulTools++
+			continue
+		}
+		summary.FailedTools++
+	}
+
+	return summary
+}
+
+func printRunSummary(ui *cli.ChatSurface, summary cli.SessionSummary) {
+	if ui == nil {
+		return
+	}
+	ui.PrintRunSummary(summary)
 }
 
 func streamConsole() *cli.TranscriptRenderer {

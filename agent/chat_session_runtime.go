@@ -204,6 +204,10 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 			phaseRecord.PromptTokens += resp.Usage.PromptTokens
 			phaseRecord.CompletionTokens += resp.Usage.CompletionTokens
 			phaseRecord.TotalTokens += resp.Usage.TotalTokens
+			if cachedTokens, ok := resp.Usage.CachedTokens(); ok {
+				phaseRecord.CachedTokens += cachedTokens
+				phaseRecord.CachedTokensKnown = true
+			}
 		}
 
 		if err != nil {
