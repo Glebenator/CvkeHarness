@@ -265,6 +265,10 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 			phaseRecord.PromptTokens += resp.Usage.PromptTokens
 			phaseRecord.CompletionTokens += resp.Usage.CompletionTokens
 			phaseRecord.TotalTokens += resp.Usage.TotalTokens
+			if cachedTokens, ok := resp.Usage.CachedTokens(); ok {
+				phaseRecord.CachedTokens += cachedTokens
+				phaseRecord.CachedTokensKnown = true
+			}
 		}
 
 		if err != nil {
@@ -474,6 +478,10 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 	record.PromptTokens = resp.Usage.PromptTokens
 	record.CompletionTokens = resp.Usage.CompletionTokens
 	record.TotalTokens = resp.Usage.TotalTokens
+	if cachedTokens, ok := resp.Usage.CachedTokens(); ok {
+		record.CachedTokens = cachedTokens
+		record.CachedTokensKnown = true
+	}
 	return resp.Message.Content, record, resp.Model, nil
 }
 
