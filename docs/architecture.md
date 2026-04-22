@@ -1,27 +1,28 @@
 # CvkeHarness Architecture
 
-This document maps the current architecture of CvkeHarness as implemented in the repository on 2026-04-20.
+This document maps the current architecture of CvkeHarness as implemented in the repository on 2026-04-22.
 
 It focuses on:
 
-1. The command surface and package boundaries.
-2. The end-to-end `run` lifecycle.
-3. The persistence model across config, memory files, SQLite, and telemetry.
-4. The separate safety evaluation flows.
+1. the command surface and package boundaries
+2. the end-to-end `run` lifecycle
+3. the target-aware memory subsystem
+4. the persistence model across config, markdown, SQLite, and telemetry
+5. the separate safety evaluation flows
 
 ## Repository Shape
 
 | Package / Area | Responsibility |
 | --- | --- |
 | `main.go` | Thin executable entrypoint that delegates to Cobra. |
-| `cmd/` | CLI surface: setup/settings wizard, runtime execution, memory/model/command admin, safety commands. |
-| `agent/` | Main orchestration loop for routed planning, execution, and memory curation. |
-| `core/` | Shared domain types for phases, routing, task classes, and retrieval context. |
+| `cmd/` | CLI surface: setup/settings wizard, runtime execution, chat, memory/model/command admin, safety commands. |
+| `agent/` | Main orchestration loop for routed planning, execution, chat, and deterministic memory curation. |
+| `core/` | Shared domain types for phases, routing, task classes, model refs, and retrieval context. |
 | `provider/` | Provider abstraction plus concrete OpenRouter and LM Studio adapters. |
 | `router/` | Historical model routing based on SQLite-backed model statistics and approval state. |
 | `tools/` | Tool registry, shell execution guardrails, and ad hoc memory recording tool. |
-| `memory/` | Readable markdown memory files, retrieval ranking, lesson persistence, promotion, snapshots, rollback. |
-| `state/` | SQLite persistence for runs, phases, tool outcomes, routing candidates, approvals, memory metadata, snapshots. |
+| `memory/` | Target-aware readable memory files, target resolution, retrieval brief rendering, deterministic curation, reindex, rollback. |
+| `state/` | SQLite persistence for runs, phases, tool outcomes, routing candidates, approvals, operational memory tables, snapshots, and chat history. |
 | `safety/` | Deterministic scorecard generation and live red-team harness. |
 | `internal/httputil` | Shared HTTP client with timeout and retry/backoff. |
 | `internal/log` | Structured logging wrapper around `slog`. |
@@ -38,6 +39,7 @@ flowchart TB
     subgraph CLI["CLI Command Surface (`cmd/`)"]
         setup["setup / settings\nInteractive wizard"]
         run["run [task]\nPrimary agent runtime"]
+        chat["chat\nInteractive session"]
         memoryCmd["memory show|rollback|reindex"]
         modelsCmd["models shortlist|approve|stats"]
         commandsCmd["commands list|approve"]
@@ -46,18 +48,19 @@ flowchart TB
     end
 
     subgraph ConfigLayer["Configuration and Bootstrap"]
-        configPkg["config.Config\nLoadConfig / Save / DefaultConfig"]
+        configPkg["config.Config\nLoadConfig / Save / Normalize"]
         configFile["~/.cvkeharness/config.yaml"]
         providerResolver["providerFromConfig + providerResolver"]
         routingCfg["routingConfigFromConfig\nApproved models + phase defaults + thresholds"]
     end
 
-    subgraph Runtime["Primary Runtime (`cvkeharness run`)"]
+    subgraph Runtime["Primary Runtime"]
         agent["agent.Agent"]
         classify["core.ClassifyTask\nTask class inference"]
-        phases["Phases\nplanning -> execution -> memory_curation"]
+        resolve["memory.Manager.ResolveTarget\nruntime host vs active target"]
+        retrieve["memory.Manager.RetrievePlan\ncompact retrieval brief"]
+        curate["memory.Manager.CurateRunOutcome\ndeterministic persistence"]
         chatState["agent.ChatState\nMutable message history"]
-        systemStack["System prompt stack\nBuilt-in rules\noperator.md\nsoul.md\nlearned context\nplanning notes"]
     end
 
     subgraph Routing["Routing (`router/`)"]
@@ -72,12 +75,11 @@ flowchart TB
         openrouter["provider.OpenRouter"]
         lmstudio["provider.LMStudio"]
         httpClient["internal/httputil.Client\nTimeout + retry/backoff"]
-        remoteLLM["Remote / local LLM endpoint"]
+        remoteLLM["Remote or local LLM endpoint"]
     end
 
     subgraph Tooling["Tooling (`tools/`)"]
         registry["tools.Registry"]
-        toolDefs["Provider tool schemas"]
         shellTool["ShellTool\nshell_execute"]
         memoryTool["MemoryRecordFindingTool\nmemory_record_finding"]
         parser["ParseShellCommand\nsyntax segmentation"]
@@ -87,30 +89,35 @@ flowchart TB
         hostShell["Host shell\nsh -c"]
     end
 
-    subgraph Memory["Readable Memory (`memory/`)"]
+    subgraph Memory["Readable Operational Memory (`memory/`)"]
         manager["memory.Manager"]
-        ensureFiles["EnsureFiles\nseed files + snapshots dir"]
-        retrieve["Retrieve / lookupEntries / scoreEntries"]
-        persist["PersistLessons / promoteRepeatedLessons"]
-        reindex["Reindex / parseManagedFiles"]
+        ensureFiles["EnsureFiles\nbootstrap files + snapshots dir + legacy import"]
+        resolveTarget["ResolveTarget\nregistry + alias merge"]
+        retrievePlan["RetrievePlan\nruntime summary + target summary + playbook + caution + finding"]
+        curateOutcome["CurateRunOutcome\nfacts + playbooks + cautions + findings"]
+        reindex["Reindex / parse managed markdown files"]
         operatorFile["operator.md"]
         soulFile["soul.md"]
-        memoryFile["memory.md"]
+        targetsFile["targets.md"]
+        hostFile["host.md"]
+        playbooksFile["playbooks.md"]
         findingsFile["findings.md"]
+        cautionsFile["cautions.md"]
         snapshotsDir["snapshots/"]
     end
 
     subgraph State["Structured State (`state/`)"]
         store["state.Store\nSQLite wrapper with graceful degradation"]
-        runsTable["runs"]
-        phasesTable["phase_records"]
-        toolsTable["tool_outcomes"]
-        statsTable["model_stats"]
-        routingTable["routing_candidates"]
-        modelApprovalTable["model_approvals"]
-        commandApprovalTable["command_approvals"]
-        memoryTable["memory_entries"]
+        runsTable["runs / phase_records / tool_outcomes"]
+        statsTable["model_stats / routing_candidates"]
+        approvalsTable["model_approvals / command_approvals"]
+        targetsTable["targets / target_aliases"]
+        factsTable["host_facts"]
+        playbooksTable["playbooks"]
+        findingsTable["findings"]
+        cautionsTable["cautions"]
         snapshotsTable["snapshots"]
+        chatsTable["chat_sessions / chat_turns / chat_messages"]
         sqlite["~/.cvkeharness/state.db"]
     end
 
@@ -128,6 +135,7 @@ flowchart TB
     user --> main --> root
     root --> setup
     root --> run
+    root --> chat
     root --> memoryCmd
     root --> modelsCmd
     root --> commandsCmd
@@ -149,6 +157,15 @@ flowchart TB
     run --> agent
     run --> slog
 
+    chat --> configPkg
+    chat --> providerResolver
+    chat --> routingCfg
+    chat --> store
+    chat --> manager
+    chat --> registry
+    chat --> router
+    chat --> agent
+
     routingCfg --> configPkg
     routingCfg --> store
     providerResolver --> openrouter
@@ -159,9 +176,10 @@ flowchart TB
     providerIface --> httpClient --> remoteLLM
 
     agent --> classify
-    agent --> phases
+    agent --> resolve
+    agent --> retrieve
+    agent --> curate
     agent --> chatState
-    agent --> systemStack
     agent --> router
     agent --> registry
     agent --> manager
@@ -174,7 +192,6 @@ flowchart TB
     shortlist --> store
     approvalPrompt --> user
 
-    registry --> toolDefs
     registry --> shellTool
     registry --> memoryTool
     shellTool --> parser
@@ -188,40 +205,52 @@ flowchart TB
     shellTool --> telemetry
 
     manager --> ensureFiles
-    manager --> retrieve
-    manager --> persist
+    manager --> resolveTarget
+    manager --> retrievePlan
+    manager --> curateOutcome
     manager --> reindex
-    retrieve --> operatorFile
-    retrieve --> soulFile
-    retrieve --> memoryFile
-    retrieve --> findingsFile
-    retrieve --> store
-    persist --> findingsFile
-    persist --> memoryFile
-    persist --> snapshotsDir
-    persist --> store
-    reindex --> memoryFile
+    retrievePlan --> operatorFile
+    retrievePlan --> soulFile
+    retrievePlan --> targetsFile
+    retrievePlan --> hostFile
+    retrievePlan --> playbooksFile
+    retrievePlan --> findingsFile
+    retrievePlan --> cautionsFile
+    retrievePlan --> store
+    curateOutcome --> targetsFile
+    curateOutcome --> hostFile
+    curateOutcome --> playbooksFile
+    curateOutcome --> findingsFile
+    curateOutcome --> cautionsFile
+    curateOutcome --> snapshotsDir
+    curateOutcome --> store
+    reindex --> targetsFile
+    reindex --> hostFile
+    reindex --> playbooksFile
     reindex --> findingsFile
+    reindex --> cautionsFile
     reindex --> store
 
     store --> runsTable
-    store --> phasesTable
-    store --> toolsTable
     store --> statsTable
-    store --> routingTable
-    store --> modelApprovalTable
-    store --> commandApprovalTable
-    store --> memoryTable
+    store --> approvalsTable
+    store --> targetsTable
+    store --> factsTable
+    store --> playbooksTable
+    store --> findingsTable
+    store --> cautionsTable
     store --> snapshotsTable
+    store --> chatsTable
     runsTable --> sqlite
-    phasesTable --> sqlite
-    toolsTable --> sqlite
     statsTable --> sqlite
-    routingTable --> sqlite
-    modelApprovalTable --> sqlite
-    commandApprovalTable --> sqlite
-    memoryTable --> sqlite
+    approvalsTable --> sqlite
+    targetsTable --> sqlite
+    factsTable --> sqlite
+    playbooksTable --> sqlite
+    findingsTable --> sqlite
+    cautionsTable --> sqlite
     snapshotsTable --> sqlite
+    chatsTable --> sqlite
 
     scorecardCmd --> scorecard --> reports
     scorecard --> registry
@@ -248,7 +277,7 @@ sequenceDiagram
     participant P as provider.Provider
     participant SH as ShellTool
     participant DB as state.db
-    participant MEM as *.md memory files
+    participant MEM as managed markdown files
     participant TEL as telemetry.jsonl
 
     U->>C: cvkeharness run "task"
@@ -257,8 +286,8 @@ sequenceDiagram
     C->>M: NewManager(memoryDir, store)
     C->>M: EnsureFiles()
     C->>M: Reindex()
-    M->>MEM: Parse memory.md + findings.md
-    M->>DB: SyncMemoryEntries(...)
+    M->>MEM: Parse targets.md, host.md, playbooks.md, findings.md, cautions.md
+    M->>DB: ReplaceOperationalMemory(...)
     C->>T: NewDefaultRegistryWithStoreAndMemory(...)
     T->>DB: ListCommandApprovals()
     C->>R: New(routingConfigFromConfig(cfg, store))
@@ -266,6 +295,7 @@ sequenceDiagram
     C->>A: Run(task)
 
     A->>A: ClassifyTask(task)
+    A->>M: ResolveTarget(task hint)
 
     alt Routing enabled
         A->>R: Select(planning, taskClass)
@@ -275,19 +305,20 @@ sequenceDiagram
             U-->>R: yes / no
             R->>DB: SaveModelApproval(approved_once)
         end
-        A->>M: Retrieve(planning context)
+        A->>M: RetrievePlan(planning context)
         M->>MEM: Read operator.md + soul.md
-        M->>DB: ListMemoryEntries(...)
+        M->>DB: LoadOperationalMemory() or parse fallback files
         A->>P: ChatCompletion(plan prompt)
-        P-->>A: 3-step planning notes
+        P-->>A: concise planning notes
     end
 
     A->>R: Select(execution, taskClass, toolset)
     R->>DB: ListModelStats(execution, taskClass, toolset)
-    A->>M: Retrieve(execution context)
+    A->>M: RetrievePlan(execution context)
     M->>MEM: Read operator.md + soul.md
-    M->>DB: ListMemoryEntries(...) or parse fallback files
+    M->>DB: LoadOperationalMemory() or parse fallback files
     A->>A: Build system prompt stack
+
     loop Up to MaxIterations
         A->>P: ChatCompletion(messages + tool defs)
         P-->>A: assistant message and optional tool calls
@@ -307,35 +338,26 @@ sequenceDiagram
                     end
                     SH->>TEL: RecordEvent(...)
                     SH-->>T: stdout/stderr or error
+                    A->>M: ResolveTarget(observed shell command)
                 else memory_record_finding
                     T->>M: PersistLessons(single finding)
                     M->>MEM: Update findings.md
-                    M->>DB: SaveMemoryEntries(...)
-                    M->>MEM: Promote repeats into memory.md
+                    M->>DB: ReplaceOperationalMemory(...)
                 end
                 T-->>A: Tool result
                 A->>A: Append tool result to ChatState
             end
             opt Policy denial or repeated tool failure, once per run
-                A->>M: Retrieve(refreshed context with Trouble metadata)
-                M-->>A: Refreshed learned snippets
+                A->>M: RetrievePlan(refreshed context with Trouble metadata)
+                M-->>A: Refreshed compact brief
                 A->>A: Inject extra system note
             end
         end
     end
 
-    A->>A: Build heuristic lessons from tool outcomes / errors
-    alt Routing enabled and curator available
-        A->>R: Select(memory_curation, taskClass)
-        R->>DB: ListModelStats(memory_curation, taskClass, "")
-        A->>M: Retrieve(curation context)
-        A->>P: ChatCompletion(JSON lesson prompt)
-        P-->>A: JSON lessons
-    end
-
-    A->>M: PersistLessons(curated or heuristic lessons)
-    M->>MEM: Snapshot + rewrite findings.md / memory.md
-    M->>DB: SaveMemoryEntries(...)
+    A->>M: CurateRunOutcome(observed tool calls + target resolution + output)
+    M->>MEM: Snapshot and rewrite managed files
+    M->>DB: ReplaceOperationalMemory(...)
     A->>S: RecordRun(run record + phases + tools)
     S->>DB: Insert runs / phase_records / tool_outcomes
     S->>DB: Upsert model_stats
@@ -349,47 +371,44 @@ sequenceDiagram
 - `main.go` is intentionally thin and hands control to Cobra.
 - `cmd/root.go` initializes default logging in `PersistentPreRun`.
 - `cmd/run.go` is the composition root for the main runtime.
-- `cmd/runtime_support.go` converts persisted config into provider and routing objects.
+- `cmd/chat.go` assembles the same runtime components for interactive work.
 - `cmd/setup.go` and `cmd/setup_soul.go` form a full-screen setup wizard that:
-  - selects the provider,
-  - validates OpenRouter keys or captures LM Studio base URLs,
-  - fetches model lists from provider APIs,
-  - configures safety mode, routing, token/iteration limits, and logging,
-  - writes `config.yaml`,
-  - bootstraps `soul.md` plus other memory files.
+  - selects the provider
+  - validates OpenRouter keys or captures LM Studio base URLs
+  - configures safety mode, routing, token/iteration limits, and logging
+  - writes `config.yaml`
+  - bootstraps `soul.md` plus the structured memory files
 
 ### 2. Agent orchestration
 
-The `agent.Agent` is the core coordinator. It is intentionally dependency-inverted:
+The `agent.Agent` is the core coordinator and is intentionally dependency-inverted:
 
-- providers are passed in through the `provider.Provider` interface,
-- routing is passed in through the `Router` interface,
-- memory access is split into `MemoryRetriever` and `MemoryCurator`,
-- run persistence is abstracted behind `RunRecorder`,
-- tools are centralized through `tools.Registry`.
+- providers come in through `provider.Provider`
+- routing comes in through `Router`
+- memory access is split into retrieval and curation interfaces
+- run persistence is abstracted behind `RunRecorder`
+- tools are centralized through `tools.Registry`
 
 This keeps the agent package focused on control flow rather than storage or network specifics.
 
-The agent has three conceptual phases:
-
-1. `planning`
-2. `execution`
-3. `memory_curation`
-
-Only the execution phase is iterative and tool-using. Planning and curation are single model calls.
-
 ### 3. Prompt assembly and context shaping
 
-Prompt construction is layered rather than monolithic. `memory.Manager.Retrieve()` returns:
+Prompt construction is layered rather than monolithic.
 
-- built-in invariant rules,
-- `operator.md`,
-- `soul.md`,
-- ranked learned snippets from `memory.md` / `findings.md`.
+`memory.Manager.RetrievePlan()` returns:
+
+- built-in invariant rules
+- `operator.md`
+- `soul.md`
+- runtime-host summary
+- optional target summary
+- optional primary playbook
+- optional caution
+- optional fallback finding
 
 `agent.initialSystemMessages()` then stacks those pieces into ordered `system` messages and optionally appends planning notes during execution.
 
-This is an important architecture choice: the runtime treats human-managed instructions and machine-curated lessons as separate inputs instead of flattening everything into one mutable file.
+This is a deliberate architecture choice: the runtime treats human-managed instructions and machine-curated operational knowledge as separate layers instead of flattening everything into one mutable memory file.
 
 ### 4. Routing model selection
 
@@ -397,25 +416,23 @@ This is an important architecture choice: the runtime treats human-managed instr
 
 Inputs:
 
-- current phase,
-- task class,
-- toolset key,
-- approved model set,
-- minimum confidence threshold,
-- optional per-phase defaults.
+- current phase
+- task class
+- toolset key
+- approved model set
+- minimum confidence threshold
+- optional per-phase defaults
 
 Source of evidence:
 
-- `state.model_stats` aggregates created from prior runs.
+- `state.model_stats` aggregates created from prior runs
 
 Behavior:
 
-- if routing is disabled, use defaults;
-- if routing history is absent or low confidence, use defaults;
-- if the best candidate is approved and confident, select it automatically;
-- if the best candidate is strong but unapproved, ask for one-off approval and persist that decision.
-
-This gives the runtime a constrained learning loop: it can adapt, but only within explicit approval boundaries.
+- if routing is disabled, use defaults
+- if routing history is absent or low confidence, use defaults
+- if the best candidate is approved and confident, select it automatically
+- if the best candidate is strong but unapproved, ask for one-off approval and persist that decision
 
 ### 5. Tool execution model
 
@@ -426,21 +443,21 @@ The registry currently exposes:
 
 `shell_execute` is the most security-sensitive path in the codebase. Its architecture is layered:
 
-1. Parse and segment the shell command.
-2. Reject unsupported syntax such as redirects, command substitution, backgrounding, and malformed chaining.
-3. Validate each segment against:
-   - the static allowlist from config,
-   - previously approved normalized segments from SQLite.
-4. If validation fails, defer to a secondary approval gate:
+1. parse and segment the shell command
+2. reject unsupported syntax such as redirects, command substitution, backgrounding, and malformed chaining
+3. validate each segment against:
+   - the static allowlist from config
+   - previously approved normalized segments from SQLite
+4. if validation fails, defer to a secondary approval gate:
    - LLM-as-a-judge, or
-   - direct user confirmation.
-5. Persist newly approved segments for reuse.
-6. Execute through `sh -c` with timeout.
-7. Record telemetry with approval mode and outcome.
+   - direct user confirmation
+5. persist newly approved segments for reuse
+6. execute through `sh -c` with timeout
+7. record telemetry with approval mode and outcome
 
-The memory tool is much narrower: it writes reusable findings into `findings.md` through the same lesson pipeline used by agent curation.
+The memory note tool is intentionally narrower: it writes reusable ad hoc findings into `findings.md` through the same structured memory manager, but it does not create playbooks or cautions directly.
 
-### 6. Readable memory plus structured memory metadata
+### 6. Target-aware operational memory
 
 The memory subsystem has a dual representation by design.
 
@@ -448,39 +465,41 @@ Readable files in `~/.cvkeharness/`:
 
 - `operator.md`
 - `soul.md`
-- `memory.md`
+- `targets.md`
+- `host.md`
+  Runtime-host profile plus durable operator notes about local-machine quirks.
+- `playbooks.md`
 - `findings.md`
+- `cautions.md`
 
 Structured SQLite metadata:
 
-- indexed memory entries,
-- status flags,
-- scope metadata,
-- timestamps,
-- snapshot references.
+- target registry
+- alias mapping
+- verified host facts
+- durable playbooks
+- provisional findings
+- cautions
+- snapshots
 
 This split allows:
 
-- user-editable, readable prompts,
-- fast scoped retrieval and ranking,
-- durable promotion logic,
-- rollback through snapshots.
-
-The promotion rule is simple and pragmatic:
-
-- new lessons land in `findings.md`,
-- repeated normalized lessons are promoted to `memory.md`,
-- if the same lesson appears across multiple models, it can be promoted as `global`.
+- user-editable readable files
+- fast scoped retrieval and ranking
+- deterministic target resolution
+- strict prompt budget enforcement
+- rollback through snapshots
 
 ### 7. State database
 
 `state.Store` is more than a run log. It is the shared machine memory for several subsystems:
 
-- runtime observability through `runs`, `phase_records`, and `tool_outcomes`,
-- adaptive routing through `model_stats` and `routing_candidates`,
-- approval memory through `model_approvals` and `command_approvals`,
-- memory indexing through `memory_entries`,
-- rollback support through `snapshots`.
+- runtime observability through `runs`, `phase_records`, and `tool_outcomes`
+- adaptive routing through `model_stats` and `routing_candidates`
+- approval memory through `model_approvals` and `command_approvals`
+- operational memory indexing through `targets`, `target_aliases`, `host_facts`, `playbooks`, `findings`, and `cautions`
+- rollback support through `snapshots`
+- chat history through `chat_sessions`, `chat_turns`, and `chat_messages`
 
 An important resilience detail: the store degrades to an unavailable/no-op style if SQLite cannot be opened. The CLI warns and continues with file-backed memory fallback where possible.
 
@@ -494,61 +513,59 @@ Both OpenRouter and LM Studio implement this same contract using OpenAI-style ch
 
 Shared HTTP behavior comes from `internal/httputil.Client`:
 
-- request timeout,
-- limited retry count,
-- exponential backoff,
-- retry on 429 and 5xx.
-
-This keeps network semantics consistent across providers.
+- request timeout
+- limited retry count
+- exponential backoff
+- retry on `429` and `5xx`
 
 ### 9. Safety evaluation architecture
 
-There are two distinct safety paths:
+There are two distinct safety paths.
 
 #### `scorecard`
 
-- deterministic,
-- no live model needed,
-- evaluates a fixed shell corpus against `tools.ValidateAllowedShellCommand`,
-- measures breakout blocking, diagnostic allowance, and tool inventory risk posture,
-- writes JSON and Markdown reports.
+- deterministic
+- no live model needed
+- evaluates a fixed shell corpus against `tools.ValidateAllowedShellCommand`
+- measures breakout blocking, diagnostic allowance, and tool inventory risk posture
+- writes JSON and Markdown reports
 
 #### `redteam`
 
-- live model-driven evaluation,
-- uses a shadow registry with a simulated shell tool,
-- records what the model attempts,
-- classifies attempts by severity and disposition,
-- writes JSON and Markdown reports.
+- live model-driven evaluation
+- uses a shadow registry with a simulated shell tool
+- records what the model attempts
+- classifies attempts by severity and disposition
+- writes JSON and Markdown reports
 
 The red-team harness deliberately reuses `agent.Agent`, which means the safety workflow exercises the same iterative tool-calling loop as the production runtime.
 
 ## Key Architectural Strengths
 
-- Clear composition root in `cmd/run.go`.
-- Good separation between orchestration, routing, tools, memory, persistence, and providers.
-- Dual memory design balances human readability with machine retrieval.
-- Routing is adaptive but still approval-bounded.
-- Shell execution is guarded by both syntax restrictions and approval workflows.
-- Safety tooling is first-class rather than bolted on.
-- SQLite-backed stats make learning and auditability possible without introducing external infrastructure.
+- clear composition roots in `cmd/run.go` and `cmd/chat.go`
+- good separation between orchestration, routing, tools, memory, persistence, and providers
+- target-aware memory balances human readability with deterministic retrieval
+- routing is adaptive but still approval-bounded
+- shell execution is guarded by both syntax restrictions and approval workflows
+- safety tooling is first-class rather than bolted on
+- SQLite-backed stats make learning and auditability possible without external infrastructure
 
 ## Notable Constraints and Tradeoffs
 
-- The current tool surface is intentionally small, so the system is more shell-centric than domain-tool-centric.
-- Safety and approval logic are primarily concentrated around shell usage; other future mutating tools would need equivalent policy treatment.
-- The setup wizard directly fetches provider model lists and owns a lot of UI logic in one file, which is practical but monolithic.
-- Routing depends on enough historical samples per phase/task/tool profile; cold-start behavior always falls back to defaults.
-- Memory retrieval DB queries currently emphasize one tool name at a time during lookup, which is simple but may underuse multi-tool context.
+- the current tool surface is intentionally small, so the system is still shell-centric
+- target discovery is driven mainly by prompt hints and observed shell commands rather than richer domain tools
+- memory retrieval is intentionally narrow, which improves reliability but leaves some potentially useful context out of prompt
+- routing still depends on enough historical samples per phase/task/tool profile
+- the setup wizard still owns a lot of UI logic in one file, which is practical but monolithic
 
 ## Practical Mental Model
 
 CvkeHarness is best understood as a local-first, CLI-hosted agent runtime with five cooperating loops:
 
-1. A bootstrap loop that turns user choices into config and prompt files.
-2. An execution loop that alternates model reasoning and tool calls.
-3. A routing loop that learns which approved model tends to work best for each phase/profile.
-4. A memory loop that turns repeated lessons into durable reusable guidance.
-5. A safety loop that continuously tests whether the shell/tool boundary still behaves as intended.
+1. a bootstrap loop that turns user choices into config and prompt files
+2. an execution loop that alternates model reasoning and tool calls
+3. a routing loop that learns which approved model tends to work best for each phase/profile
+4. a target-aware memory loop that turns verified successes and failures into operational recall
+5. a safety loop that continuously tests whether the shell boundary still behaves as intended
 
 That combination is what gives the codebase its character: it is not just a single agent loop, but a small self-observing runtime around that loop.

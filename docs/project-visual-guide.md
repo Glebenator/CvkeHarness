@@ -1,13 +1,17 @@
 # CvkeHarness Visual Guide
 
-This guide is a companion to `docs/architecture.md`.
+This guide is a companion to:
+
+- [README.md](../README.md)
+- [memory-model.md](memory-model.md)
+- [architecture.md](architecture.md)
 
 It focuses on the parts of the project that matter most when you are trying to rebuild the mental model quickly:
 
 - context management
 - the agent loop
 - model routing
-- memory
+- target-aware memory
 - safety and evaluation
 
 ## 1. System At A Glance
@@ -23,7 +27,7 @@ flowchart TD
     memory["memory.Manager"]
     store["state.Store\n~/.cvkeharness/state.db"]
     provider["provider.Provider\nOpenRouter or LM Studio"]
-    files["Readable memory files\noperator.md\nsoul.md\nmemory.md\nfindings.md"]
+    files["Readable managed files\noperator.md\nsoul.md\ntargets.md\nhost.md\nplaybooks.md\nfindings.md\ncautions.md"]
     safety["safety package\nscorecard + redteam"]
     telemetry["telemetry.jsonl\nstreamed runtime events"]
 
@@ -54,44 +58,43 @@ Key idea: the CLI builds one runtime from config, provider, router, tool registr
 
 The runtime is intentionally split into two worlds:
 
-- readable files for durable human understanding
-- SQLite for scoring, approvals, indexing, chat history, and routing statistics
+- readable files for durable operator understanding
+- SQLite for routing stats, approvals, indexing, chat history, and operational memory lookup
 
 ## 2. Context Management
 
-The project does not build one giant prompt. It assembles context in layers and keeps the learned part small.
+The project does not build one giant prompt. It assembles context in layers and keeps the retrieved part small.
 
 ```mermaid
 flowchart TD
     task["User task or chat turn"]
     classify["core.ClassifyTask\ninspection, debugging,\nshell_heavy, policy_sensitive,\nlong_horizon, summarization, general"]
-    retrieval["core.RetrievalContext\nphase + task_class + active_model\n+ tool_names + actual_model + trouble"]
+    resolve["ResolveTarget()\nruntime host or remote target"]
+    retrieval["core.RetrievalContext\nphase + task_class + active_model\n+ runtime_host_id + target_id\n+ target_kind + tool_names + trouble"]
     ensure["memory.Manager.EnsureFiles()"]
     files["Read operator.md and soul.md"]
-    lookup["lookupEntries()\nprefer SQLite metadata\nfallback to parsing markdown files"]
-    score["scoreEntries()\nphase\n+ task class\n+ provider/model\n+ tool match\n+ trouble hints\n+ lexical overlap"]
-    learned["Top N snippets\nformatLearnedContext()"]
-    stack["initialSystemMessages()\n1. built-in rules\n2. operator.md\n3. soul.md\n4. learned snippets\n5. planning notes"]
+    stateLoad["LoadOperationalMemory()\nor parse markdown fallback"]
+    rank["Select one compact brief\nruntime host summary\n+ optional target summary\n+ optional playbook\n+ optional caution\n+ optional finding"]
+    stack["initialSystemMessages()\n1. built-in rules\n2. operator.md\n3. soul.md\n4. runtime-host summary\n5. retrieved brief\n6. planning notes"]
     chat["agent.ChatState"]
     refresh["One refresh after tool trouble\nor policy denial"]
 
-    task --> classify --> retrieval
+    task --> classify --> resolve --> retrieval
     retrieval --> ensure --> files
-    retrieval --> lookup --> score --> learned
-    files --> stack
-    learned --> stack --> chat
+    retrieval --> stateLoad --> rank --> stack
+    files --> stack --> chat
     chat --> refresh
     refresh --> retrieval
 ```
 
-What is important here:
+What matters here:
 
-- `builtInRules()` is fixed runtime policy and keeps the baseline behavior stable.
-- `operator.md` is the harness operating manual. It explains file roles, dependency handling, approval boundaries, and when the agent may write a finding.
-- `soul.md` is the human-facing persona layer and is intentionally user-owned.
-- learned context comes from `memory.md` and `findings.md`, but only the best-scoring snippets are injected.
-- retrieval can use either the requested model or the actual served model, which matters when a provider alias resolves to a different concrete model.
-- during execution or chat, the runtime allows one mid-run refresh if a tool is denied or the same tool keeps failing.
+- `builtInRules()` is fixed runtime policy and keeps baseline behavior stable
+- `operator.md` is the harness operating manual
+- `soul.md` is the human-facing persona layer and remains user-owned
+- retrieval is structured-first, not semantic-first
+- the runtime host and the active target are modeled separately
+- mid-run refresh is allowed once after tool trouble so the model can see a tighter brief for the failing target/tool
 
 ## 3. Agent Loop
 
@@ -101,42 +104,39 @@ What is important here:
 flowchart TD
     start["Run(task)"]
     classify["Classify task"]
+    resolve["Resolve initial target"]
     planning{"Routing enabled?"}
     planPhase["Planning phase\nsingle model call\nno tools\nreturns concise notes"]
     execSelect["Select execution model"]
-    retrieve["Retrieve execution context"]
+    retrieve["Retrieve execution brief"]
     build["Build system prompt stack\n+ user task"]
     loop["Execution loop\nup to MaxIterations"]
     model["Provider.ChatCompletion()"]
     done{"Tool calls?"}
     finish["Return assistant output"]
     toolExec["Execute requested tools"]
+    retarget["Resolve target again if shell command reveals more"]
     trouble{"Denied or repeated failure?"}
-    refresh["Refresh learned context once"]
-    curation{"Memory curator present?"}
-    curate["Curation phase\nextract reusable lessons as JSON"]
-    persist["Persist lessons\nfindings.md and maybe memory.md"]
+    refresh["Refresh compact brief once"]
+    curate["Deterministic CurateRunOutcome()\nplaybooks + cautions + facts + findings"]
     record["Record run, phase stats,\nand tool outcomes"]
 
-    start --> classify --> planning
+    start --> classify --> resolve --> planning
     planning -- "yes" --> planPhase --> execSelect
     planning -- "no" --> execSelect
     execSelect --> retrieve --> build --> loop --> model --> done
-    done -- "no" --> finish --> curation
-    done -- "yes" --> toolExec --> trouble
+    done -- "no" --> finish --> curate --> record
+    done -- "yes" --> toolExec --> retarget --> trouble
     trouble -- "yes" --> refresh --> loop
     trouble -- "no" --> loop
-    curation -- "yes" --> curate --> persist --> record
-    curation -- "no" --> record
 ```
 
-A few implementation details are easy to miss but shape the runtime a lot:
+Key details:
 
-- planning is optional and only runs when routing is enabled and a router exists
-- planning uses an empty toolset profile on purpose, so route selection for planning is not biased by execution tools
-- execution is iterative and tool-driven; the loop stops only when the model returns an assistant message with no tool calls
-- curation is separated from execution so the model that acts does not also have to decide what becomes reusable memory
-- all phase records and tool outcomes are folded back into `state.Store.RecordRun()`, which updates `model_stats`
+- planning is optional and tool-free
+- execution is iterative and tool-driven
+- target identity can tighten mid-run after observed `ssh`, `scp`, or `rsync` commands
+- the default runtime now curates memory deterministically from observed outcomes rather than asking a model to invent durable structure
 
 ## 4. Model Routing
 
@@ -174,49 +174,89 @@ The route profile is more specific than just "best model overall". It keys off:
 - task class
 - toolset
 
-That means a model can be preferred for execution on debugging tasks with `shell_execute`, while another model can still win for planning or chat.
+That means a model can be preferred for execution on debugging tasks with `shell_execute`, while another model still wins for planning or chat.
 
-Important boundary: unapproved models do not silently take over. The router can recommend them, but the user still has to approve a confident new candidate before the runtime switches.
+## 5. Operational Memory Lifecycle
 
-## 5. Memory Lifecycle
-
-Memory is deliberately split between provisional notes and durable memory.
+Memory is now target-aware and structured around verified operational outcomes.
 
 ```mermaid
 flowchart TD
-    run["Run or chat turn"]
-    curate["Curation phase returns lessons"]
-    filter["filterPersistableLessons()\nreject low-confidence or generic advice"]
-    findings["Write to findings.md\nand save memory_entries rows"]
-    repeat{"Observed repeatedly?"}
-    promote["Promote to memory.md\nand raise confidence floor"]
-    snapshot["Snapshot files before writes"]
+    task["Task or chat turn"]
+    resolve["Resolve target\nruntime host or remote target"]
+    run["Execute tools and collect outcomes"]
+    facts["Extract cheap verified host facts\nhostname, os-release,\npackage manager,\nservice manager,\ncontainer runtime"]
+    success{"Verified successful sequence?"}
+    playbook["Create or update\nplaybook"]
+    failure{"Concrete failure or denial?"}
+    caution["Create or update\ncaution"]
+    note["Optional ad hoc note\nmemory_record_finding"]
+    findings["Write finding"]
+    snapshot["Snapshot managed files"]
     reindex["Reindex markdown into SQLite"]
-    rollback["Rollback restores snapshot\nthen reindexes"]
     fallback["If SQLite is unavailable,\nparse markdown directly"]
 
-    run --> curate --> filter --> findings
-    findings --> repeat
-    repeat -- "yes" --> promote
-    repeat -- "no" --> reindex
-    promote --> snapshot --> reindex
-    findings --> snapshot
-    reindex --> rollback
+    task --> resolve --> run
+    run --> facts
+    run --> success
+    success -- "yes" --> playbook
+    run --> failure
+    failure -- "yes" --> caution
+    note --> findings
+    facts --> snapshot
+    playbook --> snapshot
+    caution --> snapshot
+    findings --> snapshot --> reindex
+    fallback --> facts
+    fallback --> playbook
+    fallback --> caution
     fallback --> findings
-    fallback --> reindex
 ```
 
-The memory policy is more disciplined than "append everything forever":
+Important behaviors:
 
-- `findings.md` is the staging area for narrow reusable notes
-- `memory.md` is reserved for durable lessons, often after repetition
-- repeated lessons across multiple models can be promoted to global memory
-- snapshots are taken before managed file writes, so rollback is a first-class workflow
-- if SQLite fails, retrieval still works by parsing the Markdown files directly
+- the runtime host gets its own stable profile in `host.md`, including optional operator-authored machine quirks
+- remote targets live in `targets.md` with aliases and verified facts
+- playbooks only come from successful verified operational sequences
+- cautions come from concrete failures or policy denials
+- `memory_record_finding` is the narrow manual note path, not the main executable memory path
+- legacy `memory.md` is imported into `findings.md` as `needs_curation`
 
-In practice this gives the project a nice property: humans can read and edit the memory files, but the runtime still gets normalized metadata such as scope, confidence, recency, and seen counts.
+## 6. Retrieval Priorities
 
-## 6. Safety Model
+The retrieval system deliberately favors precision over breadth.
+
+```mermaid
+flowchart TD
+    request["Target-aware retrieval request"]
+    runtime["Always include\nruntime-host summary"]
+    exact1["1. exact target + intent + tool"]
+    exact2["2. exact target + intent"]
+    exact3["3. exact target + tool"]
+    caution["4. exact target caution"]
+    fallback["5. fallback finding\nonly if no strong playbook"]
+    render["Render compact brief\nnever whole files"]
+
+    request --> runtime --> exact1 --> render
+    request --> exact2 --> render
+    request --> exact3 --> render
+    request --> caution --> render
+    request --> fallback --> render
+```
+
+Freshness buckets:
+
+- `fresh`
+- `stale`
+- `cold`
+
+Rendering behavior:
+
+- fresh, high-confidence playbooks can be marked direct-use eligible
+- stale or cold playbooks render as verify-first
+- unrelated target memory does not leak into the brief
+
+## 7. Safety Model
 
 Safety is not just one guard. It is a stack of boundaries around shell access plus separate evaluation commands.
 
@@ -263,23 +303,19 @@ flowchart LR
     redteam --> model --> shadow --> report2
 ```
 
-The practical split is:
-
-- `scorecard` answers "what do the static rails allow or deny right now?"
-- `redteam` answers "how does a real model behave when it actively tries to escape those rails?"
-
-## 7. Practical Mental Model
+## 8. Practical Mental Model
 
 If we compress the whole codebase into one sentence, it is this:
 
-CvkeHarness is a phase-routed tool-using LLM runtime whose behavior is shaped by a layered prompt stack, a small local memory system, approval-aware safety rails, and SQLite-backed learning about what worked before.
+CvkeHarness is a phase-routed tool-using LLM runtime whose behavior is shaped by a layered prompt stack, approval-aware safety rails, and a compact target-aware operational memory system backed by readable markdown and SQLite indexing.
 
 If you want to re-enter the code quickly, this is the best reading order:
 
 1. `cmd/run.go`
 2. `agent/agent.go`
 3. `memory/manager_retrieval.go`
-4. `router/router.go`
+4. `memory/manager_persist.go`
 5. `tools/shell.go`
 6. `state/store.go`
-7. `safety/scorecard.go` and `safety/redteam.go`
+7. `state/store_operational_memory.go`
+8. `safety/scorecard.go` and `safety/redteam.go`

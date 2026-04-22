@@ -107,6 +107,7 @@ type fileState struct {
 	Targets          []targetRecord
 	RuntimeHostID    string
 	RuntimeHostFacts []state.HostFact
+	RuntimeHostNotes []string
 	Playbooks        []state.Playbook
 	Findings         []state.Finding
 	Cautions         []state.Caution

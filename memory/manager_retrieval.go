@@ -344,7 +344,18 @@ func renderRuntimeHostSummary(mem fileState, runtimeHostID string) string {
 	for _, fact := range prioritizedFacts(mergeFactLists(mem.RuntimeHostFacts, factsForTarget(mem, runtimeHostID)), 3) {
 		lines = append(lines, fmt.Sprintf("- %s: %s", fact.Key, fact.Value))
 	}
-	return clampRenderedText(strings.Join(lines, "\n"), 6, 420)
+	if notes := summarizeRuntimeHostNotes(mem.RuntimeHostNotes, 2); len(notes) > 0 {
+		lines = append(lines, "- quirks: "+strings.Join(notes, "; "))
+	}
+	return clampRenderedText(strings.Join(lines, "\n"), 7, 520)
+}
+
+func summarizeRuntimeHostNotes(notes []string, max int) []string {
+	notes = dedupeStrings(notes)
+	if max > 0 && len(notes) > max {
+		return notes[:max]
+	}
+	return notes
 }
 
 func renderTargetSummary(mem fileState, resolution TargetResolution) string {

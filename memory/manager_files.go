@@ -129,6 +129,31 @@ func (m *Manager) Reindex(ctx context.Context) error {
 	return m.writeAllState(ctx, state, "normalize structured memory")
 }
 
+// SeedRuntimeHostNotes stores operator-supplied machine notes into host.md when
+// the runtime host profile does not already contain user-authored notes.
+func (m *Manager) SeedRuntimeHostNotes(ctx context.Context, notes []string) (bool, error) {
+	notes = dedupeStrings(notes)
+	if len(notes) == 0 {
+		return false, nil
+	}
+	if err := m.EnsureFiles(); err != nil {
+		return false, err
+	}
+	st, err := m.parseManagedFiles()
+	if err != nil {
+		return false, err
+	}
+	m.ensureRuntimeBootstrap(&st)
+	if len(st.RuntimeHostNotes) > 0 {
+		return false, nil
+	}
+	st.RuntimeHostNotes = notes
+	if err := m.writeAllState(ctx, st, "bootstrap runtime host notes"); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (m *Manager) ensureRuntimeBootstrap(st *fileState) bool {
 	now := m.now()
 	runtimeHostID := st.RuntimeHostID
@@ -317,13 +342,14 @@ func parseLegacyListItems(content string) []string {
 func (m *Manager) parseManagedFiles() (fileState, error) {
 	var out fileState
 
-	targets, runtimeHostID, runtimeFacts, err := m.parseTargetsAndHostFiles()
+	targets, runtimeHostID, runtimeFacts, runtimeNotes, err := m.parseTargetsAndHostFiles()
 	if err != nil {
 		return fileState{}, err
 	}
 	out.Targets = targets
 	out.RuntimeHostID = runtimeHostID
 	out.RuntimeHostFacts = runtimeFacts
+	out.RuntimeHostNotes = runtimeNotes
 
 	playbooks, err := m.parsePlaybooksFile()
 	if err != nil {
@@ -346,22 +372,22 @@ func (m *Manager) parseManagedFiles() (fileState, error) {
 	return out, nil
 }
 
-func (m *Manager) parseTargetsAndHostFiles() ([]targetRecord, string, []state.HostFact, error) {
+func (m *Manager) parseTargetsAndHostFiles() ([]targetRecord, string, []state.HostFact, []string, error) {
 	var targets []targetRecord
 	byID := make(map[string]int)
 
 	targetContent, err := readOptionalFile(m.managedPath(TargetsFile))
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	records, err := parseMarkdownRecords(targetContent)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	for _, record := range records {
 		item, err := parseTargetRecord(record)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, "", nil, nil, err
 		}
 		byID[item.Target.ID] = len(targets)
 		targets = append(targets, item)
@@ -369,30 +395,32 @@ func (m *Manager) parseTargetsAndHostFiles() ([]targetRecord, string, []state.Ho
 
 	hostContent, err := readOptionalFile(m.managedPath(HostFile))
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 	hostRecords, err := parseMarkdownRecords(hostContent)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, nil, err
 	}
 
 	runtimeHostID := ""
 	var runtimeFacts []state.HostFact
+	var runtimeNotes []string
 	for _, record := range hostRecords {
-		hostID, facts, err := parseHostRecord(record)
+		hostID, facts, notes, err := parseHostRecord(record)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, "", nil, nil, err
 		}
 		if runtimeHostID == "" {
 			runtimeHostID = hostID
 			runtimeFacts = facts
+			runtimeNotes = notes
 		}
 		if idx, ok := byID[hostID]; ok {
 			targets[idx].Facts = mergeFactLists(targets[idx].Facts, facts)
 		}
 	}
 
-	return targets, runtimeHostID, runtimeFacts, nil
+	return targets, runtimeHostID, runtimeFacts, runtimeNotes, nil
 }
 
 func (m *Manager) parsePlaybooksFile() ([]state.Playbook, error) {
@@ -563,7 +591,7 @@ func parseTargetRecord(record markdownRecord) (targetRecord, error) {
 	}, nil
 }
 
-func parseHostRecord(record markdownRecord) (string, []state.HostFact, error) {
+func parseHostRecord(record markdownRecord) (string, []state.HostFact, []string, error) {
 	type hostMeta struct {
 		RuntimeHostID string  `yaml:"runtime_host_id"`
 		PrimaryName   string  `yaml:"primary_name"`
@@ -573,9 +601,10 @@ func parseHostRecord(record markdownRecord) (string, []state.HostFact, error) {
 	}
 	var meta hostMeta
 	if err := yaml.Unmarshal([]byte(record.Meta), &meta); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	facts := parseFactsSection(record.Body, meta.RuntimeHostID)
+	notes := parseNotesSection(record.Body)
 	verifiedAt := parseTime(meta.VerifiedAt)
 	if verifiedAt.IsZero() {
 		verifiedAt = time.Now().UTC()
@@ -588,7 +617,7 @@ func parseHostRecord(record markdownRecord) (string, []state.HostFact, error) {
 		VerifiedAt: verifiedAt,
 		UpdatedAt:  verifiedAt,
 	})
-	return strings.TrimSpace(meta.RuntimeHostID), facts, nil
+	return strings.TrimSpace(meta.RuntimeHostID), facts, notes, nil
 }
 
 func parsePlaybookRecord(record markdownRecord) (state.Playbook, error) {
@@ -701,6 +730,11 @@ func parseFactsSection(body, hostID string) []state.HostFact {
 	return parseFactLines(hostID, sections["Facts"])
 }
 
+func parseNotesSection(body string) []string {
+	sections := splitSections(body)
+	return parseNotesBody(sections["Notes"])
+}
+
 func parseFactLines(hostID, body string) []state.HostFact {
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -727,6 +761,50 @@ func parseFactLines(hostID, body string) []state.HostFact {
 		})
 	}
 	return dedupeFacts(facts)
+}
+
+func parseNotesBody(body string) []string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil
+	}
+
+	lines := strings.Split(body, "\n")
+	hasBullets := false
+	for _, raw := range lines {
+		if strings.HasPrefix(strings.TrimSpace(raw), "- ") {
+			hasBullets = true
+			break
+		}
+	}
+
+	if hasBullets {
+		var notes []string
+		for _, raw := range lines {
+			note := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "- "))
+			if note == "" {
+				continue
+			}
+			notes = append(notes, note)
+		}
+		return dedupeStrings(notes)
+	}
+
+	var notes []string
+	for _, block := range strings.Split(body, "\n\n") {
+		note := strings.Join(strings.Fields(strings.TrimSpace(block)), " ")
+		if note == "" {
+			continue
+		}
+		notes = append(notes, note)
+	}
+	if len(notes) == 0 {
+		note := strings.Join(strings.Fields(body), " ")
+		if note != "" {
+			notes = append(notes, note)
+		}
+	}
+	return dedupeStrings(notes)
 }
 
 func splitSections(body string) map[string]string {
@@ -862,6 +940,7 @@ func normalizeState(st fileState) fileState {
 		st.Targets[i].Facts = dedupeFacts(st.Targets[i].Facts)
 	}
 	st.RuntimeHostFacts = dedupeFacts(st.RuntimeHostFacts)
+	st.RuntimeHostNotes = dedupeStrings(st.RuntimeHostNotes)
 	return st
 }
 
@@ -936,6 +1015,7 @@ func renderHostFile(st fileState) string {
 			b.WriteString("\n")
 		}
 	}
+	renderListSection(&b, "Notes", st.RuntimeHostNotes)
 	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
@@ -1075,6 +1155,7 @@ func operationalMemoryFromState(st fileState) state.OperationalMemory {
 		Cautions:  st.Cautions,
 		HostFacts: dedupeFacts(st.RuntimeHostFacts),
 	}
+	mem.HostFacts = mergeFactLists(mem.HostFacts, encodeRuntimeHostNotes(st))
 	for _, target := range st.Targets {
 		mem.Targets = append(mem.Targets, target.Target)
 		mem.HostFacts = mergeFactLists(mem.HostFacts, target.Facts)
@@ -1139,6 +1220,12 @@ func stateFromOperationalMemory(mem state.OperationalMemory) fileState {
 		}
 	}
 	for _, fact := range mem.HostFacts {
+		if isRuntimeHostNoteFact(fact.Key) {
+			if fact.HostID == st.RuntimeHostID {
+				st.RuntimeHostNotes = append(st.RuntimeHostNotes, fact.Value)
+			}
+			continue
+		}
 		if fact.HostID == st.RuntimeHostID {
 			st.RuntimeHostFacts = append(st.RuntimeHostFacts, fact)
 		}
@@ -1191,7 +1278,7 @@ Every run receives instructions in this order:
 - operator.md: Stable harness rules and memory boundaries. User-editable.
 - soul.md: Persona and tone only. User-editable and never auto-edited by the harness.
 - targets.md: Target registry, aliases, and concise verified target facts.
-- host.md: Concise verified profile of the runtime host.
+- host.md: Concise verified profile of the runtime host plus operator-supplied machine notes.
 - playbooks.md: Durable target-specific procedures with verify/action/success-check sections.
 - findings.md: Provisional observations awaiting promotion.
 - cautions.md: Target-specific negative memory for bad or unreliable approaches.
@@ -1308,6 +1395,36 @@ func dedupeFacts(items []state.HostFact) []state.HostFact {
 		return out[i].HostID < out[j].HostID
 	})
 	return out
+}
+
+const runtimeHostNoteKeyPrefix = "__runtime_host_note__"
+
+func encodeRuntimeHostNotes(st fileState) []state.HostFact {
+	hostID := strings.TrimSpace(st.RuntimeHostID)
+	if hostID == "" || len(st.RuntimeHostNotes) == 0 {
+		return nil
+	}
+	ts := latestFactTime(st.RuntimeHostFacts)
+	var out []state.HostFact
+	for _, note := range dedupeStrings(st.RuntimeHostNotes) {
+		out = append(out, state.HostFact{
+			HostID:     hostID,
+			Key:        runtimeHostNoteKey(note),
+			Value:      note,
+			Confidence: 0.8,
+			VerifiedAt: ts,
+			UpdatedAt:  ts,
+		})
+	}
+	return out
+}
+
+func runtimeHostNoteKey(note string) string {
+	return runtimeHostNoteKeyPrefix + shortHash(strings.ToLower(strings.TrimSpace(note)))
+}
+
+func isRuntimeHostNoteFact(key string) bool {
+	return strings.HasPrefix(strings.TrimSpace(key), runtimeHostNoteKeyPrefix)
 }
 
 func mergeFactLists(existing, additions []state.HostFact) []state.HostFact {

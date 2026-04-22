@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -94,6 +95,10 @@ func soulFilePath(memoryDir string) string {
 	return filepath.Join(memoryDir, memory.SoulFile)
 }
 
+func hostFilePath(memoryDir string) string {
+	return filepath.Join(memoryDir, memory.HostFile)
+}
+
 func soulBootstrapRequired(memoryDir string) (bool, error) {
 	data, err := os.ReadFile(soulFilePath(memoryDir))
 	if err != nil {
@@ -110,6 +115,14 @@ func soulBootstrapRequired(memoryDir string) (bool, error) {
 func ensureSetupMemoryFiles(memoryDir string, maxSnippets int) error {
 	return memory.NewManager(memoryDir, nil, maxSnippets).EnsureFiles()
 }
+
+type setupHostNotesStatus int
+
+const (
+	setupHostNotesSkipped setupHostNotesStatus = iota
+	setupHostNotesWritten
+	setupHostNotesPreserved
+)
 
 func writeSetupSoul(memoryDir string, maxSnippets int, profile soulProfile) (bool, error) {
 	if err := ensureSetupMemoryFiles(memoryDir, maxSnippets); err != nil {
@@ -129,6 +142,114 @@ func writeSetupSoul(memoryDir string, maxSnippets int, profile soulProfile) (boo
 		return false, err
 	}
 	return true, nil
+}
+
+func writeSetupHostNotes(memoryDir string, maxSnippets int, notes []string) (setupHostNotesStatus, error) {
+	notes = dedupeSetupNotes(notes)
+	if len(notes) == 0 {
+		return setupHostNotesSkipped, nil
+	}
+	manager := memory.NewManager(memoryDir, nil, maxSnippets)
+	wrote, err := manager.SeedRuntimeHostNotes(context.Background(), notes)
+	if err != nil {
+		return setupHostNotesSkipped, err
+	}
+	if wrote {
+		return setupHostNotesWritten, nil
+	}
+	return setupHostNotesPreserved, nil
+}
+
+func loadSetupHostNotes(memoryDir string) ([]string, error) {
+	data, err := os.ReadFile(hostFilePath(memoryDir))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return splitSetupNotes(extractSetupSection(string(data), "Notes")), nil
+}
+
+func extractSetupSection(content, heading string) string {
+	var lines []string
+	inSection := false
+	for _, raw := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		line := strings.TrimRight(raw, "\r")
+		if strings.HasPrefix(line, "### ") {
+			if inSection {
+				break
+			}
+			inSection = strings.TrimSpace(strings.TrimPrefix(line, "### ")) == heading
+			continue
+		}
+		if inSection {
+			lines = append(lines, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func splitSetupNotes(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	hasBullets := false
+	for _, rawLine := range lines {
+		if strings.HasPrefix(strings.TrimSpace(rawLine), "- ") {
+			hasBullets = true
+			break
+		}
+	}
+
+	var notes []string
+	if hasBullets {
+		for _, rawLine := range lines {
+			note := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rawLine), "- "))
+			if note == "" {
+				continue
+			}
+			notes = append(notes, note)
+		}
+		return dedupeSetupNotes(notes)
+	}
+
+	if strings.Contains(raw, "\n") {
+		for _, block := range strings.Split(raw, "\n\n") {
+			note := strings.Join(strings.Fields(strings.TrimSpace(block)), " ")
+			if note == "" {
+				continue
+			}
+			notes = append(notes, note)
+		}
+		return dedupeSetupNotes(notes)
+	}
+
+	for _, part := range strings.Split(raw, ";") {
+		note := strings.Join(strings.Fields(strings.TrimSpace(part)), " ")
+		if note == "" {
+			continue
+		}
+		notes = append(notes, note)
+	}
+	return dedupeSetupNotes(notes)
+}
+
+func dedupeSetupNotes(notes []string) []string {
+	var out []string
+	seen := make(map[string]bool, len(notes))
+	for _, note := range notes {
+		note = strings.Join(strings.Fields(strings.TrimSpace(note)), " ")
+		if note == "" || seen[note] {
+			continue
+		}
+		seen[note] = true
+		out = append(out, note)
+	}
+	return out
 }
 
 func buildSoulMarkdown(profile soulProfile) string {

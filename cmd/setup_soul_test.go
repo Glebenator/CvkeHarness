@@ -91,3 +91,63 @@ func TestWriteSetupSoulEnsuresOtherMemoryFilesExist(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteSetupHostNotesSeedsRuntimeHostNotes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	status, err := writeSetupHostNotes(dir, 5, []string{
+		"Docker requires sudo",
+		"Homebrew lives in /opt/homebrew",
+	})
+	if err != nil {
+		t.Fatalf("writeSetupHostNotes returned error: %v", err)
+	}
+	if status != setupHostNotesWritten {
+		t.Fatalf("expected setupHostNotesWritten, got %v", status)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, memory.HostFile))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "### Notes") {
+		t.Fatalf("expected host.md to include a Notes section, got %q", content)
+	}
+	if !strings.Contains(content, "- Docker requires sudo") {
+		t.Fatalf("expected Docker note in host.md, got %q", content)
+	}
+	if !strings.Contains(content, "- Homebrew lives in /opt/homebrew") {
+		t.Fatalf("expected Homebrew note in host.md, got %q", content)
+	}
+}
+
+func TestWriteSetupHostNotesPreservesExistingRuntimeHostNotes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if _, err := writeSetupHostNotes(dir, 5, []string{"Docker requires sudo"}); err != nil {
+		t.Fatalf("first writeSetupHostNotes returned error: %v", err)
+	}
+
+	status, err := writeSetupHostNotes(dir, 5, []string{"Corporate VPN rewrites DNS"})
+	if err != nil {
+		t.Fatalf("second writeSetupHostNotes returned error: %v", err)
+	}
+	if status != setupHostNotesPreserved {
+		t.Fatalf("expected setupHostNotesPreserved, got %v", status)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, memory.HostFile))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "- Docker requires sudo") {
+		t.Fatalf("expected original note to remain in host.md, got %q", content)
+	}
+	if strings.Contains(content, "Corporate VPN rewrites DNS") {
+		t.Fatalf("expected existing host notes to be preserved without overwrite, got %q", content)
+	}
+}
