@@ -301,6 +301,60 @@ func TestFileFallbackWorksWithoutSQLite(t *testing.T) {
 	}
 }
 
+func TestSeedRuntimeHostNotesRoundTripsThroughStoreAndRetrieval(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := state.Open(filepath.Join(dir, "state.db"))
+	defer store.Close()
+
+	manager := NewManager(dir, store, 3)
+	manager.hostname = func() string { return "builder.local" }
+
+	ctx := context.Background()
+	if err := manager.EnsureFiles(); err != nil {
+		t.Fatalf("EnsureFiles returned error: %v", err)
+	}
+
+	wrote, err := manager.SeedRuntimeHostNotes(ctx, []string{
+		"Docker requires sudo",
+		"Homebrew lives in /opt/homebrew",
+	})
+	if err != nil {
+		t.Fatalf("SeedRuntimeHostNotes returned error: %v", err)
+	}
+	if !wrote {
+		t.Fatal("expected SeedRuntimeHostNotes to write the initial notes")
+	}
+
+	memState, err := manager.loadState(ctx)
+	if err != nil {
+		t.Fatalf("loadState returned error: %v", err)
+	}
+	if len(memState.RuntimeHostNotes) != 2 {
+		t.Fatalf("expected two runtime host notes after store round-trip, got %d", len(memState.RuntimeHostNotes))
+	}
+
+	retrieved, err := manager.Retrieve(ctx, core.RetrievalContext{
+		Task:        "list docker containers on this machine",
+		TaskClass:   core.TaskClassInspection,
+		Phase:       core.PhaseExecution,
+		ActiveModel: core.NewModelRef("openrouter", "model-a"),
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if !strings.Contains(retrieved.RuntimeHostSummary, "quirks:") {
+		t.Fatalf("expected runtime host summary to include machine quirks, got %q", retrieved.RuntimeHostSummary)
+	}
+	if !strings.Contains(retrieved.RuntimeHostSummary, "Docker requires sudo") {
+		t.Fatalf("expected runtime host summary to include Docker note, got %q", retrieved.RuntimeHostSummary)
+	}
+	if !strings.Contains(retrieved.RuntimeHostSummary, "Homebrew lives in /opt/homebrew") {
+		t.Fatalf("expected runtime host summary to include Homebrew note, got %q", retrieved.RuntimeHostSummary)
+	}
+}
+
 func TestRollbackRestoresFindingsAndReindexes(t *testing.T) {
 	t.Parallel()
 

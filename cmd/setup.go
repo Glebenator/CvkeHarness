@@ -204,6 +204,14 @@ func renderReview(cfg *config.Config) {
 	fmt.Println(botSep)
 }
 
+func summarizeReviewNotes(notes []string, maxLen int) string {
+	text := strings.Join(notes, "; ")
+	if maxLen > 0 && len(text) > maxLen {
+		return strings.TrimSpace(text[:maxLen-3]) + "..."
+	}
+	return text
+}
+
 // ─── OpenRouter model fetching ────────────────────────────────────────────────
 
 type orPricing struct {
@@ -487,7 +495,7 @@ var routingOptions = [][2]string{
 	{"disabled", "Always use the default model"},
 }
 
-const totalSteps = 10
+const totalSteps = 11
 
 // ─── Wizard steps ─────────────────────────────────────────────────────────────
 // Each function returns true to advance, false to go back.
@@ -834,13 +842,68 @@ func wizardSoulProfile(cfg *config.Config, profile *soulProfile) bool {
 	return true
 }
 
-func wizardConfirm(cfg *config.Config, profile soulProfile) bool {
+func wizardMachineNotes(cfg *config.Config, notes *[]string) bool {
 	renderHeader()
-	renderStep(10, totalSteps, "Review & Confirm")
+	renderStep(10, totalSteps, "Machine Notes")
+
+	existingNotes, err := loadSetupHostNotes(cfg.MemoryDir)
+	if err == nil && len(existingNotes) > 0 {
+		*notes = existingNotes
+		fmt.Printf("  %sExisting runtime-host notes were found in %s and will be preserved.%s\n", fgGray, fgAccent+ansiBold+"host.md"+ansiReset+fgGray, ansiReset)
+		fmt.Printf("  %sThese notes already participate in the runtime-host summary, so setup will leave them alone.%s\n\n", fgMuted+ansiDim, ansiReset)
+
+		choices := [][2]string{
+			{"Keep existing host.md notes", "Preserve the current machine guidance"},
+		}
+		return selectList(choices, 0, true) != goBack
+	}
+
+	fmt.Printf("  %sOptional: capture machine-specific quirks CvkeHarness should keep in mind on this runtime host.%s\n", fgGray, ansiReset)
+	fmt.Printf("  %sExamples: Docker requires sudo, Homebrew lives in /opt/homebrew, VPN/DNS rewrites hostnames, or services are managed in a nonstandard way.%s\n\n", fgMuted+ansiDim, ansiReset)
+
+	choices := [][2]string{
+		{"Add machine notes", "Write operator-authored quirks into host.md and include them in runtime-host retrieval"},
+		{"Skip for now", "Leave host.md facts-only; you can edit it later"},
+	}
+	initial := 1
+	if len(*notes) > 0 {
+		initial = 0
+	}
+	idx := selectList(choices, initial, true)
+	if idx == goBack {
+		return false
+	}
+	if idx == 1 {
+		*notes = nil
+		return true
+	}
+
+	defaultVal := strings.Join(*notes, "; ")
+	raw, back := promptCustomValue(
+		10,
+		"Machine Notes",
+		"Notes (single line; separate multiple notes with ';'):",
+		defaultVal,
+		fmt.Sprintf("  %sKeep these short and durable. They should be things the harness should remember across tasks on this machine.%s", fgGray, ansiReset),
+	)
+	if back {
+		return false
+	}
+
+	*notes = splitSetupNotes(raw)
+	return true
+}
+
+func wizardConfirm(cfg *config.Config, profile soulProfile, hostNotes []string) bool {
+	renderHeader()
+	renderStep(11, totalSteps, "Review & Confirm")
 
 	renderReview(cfg)
 	fmt.Println()
 	fmt.Printf("  %sSoul profile:%s  %s%s%s\n\n", fgMuted, ansiReset, ansiBold, fgWhite, profile.Label+ansiReset)
+	if len(hostNotes) > 0 {
+		fmt.Printf("  %sRuntime host notes:%s  %s%s%s\n\n", fgMuted, ansiReset, ansiBold, fgWhite, summarizeReviewNotes(hostNotes, 92)+ansiReset)
+	}
 
 	choices := [][2]string{
 		{"✔  Save and finish", "Write config — ready to run"},
@@ -1178,7 +1241,7 @@ func reviewSettingsChanges(cfg *config.Config, profile soulProfile, dirty bool) 
 	if dirty {
 		title = "Review & Save"
 	}
-	renderStep(10, totalSteps, title)
+	renderStep(11, totalSteps, title)
 	renderReview(cfg)
 	fmt.Println()
 
@@ -1269,6 +1332,7 @@ func runSetupWizard(mode string) {
 
 	var fetchedModels modelsResult // populated on first visit to step 3
 	selectedSoulProfile := defaultSoulProfile()
+	var selectedHostNotes []string
 
 	// ── Step loop with Backspace back-navigation ──────────────────────
 	step := 1
@@ -1295,7 +1359,9 @@ func runSetupWizard(mode string) {
 		case 9:
 			advanced = wizardSoulProfile(cfg, &selectedSoulProfile)
 		case 10:
-			advanced = wizardConfirm(cfg, selectedSoulProfile)
+			advanced = wizardMachineNotes(cfg, &selectedHostNotes)
+		case 11:
+			advanced = wizardConfirm(cfg, selectedSoulProfile, selectedHostNotes)
 		}
 
 		if advanced {
@@ -1306,10 +1372,10 @@ func runSetupWizard(mode string) {
 		// step == 1 and back pressed → stays at 1 (no previous step)
 	}
 
-	finalizeSetup(mode, cfg, selectedSoulProfile)
+	finalizeSetup(mode, cfg, selectedSoulProfile, selectedHostNotes)
 }
 
-func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProfile) {
+func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProfile, hostNotes []string) {
 	cfg.Normalize()
 	if cfg.RoutingMode == "" {
 		cfg.RoutingMode = "auto_within_policy"
@@ -1325,6 +1391,12 @@ func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProf
 	wroteSoul, err := writeSetupSoul(cfg.MemoryDir, cfg.MemoryMaxSnippets, selectedSoulProfile)
 	if err != nil {
 		fmt.Printf("\n  %s%s✗  Failed to prepare memory files: %v%s\n\n",
+			ansiBold, fgRed, err, ansiReset)
+		os.Exit(1)
+	}
+	hostNotesStatus, err := writeSetupHostNotes(cfg.MemoryDir, cfg.MemoryMaxSnippets, hostNotes)
+	if err != nil {
+		fmt.Printf("\n  %s%s✗  Failed to update runtime host notes: %v%s\n\n",
 			ansiBold, fgRed, err, ansiReset)
 		os.Exit(1)
 	}
@@ -1363,6 +1435,14 @@ func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProf
 	}
 	fmt.Printf("  %sThe SQLite state file %s~/.cvkeharness/state.db%s will still be created on first run as needed.%s\n\n",
 		fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
+	switch hostNotesStatus {
+	case setupHostNotesWritten:
+		fmt.Printf("  %sSaved your runtime-host notes into %s~/.cvkeharness/host.md%s so machine quirks are part of retrieval from the first run.%s\n\n",
+			fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
+	case setupHostNotesPreserved:
+		fmt.Printf("  %sPreserved the existing runtime-host notes in %s~/.cvkeharness/host.md%s.%s\n\n",
+			fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
+	}
 }
 
 func runSettingsMenu() {
@@ -1401,7 +1481,7 @@ func runSettingsMenu() {
 			dirty = runSoulEditor(cfg, &selectedSoulProfile) || dirty
 		case settingsReviewAndSave:
 			if reviewSettingsChanges(cfg, selectedSoulProfile, dirty) {
-				finalizeSetup("settings", cfg, selectedSoulProfile)
+				finalizeSetup("settings", cfg, selectedSoulProfile, nil)
 				return
 			}
 		case settingsDiscardAndExit:
