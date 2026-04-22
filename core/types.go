@@ -97,14 +97,19 @@ type ToolTrouble struct {
 
 // RetrievalContext carries the active run state into memory retrieval.
 type RetrievalContext struct {
-	Task        string
-	TaskClass   TaskClass
-	Phase       Phase
-	ActiveModel ModelRef
-	ActualModel ModelRef
-	ToolNames   []string
-	Trouble     *ToolTrouble
-	MaxSnippets int
+	Task          string
+	TaskClass     TaskClass
+	Phase         Phase
+	ActiveModel   ModelRef
+	ActualModel   ModelRef
+	RuntimeHostID string
+	TargetID      string
+	TargetKind    string
+	Intent        string
+	Capabilities  []string
+	ToolNames     []string
+	Trouble       *ToolTrouble
+	MaxSnippets   int
 }
 
 // RoutingConfig controls how per-phase routing is resolved.

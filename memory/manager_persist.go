@@ -4,199 +4,562 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
-	"sort"
 	"strings"
+	"time"
 
 	"github.com/coolcake/cvkeharness/state"
 )
 
-// PersistLessons updates findings.md and promotes durable lessons into memory.md.
+// PersistLessons keeps the ad hoc finding tool working on top of the new model.
 func (m *Manager) PersistLessons(ctx context.Context, lessons []Lesson) error {
-	lessons = filterPersistableLessons(lessons)
-	if len(lessons) == 0 {
-		return nil
-	}
 	if err := m.EnsureFiles(); err != nil {
 		return err
 	}
-
-	additions := make([]state.MemoryEntry, 0, len(lessons))
-	for _, lesson := range lessons {
-		entry, ok := m.lessonEntry(FindingsFile, lesson)
-		if !ok {
-			continue
-		}
-		additions = append(additions, entry)
-	}
-	if len(additions) == 0 {
-		return nil
-	}
-
-	if m.store != nil && m.store.Available() {
-		_ = m.store.SaveMemoryEntries(ctx, additions)
-	}
-	findingsEntries, err := m.loadEntriesForSource(ctx, FindingsFile)
+	mem, err := m.loadState(ctx)
 	if err != nil {
 		return err
 	}
-	if m.store == nil || !m.store.Available() {
-		findingsEntries = mergeEntries(findingsEntries, additions)
-	}
-	if err := m.writeManagedFile(ctx, FindingsFile, m.managedPath(FindingsFile), findingsEntries, "update findings"); err != nil {
-		return err
-	}
+	m.ensureRuntimeBootstrap(&mem)
+	now := m.now()
 
-	return m.promoteRepeatedLessons(ctx, additions)
+	changed := false
+	for _, lesson := range lessons {
+		body := strings.TrimSpace(lesson.Body)
+		if body == "" {
+			continue
+		}
+		confidence := lesson.Confidence
+		if confidence <= 0 {
+			confidence = 0.65
+		}
+		finding := state.Finding{
+			ID:         findingID(mem.RuntimeHostID+"|ad_hoc", body),
+			TargetID:   mem.RuntimeHostID,
+			Intent:     IntentGeneral,
+			ToolName:   strings.TrimSpace(lesson.ToolName),
+			Status:     "active",
+			Origin:     "ad_hoc",
+			Body:       body,
+			Confidence: confidence,
+			SeenCount:  1,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+		mem.Findings, changed = upsertFinding(mem.Findings, finding)
+	}
+	if !changed {
+		return nil
+	}
+	return m.writeAllState(ctx, mem, "record ad hoc finding")
 }
 
-func (m *Manager) lessonEntry(source string, lesson Lesson) (state.MemoryEntry, bool) {
-	body := strings.TrimSpace(lesson.Body)
-	if body == "" {
-		return state.MemoryEntry{}, false
+// CurateRunOutcome deterministically promotes proven target knowledge.
+func (m *Manager) CurateRunOutcome(ctx context.Context, outcome RunOutcome) error {
+	if err := m.EnsureFiles(); err != nil {
+		return err
+	}
+	mem, err := m.loadState(ctx)
+	if err != nil {
+		return err
+	}
+	m.ensureRuntimeBootstrap(&mem)
+
+	intent := strings.TrimSpace(outcome.Intent)
+	if intent == "" {
+		intent = classifyIntent(outcome.Task)
+	}
+
+	resolution := outcome.Target
+	if resolution.RuntimeHostID == "" || resolution.TargetID == "" {
+		resolved, err := m.ResolveTarget(ctx, TargetResolutionInput{Task: outcome.Task})
+		if err != nil {
+			return err
+		}
+		if resolution.RuntimeHostID == "" {
+			resolution.RuntimeHostID = resolved.RuntimeHostID
+		}
+		if resolution.TargetID == "" {
+			resolution.TargetID = resolved.TargetID
+			resolution.TargetKind = resolved.TargetKind
+			resolution.PrimaryName = resolved.PrimaryName
+		}
 	}
 
 	now := m.now()
-	return state.MemoryEntry{
-		ID:         entryID(source, lesson),
-		SourceFile: source,
-		Scope:      defaultScope(lesson),
-		Provider:   lesson.Provider,
-		Model:      lesson.Model,
-		ToolName:   lesson.ToolName,
-		TaskClass:  lesson.TaskClass,
-		Phase:      lesson.Phase,
-		Status:     "active",
-		Confidence: lesson.Confidence,
-		SeenCount:  1,
-		Body:       body,
-		Normalized: normalizeLesson(body),
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		LastSeenAt: now,
-	}, true
-}
+	targetID := resolution.TargetID
+	changed := false
 
-func (m *Manager) promoteRepeatedLessons(ctx context.Context, additions []state.MemoryEntry) error {
-	allEntries, err := m.loadEntriesForPromotion(ctx)
-	if err != nil {
-		return err
-	}
-
-	memoryEntries, err := m.loadEntriesForSource(ctx, MemoryFile)
-	if err != nil {
-		return err
-	}
-
-	existingByNormalized := make(map[string]state.MemoryEntry, len(memoryEntries))
-	for _, entry := range memoryEntries {
-		existingByNormalized[entry.Normalized] = entry
-	}
-
-	var promotions []state.MemoryEntry
-	for _, add := range additions {
-		if _, exists := existingByNormalized[add.Normalized]; exists {
-			continue
+	for _, call := range outcome.ToolCalls {
+		callTargetID := targetID
+		callResolution, hasSpecificTarget := m.resolveToolCallTarget(ctx, call)
+		if hasSpecificTarget {
+			callTargetID = callResolution.TargetID
+			targetID = callTargetID
+			resolution = callResolution
 		}
-
-		matches, models := repeatedLessonStats(allEntries, add.Normalized)
-		if matches < 2 {
-			continue
+		changed = m.applyObservedFacts(&mem, callTargetID, call, now) || changed
+		if call.Success {
+			changed = markTargetVerified(&mem, callTargetID, now) || changed
+		} else {
+			changed = applyPlaybookFailure(&mem, callTargetID, intent, call, now) || changed
+			changed = applyCaution(&mem, callTargetID, intent, call, now) || changed
 		}
-
-		scope, provider, model := promotedScope(add, models)
-		promotions = append(promotions, state.MemoryEntry{
-			ID:         entryID(MemoryFile, Lesson{Body: add.Body, Scope: scope, Provider: provider, Model: model, ToolName: add.ToolName, TaskClass: add.TaskClass, Phase: add.Phase, Confidence: maxFloat(add.Confidence, 0.75)}),
-			SourceFile: MemoryFile,
-			Scope:      scope,
-			Provider:   provider,
-			Model:      model,
-			ToolName:   add.ToolName,
-			TaskClass:  add.TaskClass,
-			Phase:      add.Phase,
-			Status:     "active",
-			Confidence: maxFloat(add.Confidence, 0.75),
-			SeenCount:  1,
-			Body:       add.Body,
-			Normalized: add.Normalized,
-			CreatedAt:  m.now(),
-			UpdatedAt:  m.now(),
-			LastSeenAt: m.now(),
-		})
 	}
-	if len(promotions) == 0 {
+
+	successfulCommands := successfulShellCommands(outcome.ToolCalls, targetID)
+	if len(successfulCommands) > 0 && strings.TrimSpace(outcome.ExecutionError) == "" {
+		changed = applyPlaybook(&mem, targetID, intent, successfulCommands, outcome.Task, now) || changed
+	}
+
+	if len(successfulCommands) == 0 && strings.TrimSpace(outcome.ExecutionError) == "" && targetID != "" {
+		summary := strings.TrimSpace(outcome.Output)
+		if summary != "" {
+			finding := state.Finding{
+				ID:         findingID(targetID+"|run", summary),
+				TargetID:   targetID,
+				Intent:     intent,
+				ToolName:   "",
+				Status:     "active",
+				Origin:     "run_outcome",
+				Body:       oneSentence(summary),
+				Confidence: 0.65,
+				SeenCount:  1,
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			mem.Findings, changed = upsertFinding(mem.Findings, finding)
+		}
+	}
+
+	if !changed {
 		return nil
 	}
-
-	if m.store != nil && m.store.Available() {
-		_ = m.store.SaveMemoryEntries(ctx, promotions)
-	}
-	memoryEntries, err = m.loadEntriesForSource(ctx, MemoryFile)
-	if err != nil {
-		return err
-	}
-	if m.store == nil || !m.store.Available() {
-		memoryEntries = mergeEntries(memoryEntries, promotions)
-	}
-	return m.writeManagedFile(ctx, MemoryFile, m.managedPath(MemoryFile), memoryEntries, "promote durable lessons")
+	return m.writeAllState(ctx, mem, "curate run outcome")
 }
 
-func repeatedLessonStats(entries []state.MemoryEntry, normalized string) (int, map[string]bool) {
-	matches := 0
-	models := make(map[string]bool)
-	for _, existing := range entries {
-		if existing.Normalized != normalized {
+func (m *Manager) resolveToolCallTarget(ctx context.Context, call ObservedToolCall) (TargetResolution, bool) {
+	if strings.TrimSpace(call.Command) == "" {
+		return TargetResolution{}, false
+	}
+	resolution, err := m.ResolveTarget(ctx, TargetResolutionInput{Command: call.Command})
+	if err != nil {
+		return TargetResolution{}, false
+	}
+	if resolution.TargetID == "" || resolution.TargetID == resolution.RuntimeHostID {
+		return resolution, false
+	}
+	return resolution, true
+}
+
+func successfulShellCommands(calls []ObservedToolCall, targetID string) []ObservedToolCall {
+	var out []ObservedToolCall
+	for _, call := range calls {
+		if call.ToolName != "shell_execute" || !call.Success || strings.TrimSpace(call.Command) == "" {
 			continue
 		}
-		count := existing.SeenCount
-		if count <= 0 {
-			count = 1
+		out = append(out, call)
+	}
+	return out
+}
+
+func applyPlaybook(mem *fileState, targetID, intent string, calls []ObservedToolCall, task string, now time.Time) bool {
+	if targetID == "" {
+		return false
+	}
+	verifySteps, actionSteps, successChecks := splitPlaybookSteps(calls)
+	preconditions := inferredPreconditions(*mem, targetID)
+	playbook := state.Playbook{
+		ID:             playbookID(targetID, intent, "shell_execute"),
+		TargetID:       targetID,
+		Intent:         intent,
+		ToolName:       "shell_execute",
+		Status:         "active",
+		Title:          playbookTitle(intent, targetName(*mem, targetID)),
+		Confidence:     0.82,
+		SuccessCount:   1,
+		FailureCount:   0,
+		LastVerifiedAt: now,
+		LastUsedAt:     now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		MatchTerms:     matchTerms(intent, task),
+		Preconditions:  preconditions,
+		VerifySteps:    verifySteps,
+		ActionSteps:    actionSteps,
+		SuccessChecks:  successChecks,
+		Notes:          "",
+	}
+
+	changed := false
+	for i, existing := range mem.Playbooks {
+		if existing.ID != playbook.ID {
+			continue
 		}
-		matches += count
-		if existing.Model != "" {
-			models[existing.Provider+"/"+existing.Model] = true
+		playbook.CreatedAt = existing.CreatedAt
+		playbook.SuccessCount = existing.SuccessCount + 1
+		playbook.FailureCount = existing.FailureCount
+		playbook.Confidence = minFloat(0.97, maxFloat(existing.Confidence, 0.82)+0.05)
+		if len(playbook.VerifySteps) == 0 {
+			playbook.VerifySteps = existing.VerifySteps
+		}
+		if len(playbook.ActionSteps) == 0 {
+			playbook.ActionSteps = existing.ActionSteps
+		}
+		if len(playbook.SuccessChecks) == 0 {
+			playbook.SuccessChecks = existing.SuccessChecks
+		}
+		mem.Playbooks[i] = playbook
+		return true
+	}
+	mem.Playbooks = append(mem.Playbooks, playbook)
+	changed = true
+	return changed
+}
+
+func applyPlaybookFailure(mem *fileState, targetID, intent string, call ObservedToolCall, now time.Time) bool {
+	if call.ToolName != "shell_execute" || targetID == "" {
+		return false
+	}
+	id := playbookID(targetID, intent, call.ToolName)
+	for i, playbook := range mem.Playbooks {
+		if playbook.ID != id {
+			continue
+		}
+		playbook.FailureCount++
+		playbook.Confidence = maxFloat(0.35, playbook.Confidence-0.15)
+		playbook.LastUsedAt = now
+		playbook.UpdatedAt = now
+		mem.Playbooks[i] = playbook
+		return true
+	}
+	return false
+}
+
+func applyCaution(mem *fileState, targetID, intent string, call ObservedToolCall, now time.Time) bool {
+	if targetID == "" {
+		return false
+	}
+	body := cautionBody(call)
+	if body == "" {
+		return false
+	}
+	caution := state.Caution{
+		ID:           cautionID(targetID, intent, call.ToolName),
+		TargetID:     targetID,
+		Intent:       intent,
+		ToolName:     call.ToolName,
+		Status:       "active",
+		Body:         body,
+		Confidence:   0.78,
+		FailureCount: 1,
+		LastSeenAt:   now,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	for i, existing := range mem.Cautions {
+		if existing.ID != caution.ID {
+			continue
+		}
+		caution.CreatedAt = existing.CreatedAt
+		caution.FailureCount = existing.FailureCount + 1
+		caution.Confidence = minFloat(0.95, maxFloat(existing.Confidence, 0.78)+0.03)
+		mem.Cautions[i] = caution
+		return true
+	}
+	mem.Cautions = append(mem.Cautions, caution)
+	return true
+}
+
+func cautionBody(call ObservedToolCall) string {
+	switch {
+	case call.PolicyDenied:
+		return "This command path was denied by policy or approval gates; verify approval before retrying. Last command: " + strings.TrimSpace(call.Command)
+	case strings.TrimSpace(call.Result) != "":
+		return "A recent attempt failed: " + oneSentence(call.Result)
+	default:
+		return ""
+	}
+}
+
+func (m *Manager) applyObservedFacts(mem *fileState, targetID string, call ObservedToolCall, now time.Time) bool {
+	if targetID == "" || call.ToolName != "shell_execute" || !call.Success {
+		return false
+	}
+	facts := extractFacts(call.Command, call.Result, targetID, now)
+	if len(facts) == 0 {
+		return false
+	}
+	idx := targetIndex(*mem, targetID)
+	if idx < 0 {
+		return false
+	}
+	target := mem.Targets[idx]
+	before := len(target.Facts)
+	for _, fact := range facts {
+		target.Facts = upsertFact(target.Facts, fact)
+		switch fact.Key {
+		case "hostname":
+			target.Hostnames = append(target.Hostnames, strings.ToLower(fact.Value))
+			if target.Target.PrimaryName == "" {
+				target.Target.PrimaryName = fact.Value
+			}
 		}
 	}
-	return matches, models
+	target.Facts = dedupeFacts(target.Facts)
+	target.Hostnames = dedupeStrings(target.Hostnames)
+	mem.Targets[idx] = target
+	if targetID == mem.RuntimeHostID {
+		mem.RuntimeHostFacts = mergeFactLists(mem.RuntimeHostFacts, facts)
+	}
+	return len(target.Facts) != before || len(facts) > 0
 }
 
-func promotedScope(entry state.MemoryEntry, models map[string]bool) (scope, provider, model string) {
-	scope = entry.Scope
-	provider = entry.Provider
-	model = entry.Model
-	if len(models) > 1 {
-		return "global", "", ""
+func markTargetVerified(mem *fileState, targetID string, now time.Time) bool {
+	idx := targetIndex(*mem, targetID)
+	if idx < 0 {
+		return false
 	}
-	return scope, provider, model
+	target := mem.Targets[idx]
+	changed := false
+	if target.Target.Status != "active" {
+		target.Target.Status = "active"
+		changed = true
+	}
+	if target.Target.Confidence < 0.85 {
+		target.Target.Confidence = 0.85
+		changed = true
+	}
+	if target.Target.LastSeenAt.Before(now) {
+		target.Target.LastSeenAt = now
+		changed = true
+	}
+	mem.Targets[idx] = target
+	return changed
 }
 
-func defaultScope(lesson Lesson) string {
-	if lesson.Scope != "" {
-		return lesson.Scope
+func targetIndex(mem fileState, targetID string) int {
+	for i, target := range mem.Targets {
+		if target.Target.ID == targetID {
+			return i
+		}
 	}
-	if lesson.Provider != "" && lesson.Model != "" && lesson.ToolName != "" {
-		return "model_tool"
-	}
-	if lesson.Provider != "" && lesson.Model != "" {
-		return "model"
-	}
-	if lesson.ToolName != "" {
-		return "tool"
-	}
-	if lesson.TaskClass != "" {
-		return "task_class"
-	}
-	return "global"
+	return -1
 }
 
-func entryID(source string, lesson Lesson) string {
-	sum := sha1.Sum([]byte(source + "|" + normalizeLesson(lesson.Body) + "|" + lesson.Provider + "|" + lesson.Model + "|" + lesson.ToolName + "|" + string(lesson.Phase) + "|" + string(lesson.TaskClass)))
+func splitPlaybookSteps(calls []ObservedToolCall) ([]string, []string, []string) {
+	if len(calls) == 0 {
+		return nil, nil, nil
+	}
+	var verify, action, checks []string
+	for i, call := range calls {
+		command := strings.TrimSpace(call.Command)
+		if command == "" {
+			continue
+		}
+		switch {
+		case looksLikeVerifyCommand(command) && len(action) == 0:
+			verify = append(verify, command)
+		case i == len(calls)-1 && looksLikeVerifyCommand(command) && len(calls) > 1:
+			checks = append(checks, command)
+		default:
+			action = append(action, command)
+		}
+	}
+	if len(action) == 0 {
+		action = append(action, strings.TrimSpace(calls[len(calls)-1].Command))
+	}
+	return dedupeStrings(verify), dedupeStrings(action), dedupeStrings(checks)
+}
+
+func looksLikeVerifyCommand(command string) bool {
+	lower := strings.ToLower(command)
+	verifyTokens := []string{
+		"status",
+		"is-active",
+		"journalctl",
+		"hostname",
+		"uname",
+		"docker ps",
+		"go test",
+		"curl ",
+	}
+	for _, token := range verifyTokens {
+		if strings.Contains(lower, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func inferredPreconditions(mem fileState, targetID string) []string {
+	facts := factsForTarget(mem, targetID)
+	var out []string
+	for _, fact := range facts {
+		switch fact.Key {
+		case "package_manager", "service_manager", "container_runtime", "os_distribution":
+			out = append(out, fact.Key+"="+fact.Value)
+		}
+	}
+	return dedupeStrings(out)
+}
+
+func matchTerms(intent, task string) []string {
+	items := []string{intent}
+	for _, token := range strings.Fields(strings.ToLower(task)) {
+		token = strings.Trim(token, "`'\",.:;()[]{}")
+		if len(token) < 4 {
+			continue
+		}
+		items = append(items, token)
+		if len(items) >= 6 {
+			break
+		}
+	}
+	return dedupeStrings(items)
+}
+
+func playbookTitle(intent, target string) string {
+	switch intent {
+	case IntentInspectLogs:
+		return "Inspect Logs On " + target
+	case IntentInspectServiceStatus:
+		return "Inspect Service Status On " + target
+	case IntentRestartService:
+		return "Restart Service On " + target
+	case IntentInstallDependency:
+		return "Install Dependency On " + target
+	case IntentDockerRecovery:
+		return "Docker Recovery On " + target
+	case IntentPortConflict:
+		return "Port Conflict Recovery On " + target
+	case IntentNetworkDebug:
+		return "Network Debug On " + target
+	case IntentBuildFix:
+		return "Build Fix On " + target
+	case IntentTestFix:
+		return "Test Fix On " + target
+	case IntentConfigEdit:
+		return "Config Edit On " + target
+	case IntentSSHConnectivity:
+		return "SSH Connectivity On " + target
+	default:
+		return "General Procedure On " + target
+	}
+}
+
+func extractFacts(command, result, targetID string, now time.Time) []state.HostFact {
+	commandLower := strings.ToLower(command)
+	result = strings.TrimSpace(result)
+	var out []state.HostFact
+	add := func(key, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		out = append(out, state.HostFact{
+			HostID:     targetID,
+			Key:        key,
+			Value:      value,
+			Confidence: 1,
+			VerifiedAt: now,
+			UpdatedAt:  now,
+		})
+	}
+
+	if strings.Contains(commandLower, "hostname") || strings.Contains(commandLower, "uname -n") {
+		if line := firstOutputLine(result); line != "" {
+			add("hostname", strings.ToLower(line))
+		}
+	}
+	if strings.Contains(result, "PRETTY_NAME=") || strings.Contains(result, "\nID=") || strings.HasPrefix(result, "ID=") {
+		for _, raw := range strings.Split(result, "\n") {
+			line := strings.TrimSpace(raw)
+			switch {
+			case strings.HasPrefix(line, "ID="):
+				add("os_distribution", strings.Trim(line[3:], `"`))
+			case strings.HasPrefix(line, "PRETTY_NAME="):
+				add("os_pretty_name", strings.Trim(line[len("PRETTY_NAME="):], `"`))
+			}
+		}
+	}
+	switch {
+	case strings.Contains(commandLower, "apt-get") || strings.Contains(commandLower, " apt "):
+		add("package_manager", "apt")
+	case strings.Contains(commandLower, "dnf"):
+		add("package_manager", "dnf")
+	case strings.Contains(commandLower, "yum"):
+		add("package_manager", "yum")
+	case strings.Contains(commandLower, "apk"):
+		add("package_manager", "apk")
+	case strings.Contains(commandLower, "brew"):
+		add("package_manager", "brew")
+	case strings.Contains(commandLower, "pacman"):
+		add("package_manager", "pacman")
+	}
+	if strings.Contains(commandLower, "systemctl") {
+		add("service_manager", "systemd")
+	}
+	if strings.Contains(commandLower, "docker") {
+		add("container_runtime", "docker")
+	}
+	return dedupeFacts(out)
+}
+
+func firstOutputLine(result string) string {
+	for _, raw := range strings.Split(result, "\n") {
+		line := strings.TrimSpace(raw)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func oneSentence(text string) string {
+	text = strings.TrimSpace(text)
+	if idx := strings.IndexAny(text, "\n"); idx >= 0 {
+		text = text[:idx]
+	}
+	if len(text) > 220 {
+		text = strings.TrimSpace(text[:220])
+	}
+	return text
+}
+
+func upsertFinding(existing []state.Finding, finding state.Finding) ([]state.Finding, bool) {
+	for i, item := range existing {
+		if item.ID != finding.ID {
+			continue
+		}
+		finding.CreatedAt = item.CreatedAt
+		finding.SeenCount = item.SeenCount + 1
+		finding.Confidence = maxFloat(item.Confidence, finding.Confidence)
+		existing[i] = finding
+		return existing, true
+	}
+	return append(existing, finding), true
+}
+
+func playbookID(targetID, intent, toolName string) string {
+	return stableID("playbook", targetID, intent, toolName)
+}
+
+func cautionID(targetID, intent, toolName string) string {
+	return stableID("caution", targetID, intent, toolName)
+}
+
+func findingID(seed, body string) string {
+	return stableID("finding", seed, normalize(body))
+}
+
+func stableID(parts ...string) string {
+	sum := sha1.Sum([]byte(strings.Join(parts, "|")))
 	return hex.EncodeToString(sum[:])
 }
 
-func normalizeLesson(body string) string {
+func normalize(body string) string {
 	body = strings.ToLower(strings.TrimSpace(body))
-	replacer := strings.NewReplacer(",", "", ".", "", ":", "", ";", "", "`", "", "\"", "", "'", "")
-	body = replacer.Replace(body)
+	body = strings.NewReplacer(",", "", ".", "", ":", "", ";", "", "`", "", "\"", "", "'", "").Replace(body)
 	body = strings.Join(strings.Fields(body), " ")
 	return body
 }
@@ -208,94 +571,9 @@ func maxFloat(a, b float64) float64 {
 	return b
 }
 
-func filterPersistableLessons(lessons []Lesson) []Lesson {
-	var out []Lesson
-	seen := make(map[string]bool, len(lessons))
-	for _, lesson := range lessons {
-		body := strings.TrimSpace(lesson.Body)
-		if body == "" {
-			continue
-		}
-		if lesson.Confidence > 0 && lesson.Confidence < 0.65 {
-			continue
-		}
-		if looksGenericLesson(body) {
-			continue
-		}
-		key := strings.ToLower(strings.TrimSpace(lesson.Scope + "|" + lesson.Provider + "|" + lesson.Model + "|" + lesson.ToolName + "|" + string(lesson.TaskClass) + "|" + body))
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		lesson.Body = body
-		out = append(out, lesson)
+func minFloat(a, b float64) float64 {
+	if a < b {
+		return a
 	}
-	return out
-}
-
-func looksGenericLesson(body string) bool {
-	lower := strings.ToLower(strings.TrimSpace(body))
-	genericPrefixes := []string{
-		"if ",
-		"when ",
-		"use ",
-		"prefer ",
-		"favor ",
-		"remember ",
-	}
-	if strings.Contains(lower, "fails repeatedly") || strings.Contains(lower, "refresh context") || strings.Contains(lower, "simplify the next tool request") {
-		return true
-	}
-	for _, prefix := range genericPrefixes {
-		if strings.HasPrefix(lower, prefix) && !strings.Contains(lower, "`") && !strings.Contains(lower, "/") {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *Manager) loadEntriesForSource(ctx context.Context, sourceName string) ([]state.MemoryEntry, error) {
-	if m.store != nil && m.store.Available() {
-		return m.store.ListMemoryEntries(ctx, state.MemoryFilter{
-			SourceFiles: []string{sourceName},
-			OnlyActive:  true,
-		})
-	}
-	return m.parseFile(sourceName, m.managedPath(sourceName))
-}
-
-func (m *Manager) loadEntriesForPromotion(ctx context.Context) ([]state.MemoryEntry, error) {
-	if m.store != nil && m.store.Available() {
-		return m.store.ListMemoryEntries(ctx, state.MemoryFilter{
-			SourceFiles: managedSourceFiles(),
-			OnlyActive:  true,
-		})
-	}
-	return m.parseManagedFiles()
-}
-
-func mergeEntries(existing, additions []state.MemoryEntry) []state.MemoryEntry {
-	merged := append([]state.MemoryEntry{}, existing...)
-	indexByID := make(map[string]int, len(existing))
-	for i, entry := range merged {
-		indexByID[entry.ID] = i
-	}
-	for _, add := range additions {
-		if idx, ok := indexByID[add.ID]; ok {
-			prev := merged[idx]
-			add.CreatedAt = prev.CreatedAt
-			add.SeenCount = prev.SeenCount + 1
-			merged[idx] = add
-			continue
-		}
-		merged = append(merged, add)
-		indexByID[add.ID] = len(merged) - 1
-	}
-	sort.SliceStable(merged, func(i, j int) bool {
-		if merged[i].UpdatedAt.Equal(merged[j].UpdatedAt) {
-			return merged[i].Body < merged[j].Body
-		}
-		return merged[i].UpdatedAt.After(merged[j].UpdatedAt)
-	})
-	return merged
+	return b
 }

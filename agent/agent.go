@@ -36,6 +36,14 @@ type MemoryCurator interface {
 	PersistLessons(ctx context.Context, lessons []memory.Lesson) error
 }
 
+type memoryTargetResolver interface {
+	ResolveTarget(ctx context.Context, input memory.TargetResolutionInput) (memory.TargetResolution, error)
+}
+
+type structuredMemoryCurator interface {
+	CurateRunOutcome(ctx context.Context, outcome memory.RunOutcome) error
+}
+
 // RunRecorder stores a structured run record.
 type RunRecorder interface {
 	RecordRun(ctx context.Context, record state.RunRecord) error
@@ -138,7 +146,7 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 	}
 	routingSelections = append(routingSelections, execSelection)
 
-	output, phaseRecord, toolOutcomes, execErr := a.runExecutionPhase(ctx, prompt, taskClass, toolNames, planningNotes, execSelection)
+	output, phaseRecord, toolOutcomes, observedCalls, targetResolution, execErr := a.runExecutionPhase(ctx, prompt, taskClass, toolNames, planningNotes, execSelection)
 	runRecord.Phases = append(runRecord.Phases, phaseRecord)
 	runRecord.Tools = append(runRecord.Tools, toolOutcomes...)
 	result.Output = output
@@ -147,22 +155,35 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 		err = execErr
 	}
 
-	var curationLessons []memory.Lesson
 	if a.opts.MemoryCurator != nil {
-		if a.opts.RoutingConfig.Enabled && a.opts.Router != nil {
-			curationSelection, curationRecord, modelLessons, curErr := a.runCurationPhase(ctx, prompt, taskClass, output, toolOutcomes, execErr)
-			routingSelections = append(routingSelections, curationSelection)
-			result.Routing = routingSelections
-			if curationRecord.Provider != "" {
-				runRecord.Phases = append(runRecord.Phases, curationRecord)
+		if curator, ok := a.opts.MemoryCurator.(structuredMemoryCurator); ok {
+			if curErr := curator.CurateRunOutcome(ctx, memory.RunOutcome{
+				Task:           prompt,
+				TaskClass:      taskClass,
+				Target:         targetResolution,
+				Output:         output,
+				ExecutionError: errString(execErr),
+				ToolCalls:      observedCalls,
+			}); curErr != nil {
+				logger.Warn("failed to curate run outcome", "error", curErr)
 			}
-			if curErr == nil && len(modelLessons) > 0 {
-				curationLessons = modelLessons
+		} else {
+			var curationLessons []memory.Lesson
+			if a.opts.RoutingConfig.Enabled && a.opts.Router != nil {
+				curationSelection, curationRecord, modelLessons, curErr := a.runCurationPhase(ctx, prompt, taskClass, output, toolOutcomes, execErr)
+				routingSelections = append(routingSelections, curationSelection)
+				result.Routing = routingSelections
+				if curationRecord.Provider != "" {
+					runRecord.Phases = append(runRecord.Phases, curationRecord)
+				}
+				if curErr == nil && len(modelLessons) > 0 {
+					curationLessons = modelLessons
+				}
 			}
-		}
-		if len(curationLessons) > 0 {
-			if persistErr := a.opts.MemoryCurator.PersistLessons(ctx, curationLessons); persistErr != nil {
-				logger.Warn("failed to persist lessons", "error", persistErr)
+			if len(curationLessons) > 0 {
+				if persistErr := a.opts.MemoryCurator.PersistLessons(ctx, curationLessons); persistErr != nil {
+					logger.Warn("failed to persist lessons", "error", persistErr)
+				}
 			}
 		}
 	}
@@ -184,18 +205,22 @@ func (a *Agent) runPlanningPhase(ctx context.Context, prompt string, taskClass c
 	return selection, record, strings.TrimSpace(content), nil
 }
 
-func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass core.TaskClass, toolNames []string, planningNotes string, selection core.RoutingSelection) (string, state.PhaseRecord, []state.ToolOutcome, error) {
+func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass core.TaskClass, toolNames []string, planningNotes string, selection core.RoutingSelection) (string, state.PhaseRecord, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, error) {
 	logger := log.FromContext(ctx)
+	targetResolution := a.resolveTarget(ctx, memory.TargetResolutionInput{Task: prompt})
 	execCtx := core.RetrievalContext{
-		Task:        prompt,
-		TaskClass:   taskClass,
-		Phase:       core.PhaseExecution,
-		ActiveModel: selection.Requested,
-		ToolNames:   toolNames,
+		Task:          prompt,
+		TaskClass:     taskClass,
+		Phase:         core.PhaseExecution,
+		ActiveModel:   selection.Requested,
+		RuntimeHostID: targetResolution.RuntimeHostID,
+		TargetID:      targetResolution.TargetID,
+		TargetKind:    targetResolution.TargetKind,
+		ToolNames:     toolNames,
 	}
 	retrieved, err := a.retrieveMemory(ctx, execCtx)
 	if err != nil {
-		return "", state.PhaseRecord{}, nil, err
+		return "", state.PhaseRecord{}, nil, nil, targetResolution, err
 	}
 
 	systemMessages := initialSystemMessages(retrieved, planningNotes)
@@ -212,10 +237,11 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 
 	execProvider, err := a.resolveProvider(selection.Requested.Provider)
 	if err != nil {
-		return "", phaseRecord, nil, err
+		return "", phaseRecord, nil, nil, targetResolution, err
 	}
 
 	var toolOutcomes []state.ToolOutcome
+	var observedCalls []memory.ObservedToolCall
 	var output string
 	var actualModel = selection.Requested.Model
 	var refreshed bool
@@ -249,7 +275,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				DurationMs:   duration.Milliseconds(),
 				ErrorMessage: err.Error(),
 			})
-			return "", phaseRecord, toolOutcomes, fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
+			return "", phaseRecord, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
 		}
 
 		if resp.Model != "" {
@@ -261,10 +287,17 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 		if len(resp.Message.ToolCalls) == 0 {
 			logger.Info("agent finished task")
 			phaseRecord.Success = true
-			return resp.Message.Content, phaseRecord, toolOutcomes, nil
+			return resp.Message.Content, phaseRecord, toolOutcomes, observedCalls, targetResolution, nil
 		}
 
 		for _, call := range resp.Message.ToolCalls {
+			command := commandForToolCall(call)
+			if command != "" {
+				targetResolution = a.resolveTarget(ctx, memory.TargetResolutionInput{
+					Task:    prompt,
+					Command: command,
+				})
+			}
 			toolStart := time.Now()
 			toolCtx := tools.WithToolCallContext(telemetry.WithModel(iterCtx, actualModel), call.ID, call.Function.Name)
 			tools.EmitEvent(toolCtx, tools.Event{
@@ -293,20 +326,25 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				if !refreshed && (outcome.PolicyDenied || failuresByTool[call.Function.Name] >= 2) {
 					refreshed = true
 					refresh, refreshErr := a.retrieveMemory(ctx, core.RetrievalContext{
-						Task:        prompt,
-						TaskClass:   taskClass,
-						Phase:       core.PhaseExecution,
-						ActiveModel: selection.Requested,
-						ActualModel: core.NewModelRef(selection.Requested.Provider, actualModel),
-						ToolNames:   toolNames,
+						Task:          prompt,
+						TaskClass:     taskClass,
+						Phase:         core.PhaseExecution,
+						ActiveModel:   selection.Requested,
+						ActualModel:   core.NewModelRef(selection.Requested.Provider, actualModel),
+						RuntimeHostID: targetResolution.RuntimeHostID,
+						TargetID:      targetResolution.TargetID,
+						TargetKind:    targetResolution.TargetKind,
+						ToolNames:     toolNames,
 						Trouble: &core.ToolTrouble{
 							Tool:        call.Function.Name,
 							DenialClass: outcome.DenialClass,
 							Repeated:    failuresByTool[call.Function.Name] >= 2,
 						},
 					})
-					if refreshErr == nil && strings.TrimSpace(refresh.Learned) != "" {
-						chat.AddSystem("Refreshed learned context after tool trouble:\n" + refresh.Learned)
+					if refreshErr == nil {
+						if refreshedText := retrievedBrief(refresh); strings.TrimSpace(refreshedText) != "" {
+							chat.AddSystem("Refreshed learned context after tool trouble:\n" + refreshedText)
+						}
 					}
 				}
 			}
@@ -318,11 +356,20 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				ErrorMessage: outcome.ErrorMessage,
 			})
 			toolOutcomes = append(toolOutcomes, outcome)
+			observedCalls = append(observedCalls, memory.ObservedToolCall{
+				ToolName:     call.Function.Name,
+				Command:      command,
+				Result:       resultStr,
+				Success:      toolErr == nil,
+				PolicyDenied: outcome.PolicyDenied,
+				DenialClass:  outcome.DenialClass,
+				DurationMs:   durationMs,
+			})
 			chat.AddToolResult(call.ID, resultStr)
 		}
 	}
 
-	return output, phaseRecord, toolOutcomes, fmt.Errorf("agent exceeded max iterations (%d) without completing the task", a.opts.MaxIterations)
+	return output, phaseRecord, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("agent exceeded max iterations (%d) without completing the task", a.opts.MaxIterations)
 }
 
 func (a *Agent) runCurationPhase(ctx context.Context, prompt string, taskClass core.TaskClass, output string, tools []state.ToolOutcome, execErr error) (core.RoutingSelection, state.PhaseRecord, []memory.Lesson, error) {
@@ -378,12 +425,16 @@ func (a *Agent) runCurationPhase(ctx context.Context, prompt string, taskClass c
 }
 
 func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection core.RoutingSelection, taskClass core.TaskClass, toolNames []string, userPrompt string) (string, state.PhaseRecord, string, error) {
+	targetResolution := a.resolveTarget(ctx, memory.TargetResolutionInput{Task: userPrompt})
 	retrieved, err := a.retrieveMemory(ctx, core.RetrievalContext{
-		Task:        userPrompt,
-		TaskClass:   taskClass,
-		Phase:       phase,
-		ActiveModel: selection.Requested,
-		ToolNames:   toolNames,
+		Task:          userPrompt,
+		TaskClass:     taskClass,
+		Phase:         phase,
+		ActiveModel:   selection.Requested,
+		RuntimeHostID: targetResolution.RuntimeHostID,
+		TargetID:      targetResolution.TargetID,
+		TargetKind:    targetResolution.TargetKind,
+		ToolNames:     toolNames,
 	})
 	if err != nil {
 		return "", state.PhaseRecord{}, "", err
@@ -432,7 +483,7 @@ func (a *Agent) retrieveMemory(ctx context.Context, input core.RetrievalContext)
 			BuiltInRules: `You are CvkeHarness.
 Before deciding to use a tool, think through the problem step-by-step.
 If you encounter an error using a tool, read the error message carefully and try a different approach or adjust your arguments.`,
-			Learned: fmt.Sprintf("You are currently running as %s.", input.ActiveModel.String()),
+			RuntimeHostSummary: fmt.Sprintf("Runtime host summary:\n- active model: %s", input.ActiveModel.String()),
 		}, nil
 	}
 	return a.opts.MemoryRetriever.Retrieve(ctx, input)
@@ -449,8 +500,8 @@ func initialSystemMessages(retrieved memory.RetrievalResult, planningNotes strin
 	if strings.TrimSpace(retrieved.Soul) != "" {
 		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.Soul)})
 	}
-	if strings.TrimSpace(retrieved.Learned) != "" {
-		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.Learned)})
+	if text := retrievedBrief(retrieved); strings.TrimSpace(text) != "" {
+		messages = append(messages, provider.Message{Role: "system", Content: text})
 	}
 	if strings.TrimSpace(planningNotes) != "" {
 		messages = append(messages, provider.Message{Role: "system", Content: "Planning notes:\n" + strings.TrimSpace(planningNotes)})
@@ -503,4 +554,46 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (a *Agent) resolveTarget(ctx context.Context, input memory.TargetResolutionInput) memory.TargetResolution {
+	resolver, ok := a.opts.MemoryRetriever.(memoryTargetResolver)
+	if !ok {
+		return memory.TargetResolution{}
+	}
+	resolution, err := resolver.ResolveTarget(ctx, input)
+	if err != nil {
+		return memory.TargetResolution{}
+	}
+	return resolution
+}
+
+func retrievedBrief(retrieved memory.RetrievalResult) string {
+	var parts []string
+	for _, section := range []string{
+		retrieved.RuntimeHostSummary,
+		retrieved.TargetSummary,
+		retrieved.PlaybookBrief,
+		retrieved.CautionBrief,
+		retrieved.FallbackBrief,
+	} {
+		section = strings.TrimSpace(section)
+		if section != "" {
+			parts = append(parts, section)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func commandForToolCall(call provider.ToolCall) string {
+	if call.Function.Name != "shell_execute" {
+		return ""
+	}
+	var payload struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(call.Function.Arguments), &payload); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Command)
 }

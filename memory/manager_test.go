@@ -6,12 +6,58 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/state"
 )
 
-func TestRetrieveUsesModelScopedMemory(t *testing.T) {
+func TestEnsureFilesCreatesStructuredMemoryAndStableRuntimeHost(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	manager := NewManager(dir, state.Open(""), 3)
+	manager.hostname = func() string { return "builder.local" }
+
+	if err := manager.EnsureFiles(); err != nil {
+		t.Fatalf("EnsureFiles returned error: %v", err)
+	}
+
+	for _, name := range []string{
+		OperatorFile,
+		SoulFile,
+		TargetsFile,
+		HostFile,
+		PlaybooksFile,
+		FindingsFile,
+		CautionsFile,
+	} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("expected %s to exist: %v", name, err)
+		}
+	}
+
+	stateA, err := manager.parseManagedFiles()
+	if err != nil {
+		t.Fatalf("parseManagedFiles returned error: %v", err)
+	}
+	if stateA.RuntimeHostID == "" {
+		t.Fatal("expected runtime host id to be created")
+	}
+
+	if err := manager.EnsureFiles(); err != nil {
+		t.Fatalf("second EnsureFiles returned error: %v", err)
+	}
+	stateB, err := manager.parseManagedFiles()
+	if err != nil {
+		t.Fatalf("second parseManagedFiles returned error: %v", err)
+	}
+	if stateA.RuntimeHostID != stateB.RuntimeHostID {
+		t.Fatalf("expected runtime host id to stay stable, got %q then %q", stateA.RuntimeHostID, stateB.RuntimeHostID)
+	}
+}
+
+func TestResolveTargetCreatesProvisionalSSHRecordAndMergesHostname(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -19,101 +65,243 @@ func TestRetrieveUsesModelScopedMemory(t *testing.T) {
 	defer store.Close()
 
 	manager := NewManager(dir, store, 3)
-	if err := manager.EnsureFiles(); err != nil {
-		t.Fatalf("EnsureFiles returned error: %v", err)
+	manager.hostname = func() string { return "runtime.local" }
+
+	ctx := context.Background()
+	first, err := manager.ResolveTarget(ctx, TargetResolutionInput{Command: "ssh prod-app systemctl status nginx"})
+	if err != nil {
+		t.Fatalf("ResolveTarget returned error: %v", err)
+	}
+	if first.TargetKind != TargetKindSSH {
+		t.Fatalf("expected ssh target kind, got %q", first.TargetKind)
 	}
 
-	if err := manager.PersistLessons(context.Background(), []Lesson{
-		{Body: "Model A prefers tighter shell commands.", Provider: "openrouter", Model: "model-a", Phase: core.PhaseExecution, Confidence: 0.9},
-		{Body: "Model B benefits from a short recap before acting.", Provider: "openrouter", Model: "model-b", Phase: core.PhaseExecution, Confidence: 0.9},
+	if err := manager.CurateRunOutcome(ctx, RunOutcome{
+		Task:   "inspect remote host identity",
+		Target: first,
+		ToolCalls: []ObservedToolCall{
+			{
+				ToolName: "shell_execute",
+				Command:  "ssh prod-app hostname",
+				Result:   "web-01.internal\n",
+				Success:  true,
+			},
+		},
 	}); err != nil {
-		t.Fatalf("PersistLessons returned error: %v", err)
+		t.Fatalf("CurateRunOutcome returned error: %v", err)
 	}
 
-	gotA, err := manager.Retrieve(context.Background(), core.RetrievalContext{
-		Task:        "debug the shell failure",
-		TaskClass:   core.TaskClassDebugging,
-		Phase:       core.PhaseExecution,
-		ActiveModel: core.NewModelRef("openrouter", "model-a"),
-	})
+	second, err := manager.ResolveTarget(ctx, TargetResolutionInput{Command: "ssh web-01.internal systemctl status nginx"})
 	if err != nil {
-		t.Fatalf("Retrieve returned error: %v", err)
+		t.Fatalf("second ResolveTarget returned error: %v", err)
 	}
-	if !strings.Contains(gotA.Learned, "Model A prefers tighter shell commands.") {
-		t.Fatalf("expected model-a memory, got %q", gotA.Learned)
-	}
-	if strings.Contains(gotA.Learned, "Model B benefits") {
-		t.Fatalf("unexpected model-b leak in learned context: %q", gotA.Learned)
-	}
-
-	gotC, err := manager.Retrieve(context.Background(), core.RetrievalContext{
-		Task:        "debug the shell failure",
-		TaskClass:   core.TaskClassDebugging,
-		Phase:       core.PhaseExecution,
-		ActiveModel: core.NewModelRef("openrouter", "model-c"),
-	})
-	if err != nil {
-		t.Fatalf("Retrieve returned error: %v", err)
-	}
-	if strings.Contains(gotC.Learned, "Model A prefers") || strings.Contains(gotC.Learned, "Model B benefits") {
-		t.Fatalf("expected model-specific memory isolation, got %q", gotC.Learned)
+	if first.TargetID != second.TargetID {
+		t.Fatalf("expected hostname enrichment to merge into one target id, got %q and %q", first.TargetID, second.TargetID)
 	}
 }
 
-func TestEnsureFilesCreatesOperatorGuide(t *testing.T) {
+func TestCurateRunOutcomeCreatesDirectUsePlaybook(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	store := state.Open(filepath.Join(dir, "state.db"))
+	defer store.Close()
+
+	manager := NewManager(dir, store, 3)
+	manager.hostname = func() string { return "runtime.local" }
+
+	ctx := context.Background()
+	target, err := manager.ResolveTarget(ctx, TargetResolutionInput{Command: "ssh prod-web systemctl status nginx"})
+	if err != nil {
+		t.Fatalf("ResolveTarget returned error: %v", err)
+	}
+
+	if err := manager.CurateRunOutcome(ctx, RunOutcome{
+		Task:   "restart the nginx service on prod-web",
+		Target: target,
+		ToolCalls: []ObservedToolCall{
+			{ToolName: "shell_execute", Command: "ssh prod-web systemctl status nginx --no-pager", Result: "active\n", Success: true},
+			{ToolName: "shell_execute", Command: "ssh prod-web sudo systemctl restart nginx", Result: "", Success: true},
+			{ToolName: "shell_execute", Command: "ssh prod-web systemctl is-active nginx", Result: "active\n", Success: true},
+		},
+	}); err != nil {
+		t.Fatalf("CurateRunOutcome returned error: %v", err)
+	}
+
+	retrieved, err := manager.Retrieve(ctx, core.RetrievalContext{
+		Task:          "restart the nginx service on prod-web",
+		TaskClass:     core.TaskClassDebugging,
+		Phase:         core.PhaseExecution,
+		ActiveModel:   core.NewModelRef("openrouter", "model-a"),
+		RuntimeHostID: target.RuntimeHostID,
+		TargetID:      target.TargetID,
+		TargetKind:    target.TargetKind,
+		ToolNames:     []string{"shell_execute"},
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if !strings.Contains(retrieved.PlaybookBrief, "ssh prod-web sudo systemctl restart nginx") {
+		t.Fatalf("expected playbook brief to include restart command, got %q", retrieved.PlaybookBrief)
+	}
+	if !strings.Contains(retrieved.PlaybookBrief, "direct-use allowed") {
+		t.Fatalf("expected fresh successful playbook to be direct-use eligible, got %q", retrieved.PlaybookBrief)
+	}
+}
+
+func TestStaleOrFailedPlaybookRendersVerifyFirst(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := state.Open(filepath.Join(dir, "state.db"))
+	defer store.Close()
+
+	manager := NewManager(dir, store, 3)
+	manager.hostname = func() string { return "runtime.local" }
+
+	ctx := context.Background()
+	target, err := manager.ResolveTarget(ctx, TargetResolutionInput{Command: "ssh prod-web systemctl status nginx"})
+	if err != nil {
+		t.Fatalf("ResolveTarget returned error: %v", err)
+	}
+
+	if err := manager.CurateRunOutcome(ctx, RunOutcome{
+		Task:   "restart nginx on prod-web",
+		Target: target,
+		ToolCalls: []ObservedToolCall{
+			{ToolName: "shell_execute", Command: "ssh prod-web sudo systemctl restart nginx", Result: "", Success: true},
+		},
+	}); err != nil {
+		t.Fatalf("CurateRunOutcome returned error: %v", err)
+	}
+
+	memState, err := manager.loadState(ctx)
+	if err != nil {
+		t.Fatalf("loadState returned error: %v", err)
+	}
+	if len(memState.Playbooks) != 1 {
+		t.Fatalf("expected one playbook, got %d", len(memState.Playbooks))
+	}
+	memState.Playbooks[0].LastVerifiedAt = time.Now().UTC().Add(-45 * 24 * time.Hour)
+	if err := manager.writeAllState(ctx, memState, "test stale playbook"); err != nil {
+		t.Fatalf("writeAllState returned error: %v", err)
+	}
+
+	retrieved, err := manager.Retrieve(ctx, core.RetrievalContext{
+		Task:          "restart nginx on prod-web",
+		TaskClass:     core.TaskClassDebugging,
+		Phase:         core.PhaseExecution,
+		ActiveModel:   core.NewModelRef("openrouter", "model-a"),
+		RuntimeHostID: target.RuntimeHostID,
+		TargetID:      target.TargetID,
+		TargetKind:    target.TargetKind,
+		ToolNames:     []string{"shell_execute"},
+	})
+	if err != nil {
+		t.Fatalf("Retrieve returned error: %v", err)
+	}
+	if !strings.Contains(retrieved.PlaybookBrief, "verify-first") {
+		t.Fatalf("expected stale playbook to render verify-first, got %q", retrieved.PlaybookBrief)
+	}
+
+	if err := manager.CurateRunOutcome(ctx, RunOutcome{
+		Task:   "restart nginx on prod-web",
+		Target: target,
+		ToolCalls: []ObservedToolCall{
+			{
+				ToolName: "shell_execute",
+				Command:  "ssh prod-web sudo systemctl restart nginx",
+				Result:   "permission denied",
+				Success:  false,
+			},
+		},
+		ExecutionError: "command failed",
+	}); err != nil {
+		t.Fatalf("CurateRunOutcome failure returned error: %v", err)
+	}
+
+	memState, err = manager.loadState(ctx)
+	if err != nil {
+		t.Fatalf("loadState after failure returned error: %v", err)
+	}
+	if memState.Playbooks[0].FailureCount == 0 {
+		t.Fatal("expected playbook failure count to increase")
+	}
+	if len(memState.Cautions) == 0 {
+		t.Fatal("expected a caution to be created after failure")
+	}
+}
+
+func TestLegacyMemoryImportsIntoFindingsNeedsCuration(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, LegacyMemoryFile), []byte("# Memory\n\n- Old durable note\n"), 0644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
 	manager := NewManager(dir, state.Open(""), 3)
+	manager.hostname = func() string { return "runtime.local" }
 
 	if err := manager.EnsureFiles(); err != nil {
 		t.Fatalf("EnsureFiles returned error: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, OperatorFile))
+	data, err := os.ReadFile(filepath.Join(dir, FindingsFile))
 	if err != nil {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
-
 	content := string(data)
-	if !strings.Contains(content, "## Dependency Handling") {
-		t.Fatalf("expected operator guide to include dependency handling instructions, got %q", content)
+	if !strings.Contains(content, "origin: legacy_memory") {
+		t.Fatalf("expected legacy import origin metadata, got %q", content)
 	}
-	if !strings.Contains(content, "perform the install yourself") {
-		t.Fatalf("expected operator guide to prefer proactive install help, got %q", content)
+	if !strings.Contains(content, "status: needs_curation") {
+		t.Fatalf("expected needs_curation status, got %q", content)
 	}
 }
 
-func TestRetrieveIncludesOperatorGuide(t *testing.T) {
+func TestFileFallbackWorksWithoutSQLite(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	manager := NewManager(dir, state.Open(""), 3)
-	if err := manager.EnsureFiles(); err != nil {
-		t.Fatalf("EnsureFiles returned error: %v", err)
+	manager.hostname = func() string { return "runtime.local" }
+
+	ctx := context.Background()
+	target, err := manager.ResolveTarget(ctx, TargetResolutionInput{Command: "ssh prod-db hostname"})
+	if err != nil {
+		t.Fatalf("ResolveTarget returned error: %v", err)
 	}
 
-	got, err := manager.Retrieve(context.Background(), core.RetrievalContext{
-		Task:        "inspect runtime instructions",
-		TaskClass:   core.TaskClassInspection,
-		Phase:       core.PhaseExecution,
-		ActiveModel: core.NewModelRef("openrouter", "model-a"),
+	if err := manager.CurateRunOutcome(ctx, RunOutcome{
+		Task:   "check prod-db hostname",
+		Target: target,
+		ToolCalls: []ObservedToolCall{
+			{ToolName: "shell_execute", Command: "ssh prod-db hostname", Result: "db-01\n", Success: true},
+		},
+	}); err != nil {
+		t.Fatalf("CurateRunOutcome returned error: %v", err)
+	}
+
+	retrieved, err := manager.Retrieve(ctx, core.RetrievalContext{
+		Task:          "check prod-db hostname",
+		TaskClass:     core.TaskClassInspection,
+		Phase:         core.PhaseExecution,
+		ActiveModel:   core.NewModelRef("openrouter", "model-a"),
+		RuntimeHostID: target.RuntimeHostID,
+		TargetID:      target.TargetID,
+		TargetKind:    target.TargetKind,
+		ToolNames:     []string{"shell_execute"},
 	})
 	if err != nil {
 		t.Fatalf("Retrieve returned error: %v", err)
 	}
-	if !strings.Contains(got.Operator, "## File Roles") {
-		t.Fatalf("expected operator guide to be retrieved, got %q", got.Operator)
-	}
-	if !strings.Contains(got.Operator, filepath.Join(dir, FindingsFile)) {
-		t.Fatalf("expected operator guide to expose the findings path, got %q", got.Operator)
-	}
-	if !strings.Contains(got.Operator, "memory_record_finding") {
-		t.Fatalf("expected operator guide to mention the ad hoc finding tool, got %q", got.Operator)
+	if !strings.Contains(retrieved.TargetSummary, "db-01") {
+		t.Fatalf("expected file-backed target facts in retrieval, got %q", retrieved.TargetSummary)
 	}
 }
 
-func TestRepeatedCrossModelLessonPromotesToGlobalMemory(t *testing.T) {
+func TestRollbackRestoresFindingsAndReindexes(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -121,80 +309,32 @@ func TestRepeatedCrossModelLessonPromotesToGlobalMemory(t *testing.T) {
 	defer store.Close()
 
 	manager := NewManager(dir, store, 3)
-	if err := manager.EnsureFiles(); err != nil {
-		t.Fatalf("EnsureFiles returned error: %v", err)
+	manager.hostname = func() string { return "runtime.local" }
+
+	ctx := context.Background()
+	if err := manager.PersistLessons(ctx, []Lesson{{Body: "First note", Confidence: 0.7}}); err != nil {
+		t.Fatalf("PersistLessons first returned error: %v", err)
+	}
+	if err := manager.PersistLessons(ctx, []Lesson{{Body: "Second note", Confidence: 0.7}}); err != nil {
+		t.Fatalf("PersistLessons second returned error: %v", err)
 	}
 
-	body := "One command per shell_execute call keeps recovery simpler after failures."
-	if err := manager.PersistLessons(context.Background(), []Lesson{
-		{Body: body, Provider: "openrouter", Model: "model-a", ToolName: "shell_execute", Phase: core.PhaseExecution, Confidence: 0.8},
-	}); err != nil {
-		t.Fatalf("PersistLessons returned error: %v", err)
-	}
-	if err := manager.PersistLessons(context.Background(), []Lesson{
-		{Body: body, Provider: "openrouter", Model: "model-b", ToolName: "shell_execute", Phase: core.PhaseExecution, Confidence: 0.8},
-	}); err != nil {
-		t.Fatalf("PersistLessons returned error: %v", err)
-	}
-
-	got, err := manager.Retrieve(context.Background(), core.RetrievalContext{
-		Task:        "run shell diagnostics",
-		TaskClass:   core.TaskClassShellHeavy,
-		Phase:       core.PhaseExecution,
-		ActiveModel: core.NewModelRef("openrouter", "model-c"),
-		ToolNames:   []string{"shell_execute"},
-	})
-	if err != nil {
-		t.Fatalf("Retrieve returned error: %v", err)
-	}
-	if !strings.Contains(got.Learned, body) {
-		t.Fatalf("expected promoted global memory, got %q", got.Learned)
-	}
-}
-
-func TestRollbackRestoresPriorMemorySnapshot(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	store := state.Open(filepath.Join(dir, "state.db"))
-	defer store.Close()
-
-	manager := NewManager(dir, store, 3)
-	if err := manager.EnsureFiles(); err != nil {
-		t.Fatalf("EnsureFiles returned error: %v", err)
-	}
-
-	if err := manager.PersistLessons(context.Background(), []Lesson{
-		{Body: "First lesson", Provider: "openrouter", Model: "model-a", Phase: core.PhaseExecution, Confidence: 0.7},
-	}); err != nil {
-		t.Fatalf("PersistLessons returned error: %v", err)
-	}
-	if err := manager.PersistLessons(context.Background(), []Lesson{
-		{Body: "Second lesson", Provider: "openrouter", Model: "model-a", Phase: core.PhaseExecution, Confidence: 0.7},
-	}); err != nil {
-		t.Fatalf("PersistLessons returned error: %v", err)
-	}
-
-	snapshots, err := store.ListSnapshots(context.Background())
+	snapshots, err := store.ListSnapshots(ctx)
 	if err != nil {
 		t.Fatalf("ListSnapshots returned error: %v", err)
 	}
-	if len(snapshots) == 0 {
-		t.Fatal("expected snapshots to be recorded")
-	}
-
-	latestFindingsSnapshot := ""
+	var findingsSnapshot string
 	for _, snapshot := range snapshots {
 		if snapshot.SourceFile == FindingsFile {
-			latestFindingsSnapshot = snapshot.ID
+			findingsSnapshot = snapshot.ID
 			break
 		}
 	}
-	if latestFindingsSnapshot == "" {
-		t.Fatal("expected findings snapshot")
+	if findingsSnapshot == "" {
+		t.Fatal("expected at least one findings snapshot")
 	}
 
-	if err := manager.Rollback(context.Background(), latestFindingsSnapshot); err != nil {
+	if err := manager.Rollback(ctx, findingsSnapshot); err != nil {
 		t.Fatalf("Rollback returned error: %v", err)
 	}
 
@@ -203,220 +343,10 @@ func TestRollbackRestoresPriorMemorySnapshot(t *testing.T) {
 		t.Fatalf("ReadFile returned error: %v", err)
 	}
 	content := string(data)
-	if !strings.Contains(content, "First lesson") {
-		t.Fatalf("expected restored first lesson, got %q", content)
+	if !strings.Contains(content, "First note") {
+		t.Fatalf("expected rollback to restore first note, got %q", content)
 	}
-	if strings.Contains(content, "Second lesson") {
-		t.Fatalf("expected second lesson to be rolled back, got %q", content)
-	}
-
-	retrieved, err := manager.Retrieve(context.Background(), core.RetrievalContext{
-		Task:        "inspect memory",
-		TaskClass:   core.TaskClassInspection,
-		Phase:       core.PhaseExecution,
-		ActiveModel: core.NewModelRef("openrouter", "model-a"),
-	})
-	if err != nil {
-		t.Fatalf("Retrieve returned error: %v", err)
-	}
-	if strings.Contains(retrieved.Learned, "Second lesson") {
-		t.Fatalf("expected rollback to deactivate stale DB memory, got %q", retrieved.Learned)
-	}
-}
-
-func TestFileFallbackWorksWhenStateDBUnavailable(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	manager := NewManager(dir, state.Open(""), 3)
-	if err := manager.EnsureFiles(); err != nil {
-		t.Fatalf("EnsureFiles returned error: %v", err)
-	}
-	if err := manager.PersistLessons(context.Background(), []Lesson{
-		{Body: "Fallback file memory still works.", Provider: "openrouter", Model: "fallback", Phase: core.PhaseExecution, Confidence: 0.8},
-	}); err != nil {
-		t.Fatalf("PersistLessons returned error: %v", err)
-	}
-
-	got, err := manager.Retrieve(context.Background(), core.RetrievalContext{
-		Task:        "inspect system",
-		TaskClass:   core.TaskClassInspection,
-		Phase:       core.PhaseExecution,
-		ActiveModel: core.NewModelRef("openrouter", "fallback"),
-	})
-	if err != nil {
-		t.Fatalf("Retrieve returned error: %v", err)
-	}
-	if !strings.Contains(got.Learned, "Fallback file memory still works.") {
-		t.Fatalf("expected file-backed retrieval, got %q", got.Learned)
-	}
-}
-
-func TestRetrieveMatchesActualServedModelWhenRequestedModelIsAlias(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	store := state.Open(filepath.Join(dir, "state.db"))
-	defer store.Close()
-
-	manager := NewManager(dir, store, 3)
-	if err := manager.EnsureFiles(); err != nil {
-		t.Fatalf("EnsureFiles returned error: %v", err)
-	}
-
-	if err := manager.PersistLessons(context.Background(), []Lesson{
-		{Body: "Actual GPT best model likes compact refreshed context.", Provider: "openrouter", Model: "gpt-best", Phase: core.PhaseExecution, Confidence: 0.9},
-	}); err != nil {
-		t.Fatalf("PersistLessons returned error: %v", err)
-	}
-
-	got, err := manager.Retrieve(context.Background(), core.RetrievalContext{
-		Task:        "recover after tool denial",
-		TaskClass:   core.TaskClassDebugging,
-		Phase:       core.PhaseExecution,
-		ActiveModel: core.NewModelRef("openrouter", "auto"),
-		ActualModel: core.NewModelRef("openrouter", "gpt-best"),
-	})
-	if err != nil {
-		t.Fatalf("Retrieve returned error: %v", err)
-	}
-	if !strings.Contains(got.Learned, "Actual GPT best model likes compact refreshed context.") {
-		t.Fatalf("expected actual-model lesson to be injected, got %q", got.Learned)
-	}
-}
-
-func TestReindexMarksDeletedMemoryInactive(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	store := state.Open(filepath.Join(dir, "state.db"))
-	defer store.Close()
-
-	manager := NewManager(dir, store, 3)
-	if err := manager.EnsureFiles(); err != nil {
-		t.Fatalf("EnsureFiles returned error: %v", err)
-	}
-
-	if err := manager.PersistLessons(context.Background(), []Lesson{
-		{Body: "Lesson to delete", Provider: "openrouter", Model: "model-a", Phase: core.PhaseExecution, Confidence: 0.7},
-	}); err != nil {
-		t.Fatalf("PersistLessons returned error: %v", err)
-	}
-
-	if err := os.WriteFile(filepath.Join(dir, FindingsFile), []byte("# Findings\n\n"), 0644); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
-	}
-	if err := manager.Reindex(context.Background()); err != nil {
-		t.Fatalf("Reindex returned error: %v", err)
-	}
-
-	got, err := manager.Retrieve(context.Background(), core.RetrievalContext{
-		Task:        "inspect memory",
-		TaskClass:   core.TaskClassInspection,
-		Phase:       core.PhaseExecution,
-		ActiveModel: core.NewModelRef("openrouter", "model-a"),
-	})
-	if err != nil {
-		t.Fatalf("Retrieve returned error: %v", err)
-	}
-	if strings.Contains(got.Learned, "Lesson to delete") {
-		t.Fatalf("expected deleted memory to be inactive after reindex, got %q", got.Learned)
-	}
-}
-
-func TestPersistLessonsKeepsReadableFindingsWithoutDuplicates(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	store := state.Open(filepath.Join(dir, "state.db"))
-	defer store.Close()
-
-	manager := NewManager(dir, store, 3)
-	if err := manager.EnsureFiles(); err != nil {
-		t.Fatalf("EnsureFiles returned error: %v", err)
-	}
-
-	lesson := Lesson{
-		Body:       "Docker is not available in this environment.",
-		Scope:      "global",
-		Phase:      core.PhaseExecution,
-		Confidence: 0.9,
-	}
-	if err := manager.PersistLessons(context.Background(), []Lesson{lesson}); err != nil {
-		t.Fatalf("first PersistLessons returned error: %v", err)
-	}
-	if err := manager.PersistLessons(context.Background(), []Lesson{lesson}); err != nil {
-		t.Fatalf("second PersistLessons returned error: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(dir, FindingsFile))
-	if err != nil {
-		t.Fatalf("ReadFile returned error: %v", err)
-	}
-	content := string(data)
-	if strings.Contains(content, "<!-- cvkeharness:") {
-		t.Fatalf("expected readable findings format, got %q", content)
-	}
-	if strings.Count(content, "Docker is not available in this environment.") != 1 {
-		t.Fatalf("expected duplicate finding to be collapsed, got %q", content)
-	}
-
-	entries, err := store.ListMemoryEntries(context.Background(), state.MemoryFilter{
-		SourceFiles: []string{FindingsFile},
-		OnlyActive:  true,
-	})
-	if err != nil {
-		t.Fatalf("ListMemoryEntries returned error: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 active finding entry, got %d", len(entries))
-	}
-	if entries[0].SeenCount != 2 {
-		t.Fatalf("expected seen_count=2 after repeat, got %d", entries[0].SeenCount)
-	}
-}
-
-func TestRetrieveOnlyInjectsRelevantGlobalFindings(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	store := state.Open(filepath.Join(dir, "state.db"))
-	defer store.Close()
-
-	manager := NewManager(dir, store, 3)
-	if err := manager.EnsureFiles(); err != nil {
-		t.Fatalf("EnsureFiles returned error: %v", err)
-	}
-
-	if err := manager.PersistLessons(context.Background(), []Lesson{
-		{Body: "Docker is not available in this environment.", Scope: "global", Phase: core.PhaseExecution, Confidence: 0.9},
-	}); err != nil {
-		t.Fatalf("PersistLessons returned error: %v", err)
-	}
-
-	unrelated, err := manager.Retrieve(context.Background(), core.RetrievalContext{
-		Task:        "explain the Go test failure",
-		TaskClass:   core.TaskClassDebugging,
-		Phase:       core.PhaseExecution,
-		ActiveModel: core.NewModelRef("openrouter", "model-a"),
-	})
-	if err != nil {
-		t.Fatalf("Retrieve returned error: %v", err)
-	}
-	if strings.Contains(unrelated.Learned, "Docker is not available") {
-		t.Fatalf("expected unrelated task to skip docker finding, got %q", unrelated.Learned)
-	}
-
-	related, err := manager.Retrieve(context.Background(), core.RetrievalContext{
-		Task:        "debug why docker compose cannot start",
-		TaskClass:   core.TaskClassDebugging,
-		Phase:       core.PhaseExecution,
-		ActiveModel: core.NewModelRef("openrouter", "model-a"),
-	})
-	if err != nil {
-		t.Fatalf("Retrieve returned error: %v", err)
-	}
-	if !strings.Contains(related.Learned, "Docker is not available in this environment.") {
-		t.Fatalf("expected related task to inject docker finding, got %q", related.Learned)
+	if strings.Contains(content, "Second note") {
+		t.Fatalf("expected rollback to remove second note, got %q", content)
 	}
 }

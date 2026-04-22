@@ -96,6 +96,100 @@ type MemoryFilter struct {
 	OnlyActive  bool
 }
 
+// Target stores one resolved runtime or remote host identity.
+type Target struct {
+	ID          string
+	Kind        string
+	PrimaryName string
+	Transport   string
+	Confidence  float64
+	Status      string
+	FirstSeenAt time.Time
+	LastSeenAt  time.Time
+}
+
+// TargetAlias links alternate names back to a stable target identifier.
+type TargetAlias struct {
+	TargetID   string
+	Alias      string
+	AliasType  string
+	Confidence float64
+	LastSeenAt time.Time
+}
+
+// HostFact stores one verified fact about a runtime or target host.
+type HostFact struct {
+	HostID     string
+	Key        string
+	Value      string
+	Confidence float64
+	VerifiedAt time.Time
+	UpdatedAt  time.Time
+}
+
+// Playbook stores a durable target-specific operational procedure.
+type Playbook struct {
+	ID             string
+	TargetID       string
+	Intent         string
+	ToolName       string
+	Status         string
+	Title          string
+	Confidence     float64
+	SuccessCount   int
+	FailureCount   int
+	LastVerifiedAt time.Time
+	LastUsedAt     time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	MatchTerms     []string
+	Preconditions  []string
+	VerifySteps    []string
+	ActionSteps    []string
+	SuccessChecks  []string
+	Notes          string
+}
+
+// Finding stores a provisional reusable observation awaiting promotion.
+type Finding struct {
+	ID         string
+	TargetID   string
+	Intent     string
+	ToolName   string
+	Status     string
+	Origin     string
+	Body       string
+	Confidence float64
+	SeenCount  int
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// Caution stores negative memory for unreliable or denied approaches.
+type Caution struct {
+	ID           string
+	TargetID     string
+	Intent       string
+	ToolName     string
+	Status       string
+	Body         string
+	Confidence   float64
+	FailureCount int
+	LastSeenAt   time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// OperationalMemory is the structured target-aware memory index.
+type OperationalMemory struct {
+	Targets       []Target
+	TargetAliases []TargetAlias
+	HostFacts     []HostFact
+	Playbooks     []Playbook
+	Findings      []Finding
+	Cautions      []Caution
+}
+
 // RoutingCandidate stores the last learned routing score for a model/profile.
 type RoutingCandidate struct {
 	Provider   string

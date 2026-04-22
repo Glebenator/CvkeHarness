@@ -1349,11 +1349,17 @@ func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProf
 	fmt.Printf("  %s%s  cvkeharness run \"list all running docker containers\"%s\n\n",
 		ansiBold, fgAccent, ansiReset)
 	if wroteSoul {
-		fmt.Printf("  %s%s generated %s~/.cvkeharness/soul.md%s and ensured %soperator.md%s, %smemory.md%s, and %sfindings.md%s are ready.%s\n",
-			fgGray, actionLabel, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
+		fmt.Printf("  %s%s generated %s~/.cvkeharness/soul.md%s and prepared the structured memory files in %s~/.cvkeharness/%s: operator.md, targets.md, host.md, playbooks.md, findings.md, cautions.md.%s\n",
+			fgGray, actionLabel,
+			fgAccent+ansiBold, ansiReset+fgGray,
+			fgAccent+ansiBold, ansiReset+fgGray,
+			ansiReset)
 	} else {
-		fmt.Printf("  %s%s preserved your existing %s~/.cvkeharness/soul.md%s and ensured %soperator.md%s, %smemory.md%s, and %sfindings.md%s are present.%s\n",
-			fgGray, actionLabel, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
+		fmt.Printf("  %s%s preserved your existing %s~/.cvkeharness/soul.md%s and confirmed the structured memory files in %s~/.cvkeharness/%s: operator.md, targets.md, host.md, playbooks.md, findings.md, cautions.md.%s\n",
+			fgGray, actionLabel,
+			fgAccent+ansiBold, ansiReset+fgGray,
+			fgAccent+ansiBold, ansiReset+fgGray,
+			ansiReset)
 	}
 	fmt.Printf("  %sThe SQLite state file %s~/.cvkeharness/state.db%s will still be created on first run as needed.%s\n\n",
 		fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)

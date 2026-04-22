@@ -17,7 +17,7 @@ var memoryCmd = &cobra.Command{
 
 var memoryShowCmd = &cobra.Command{
 	Use:   "show",
-	Short: "Show operator, soul, memory, findings, and snapshot summary",
+	Short: "Show operator, soul, targets, host, playbooks, findings, cautions, and snapshot summary",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
@@ -59,7 +59,7 @@ var memoryRollbackCmd = &cobra.Command{
 
 var memoryReindexCmd = &cobra.Command{
 	Use:   "reindex",
-	Short: "Rebuild SQLite memory metadata from managed memory markdown files",
+	Short: "Rebuild structured target-aware memory metadata from managed markdown files",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
