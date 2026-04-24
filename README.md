@@ -170,8 +170,20 @@ The runtime reindexes from the managed markdown files back into SQLite with `cvk
 
 - Go `1.26.2` or newer
 - One configured provider:
+  - Codex via ChatGPT subscription
   - OpenRouter
+  - OpenAI API
   - LM Studio
+
+For ChatGPT subscription-backed Codex access, install the official Codex CLI and sign in first:
+
+```bash
+codex login
+```
+
+Choose `Sign in with ChatGPT`. CvkeHarness reuses the official `~/.codex/auth.json` login cache and sends Codex model requests to the ChatGPT Codex backend, so usage follows your ChatGPT/Codex plan rather than a manually pasted OpenAI API key. If you previously used API-key mode in Codex CLI, run `codex logout` and then `codex login` to switch to subscription-backed access.
+
+The setup wizard also reads the official Codex `~/.codex/models_cache.json` model cache. When that cache was refreshed recently, the model picker shows a `LIVE` status and lists the same current Codex models exposed to your Codex client; otherwise it falls back to a small built-in Codex shortlist.
 
 ### Build
 
@@ -188,7 +200,7 @@ go build -o cvkeharness .
 The setup wizard configures:
 
 - provider
-- API key or local base URL
+- Codex CLI ChatGPT login, API key, or local base URL
 - default model
 - command approval mode
 - safety model when using LLM judge mode
@@ -242,8 +254,18 @@ Show why routing chose a model:
 
 ### Model commands
 
+- `cvkeharness models favorites`
+  Show saved favorite models
+- `cvkeharness models favorite <provider/model>`
+  Save a favorite model without changing routing approvals
+- `cvkeharness models unfavorite <provider/model>`
+  Remove a model from favorites
 - `cvkeharness models shortlist`
-  Show approved models and learned routing candidates
+  Show favorite models, approved models, and learned routing candidates
+- `cvkeharness models recent`
+  Show recently used requested/actual model pairs across runs and chat
+- `cvkeharness models aliases`
+  Show requested models that resolved to different actual models
 - `cvkeharness models approve <provider/model>`
   Approve a model for future routing
 - `cvkeharness models stats`
@@ -263,6 +285,9 @@ Config is stored in `~/.cvkeharness/config.yaml`.
 Important fields:
 
 - `provider`
+  Use `codex` for ChatGPT subscription-backed Codex access, `openai` for usage-based OpenAI API access, `openrouter` for OpenRouter, or `lmstudio` for a local server.
+- `api_keys`
+  Stores API keys for usage-based providers; subscription-backed `codex` reads the official Codex CLI auth cache instead.
 - `base_url`
 - `default_model`
 - `planning_model`
@@ -271,6 +296,7 @@ Important fields:
 - `routing_enabled`
 - `routing_mode`
 - `approved_models`
+- `favorite_models`
 - `memory_dir`
 - `state_db_path`
 - `memory_max_snippets`
@@ -353,7 +379,7 @@ The memory note tool:
 ### Providers and tools
 
 - `provider/`
-  Provider interface plus OpenRouter and LM Studio implementations
+  Provider interface plus Codex ChatGPT subscription, OpenRouter, OpenAI Responses API, and LM Studio implementations
 - `tools/`
   Tool registry, shell tool, and memory note tool
 

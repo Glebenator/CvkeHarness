@@ -66,6 +66,27 @@ type ModelStats struct {
 	LastSeenAt    time.Time
 }
 
+// RecentModelUsage summarizes recently used requested/actual model pairs.
+type RecentModelUsage struct {
+	Provider       string
+	RequestedModel string
+	ActualModel    string
+	LastUsedAt     time.Time
+	Uses           int
+	Successes      int
+}
+
+// ModelAlias tracks cases where a requested provider model resolved to a
+// different actual backend model identifier.
+type ModelAlias struct {
+	Provider       string
+	RequestedModel string
+	ActualModel    string
+	FirstSeenAt    time.Time
+	LastSeenAt     time.Time
+	SeenCount      int
+}
+
 // MemoryEntry stores machine-managed metadata for a memory snippet.
 type MemoryEntry struct {
 	ID         string

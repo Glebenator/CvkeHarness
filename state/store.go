@@ -133,6 +133,9 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 		); err != nil {
 			return err
 		}
+		if err := saveModelAliasTx(ctx, tx, phase.Provider, phase.RequestedModel, phase.ActualModel, record.FinishedAt); err != nil {
+			return err
+		}
 
 		if err := s.bumpModelStatsTx(ctx, tx, record.TaskClass, phase, record.Tools); err != nil {
 			return err
@@ -564,6 +567,15 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			source TEXT NOT NULL DEFAULT '',
 			rationale TEXT NOT NULL DEFAULT '',
 			approved_at DATETIME NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS model_aliases (
+			provider TEXT NOT NULL,
+			requested_model TEXT NOT NULL,
+			actual_model TEXT NOT NULL,
+			first_seen_at DATETIME NOT NULL,
+			last_seen_at DATETIME NOT NULL,
+			seen_count INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY(provider, requested_model, actual_model)
 		);`,
 		`CREATE TABLE IF NOT EXISTS chat_sessions (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

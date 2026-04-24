@@ -38,3 +38,37 @@ func TestRoutingConfigIncludesPromptApprovedModelsFromState(t *testing.T) {
 		t.Fatalf("expected prompt-approved model to be available for routing, got %#v", approved)
 	}
 }
+
+func TestRoutingConfigKeepsOpenAIApprovedModels(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Provider:       "openai",
+		DefaultModel:   "gpt-5.2-codex",
+		ApprovedModels: []string{"openai/gpt-5.2-codex"},
+	}
+
+	routingCfg := routingConfigFromConfig(cfg, nil)
+	approved := routingCfg.ApprovedSet()
+
+	if _, ok := approved["openai/gpt-5.2-codex"]; !ok {
+		t.Fatalf("expected OpenAI approved model to be available for routing, got %#v", approved)
+	}
+}
+
+func TestRoutingConfigKeepsCodexApprovedModels(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Provider:       "codex",
+		DefaultModel:   "gpt-5.1-codex-max",
+		ApprovedModels: []string{"codex/gpt-5.1-codex-max"},
+	}
+
+	routingCfg := routingConfigFromConfig(cfg, nil)
+	approved := routingCfg.ApprovedSet()
+
+	if _, ok := approved["codex/gpt-5.1-codex-max"]; !ok {
+		t.Fatalf("expected Codex approved model to be available for routing, got %#v", approved)
+	}
+}

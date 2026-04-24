@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/internal/termui"
+	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
 )
@@ -192,6 +195,7 @@ func renderReview(cfg *config.Config) {
 		row("Routing", "Default model only")
 	}
 	row("Approved Models", strconv.Itoa(len(cfg.ApprovedModels)))
+	row("Favorite Models", strconv.Itoa(len(cfg.FavoriteModels)))
 	if cfg.BaseURL != "" {
 		row("Base URL", cfg.BaseURL)
 	}
@@ -235,6 +239,8 @@ type modelsResult struct {
 	items     [][2]string
 	isLive    bool
 	timestamp time.Time
+	source    string
+	message   string
 }
 
 // fmtPrice converts a per-token USD string from the API to a $/M display string.
@@ -312,6 +318,196 @@ func fetchOpenRouterModels() modelsResult {
 	return modelsResult{items: items, isLive: true, timestamp: time.Now()}
 }
 
+type openAIModel struct {
+	ID string `json:"id"`
+}
+
+type openAIModelsResponse struct {
+	Data []openAIModel `json:"data"`
+}
+
+const codexModelsFreshDuration = 6 * time.Hour
+
+type codexModelsCache struct {
+	FetchedAt     time.Time         `json:"fetched_at"`
+	ClientVersion string            `json:"client_version"`
+	Models        []codexCacheModel `json:"models"`
+}
+
+type codexCacheModel struct {
+	Slug           string `json:"slug"`
+	DisplayName    string `json:"display_name"`
+	Description    string `json:"description"`
+	Visibility     string `json:"visibility"`
+	Priority       int    `json:"priority"`
+	SupportedInAPI bool   `json:"supported_in_api"`
+}
+
+func codexModelsCachePath() string {
+	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
+		return filepath.Join(home, "models_cache.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".codex", "models_cache.json")
+}
+
+func fetchCodexModels(now time.Time) modelsResult {
+	path := codexModelsCachePath()
+	if strings.TrimSpace(path) == "" {
+		return modelsResult{
+			items:     codexModels,
+			timestamp: now,
+			source:    "fallback",
+			message:   "Codex models cache path could not be resolved",
+		}
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return modelsResult{
+			items:     codexModels,
+			timestamp: now,
+			source:    "fallback",
+			message:   fmt.Sprintf("Codex models cache unavailable at %s", path),
+		}
+	}
+
+	var cache codexModelsCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return modelsResult{
+			items:     codexModels,
+			timestamp: now,
+			source:    "fallback",
+			message:   fmt.Sprintf("Could not parse Codex models cache at %s", path),
+		}
+	}
+
+	items := codexCacheItems(cache.Models)
+	if len(items) == 0 {
+		return modelsResult{
+			items:     codexModels,
+			timestamp: cache.FetchedAt,
+			source:    "fallback",
+			message:   "Codex models cache did not contain listable models",
+		}
+	}
+
+	items = append(items, [2]string{"[ custom model ]", "Enter your own model ID →"})
+	age := now.Sub(cache.FetchedAt)
+	if age < 0 {
+		age = 0
+	}
+	return modelsResult{
+		items:     items,
+		isLive:    !cache.FetchedAt.IsZero() && age <= codexModelsFreshDuration,
+		timestamp: cache.FetchedAt,
+		source:    "codex-cache",
+		message:   cache.ClientVersion,
+	}
+}
+
+func codexCacheItems(models []codexCacheModel) [][2]string {
+	list := make([]codexCacheModel, 0, len(models))
+	for _, model := range models {
+		if strings.TrimSpace(model.Slug) == "" {
+			continue
+		}
+		if model.Visibility != "" && model.Visibility != "list" {
+			continue
+		}
+		if !model.SupportedInAPI {
+			continue
+		}
+		list = append(list, model)
+	}
+
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].Priority != list[j].Priority {
+			return list[i].Priority < list[j].Priority
+		}
+		return list[i].Slug < list[j].Slug
+	})
+
+	items := make([][2]string, 0, len(list))
+	for _, model := range list {
+		name := strings.TrimSpace(model.DisplayName)
+		if name == "" {
+			name = model.Slug
+		}
+		desc := strings.TrimSpace(model.Description)
+		if desc == "" {
+			desc = "Available from Codex models cache"
+		}
+		items = append(items, [2]string{model.Slug, fmt.Sprintf("%s  ·  %s", name, desc)})
+		if len(items) >= 22 {
+			break
+		}
+	}
+	return items
+}
+
+func fetchOpenAIModels(token string) modelsResult {
+	client := &http.Client{Timeout: 6 * time.Second}
+	req, _ := http.NewRequest(http.MethodGet, "https://api.openai.com/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return modelsResult{items: openAIModels, isLive: false, timestamp: time.Now()}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return modelsResult{items: openAIModels, isLive: false, timestamp: time.Now()}
+	}
+
+	var data openAIModelsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return modelsResult{items: openAIModels, isLive: false, timestamp: time.Now()}
+	}
+
+	available := make(map[string]bool, len(data.Data))
+	for _, model := range data.Data {
+		if model.ID != "" {
+			available[model.ID] = true
+		}
+	}
+
+	var items [][2]string
+	seen := make(map[string]bool)
+	for _, item := range openAIModels {
+		if item[0] == "[ custom model ]" {
+			continue
+		}
+		if available[item[0]] {
+			items = append(items, item)
+			seen[item[0]] = true
+		}
+	}
+	for _, model := range data.Data {
+		if !openAIModelVisible(model.ID) || seen[model.ID] {
+			continue
+		}
+		seen[model.ID] = true
+		items = append(items, [2]string{model.ID, "Available in your OpenAI account"})
+		if len(items) >= 22 {
+			break
+		}
+	}
+	if len(items) == 0 {
+		return modelsResult{items: openAIModels, isLive: false, timestamp: time.Now()}
+	}
+	items = append(items, [2]string{"[ custom model ]", "Enter your own model ID →"})
+	return modelsResult{items: items, isLive: true, timestamp: time.Now()}
+}
+
+func openAIModelVisible(id string) bool {
+	return strings.Contains(id, "codex") || strings.HasPrefix(id, "gpt-5")
+}
+
 type lmModel struct {
 	ID    string `json:"id"`
 	State string `json:"state"`
@@ -385,6 +581,60 @@ func renderModelStatus(r modelsResult) {
 	}
 }
 
+func renderOpenAIModelStatus(r modelsResult) {
+	if r.isLive {
+		fmt.Printf("  %s⬤ LIVE%s  OpenAI models available to your credential  ·  retrieved %s%s\n\n",
+			fgGreen+ansiBold, ansiReset+fgGray, r.timestamp.Format("15:04 UTC")+ansiReset, ansiReset)
+	} else {
+		fmt.Printf("  %s⊙ offline fallback%s  ·  Codex-capable Responses API models%s\n\n",
+			fgYellow+ansiDim, ansiReset+fgMuted, ansiReset)
+	}
+}
+
+func renderCodexModelStatus(r modelsResult, now time.Time) {
+	if r.isLive {
+		fmt.Printf("  %s⬤ LIVE%s  Codex model cache refreshed %s  ·  %s%s\n\n",
+			fgGreen+ansiBold, ansiReset+fgGray, relativeAge(now, r.timestamp), r.timestamp.Format("15:04 UTC")+ansiReset, ansiReset)
+		return
+	}
+
+	if r.source == "codex-cache" && !r.timestamp.IsZero() {
+		fmt.Printf("  %s⊙ cached%s  ·  Codex model cache last refreshed %s%s\n\n",
+			fgYellow+ansiDim, ansiReset+fgMuted, r.timestamp.Format(time.RFC1123), ansiReset)
+		return
+	}
+
+	fmt.Printf("  %s⊙ offline fallback%s  ·  %s%s\n\n",
+		fgYellow+ansiDim, ansiReset+fgMuted, fallbackMessage(r.message), ansiReset)
+}
+
+func relativeAge(now, then time.Time) string {
+	if then.IsZero() {
+		return "at an unknown time"
+	}
+	d := now.Sub(then)
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
+func fallbackMessage(message string) string {
+	if strings.TrimSpace(message) == "" {
+		return "using built-in Codex model fallback"
+	}
+	return message
+}
+
 // ─── OpenRouter key validation ────────────────────────────────────────────────
 
 type orKeyResponse struct {
@@ -425,6 +675,47 @@ func validateOpenRouterKey(key string) (label string, err error) {
 	return out.Data.Label, nil
 }
 
+// ─── OpenAI token validation ─────────────────────────────────────────────────
+
+type openAIValidationResponse struct {
+	Error struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error"`
+}
+
+// validateOpenAIKey calls the models endpoint to confirm the bearer credential.
+func validateOpenAIKey(key string) error {
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, _ := http.NewRequest(http.MethodGet, "https://api.openai.com/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("connection failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var out openAIValidationResponse
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		msg := out.Error.Message
+		if msg == "" {
+			msg = "unauthorized"
+		}
+		return fmt.Errorf("invalid credential — %s", msg)
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg := out.Error.Message
+		if msg != "" {
+			return fmt.Errorf("unexpected status %d from validation endpoint: %s", resp.StatusCode, msg)
+		}
+		return fmt.Errorf("unexpected status %d from validation endpoint", resp.StatusCode)
+	}
+	return nil
+}
+
 // ─── Wizard data ──────────────────────────────────────────────────────────────
 
 // openRouterFallbackModels mirrors the top-weekly programming ranking as of 2026-04-18.
@@ -441,6 +732,31 @@ var openRouterFallbackModels = [][2]string{
 	{"mistralai/mistral-large-2512", "Mistral Large 3 2512             in $0.50/M  out $1.50/M"},
 	{"qwen/qwen3.5-plus-02-15", "Qwen 3.5 Plus                    in $0.26/M  out $1.56/M"},
 	{"nvidia/nemotron-3-super-120b-a12b:free", "NVIDIA Nemotron 3 Super          free"},
+	{"[ custom model ]", "Enter your own model ID →"},
+}
+
+var openAIModels = [][2]string{
+	{"gpt-5.2-codex", "GPT-5.2 Codex  ·  strongest agentic coding model  ★"},
+	{"gpt-5.1-codex", "GPT-5.1 Codex  ·  agentic coding"},
+	{"gpt-5.1-codex-max", "GPT-5.1 Codex Max  ·  long-running coding tasks"},
+	{"gpt-5.1-codex-mini", "GPT-5.1 Codex Mini  ·  smaller coding model"},
+	{"gpt-5-codex", "GPT-5 Codex  ·  agentic coding"},
+	{"gpt-5.2", "GPT-5.2  ·  general coding and agentic tasks"},
+	{"gpt-5.2-pro", "GPT-5.2 Pro  ·  deeper reasoning"},
+	{"gpt-5.1", "GPT-5.1  ·  coding and agentic tasks"},
+	{"gpt-5-mini", "GPT-5 Mini  ·  faster and lower cost"},
+	{"gpt-5-nano", "GPT-5 Nano  ·  fastest and lowest cost"},
+	{"[ custom model ]", "Enter your own model ID →"},
+}
+
+var codexModels = [][2]string{
+	{"gpt-5.1-codex-max", "GPT-5.1 Codex Max  ·  default subscription coding model  ★"},
+	{"gpt-5.1-codex", "GPT-5.1 Codex  ·  agentic coding"},
+	{"gpt-5.1-codex-mini", "GPT-5.1 Codex Mini  ·  smaller coding model"},
+	{"gpt-5.2-codex", "GPT-5.2 Codex  ·  coding model if enabled for your account"},
+	{"gpt-5.2", "GPT-5.2  ·  general coding and agentic tasks"},
+	{"gpt-5.1", "GPT-5.1  ·  coding and agentic tasks"},
+	{"gpt-5-codex", "GPT-5 Codex  ·  legacy coding model"},
 	{"[ custom model ]", "Enter your own model ID →"},
 }
 
@@ -485,9 +801,34 @@ var safetyModelOptions = [][2]string{
 	{"[ custom model ]", "Enter your own model ID →"},
 }
 
+var codexSafetyModelOptions = [][2]string{
+	{"gpt-5.1-codex-mini", "GPT-5.1 Codex Mini  ·  fast judge  ★"},
+	{"gpt-5.1-codex", "GPT-5.1 Codex  ·  stronger judge"},
+	{"gpt-5.1-codex-max", "GPT-5.1 Codex Max  ·  most capable"},
+	{"[ custom model ]", "Enter your own Codex model ID →"},
+}
+
+var openAISafetyModelOptions = [][2]string{
+	{"gpt-5-nano", "GPT-5 Nano  ·  fast & cheap  ★"},
+	{"gpt-5-mini", "GPT-5 Mini  ·  balanced"},
+	{"gpt-5.1", "GPT-5.1  ·  stronger judge"},
+	{"[ custom model ]", "Enter your own OpenAI model ID →"},
+}
+
 var safetyModeOptions = [][2]string{
 	{tools.SafetyModeLLMJudge, "LLM judge  ·  secondary model reviews commands  ★"},
 	{tools.SafetyModeUserConfirm, "Manual confirm  ·  wait for terminal user approval"},
+}
+
+func safetyModelsForProvider(cfg *config.Config) [][2]string {
+	switch cfg.Provider {
+	case "codex":
+		return codexSafetyModelOptions
+	case "openai":
+		return openAISafetyModelOptions
+	default:
+		return safetyModelOptions
+	}
 }
 
 var routingOptions = [][2]string{
@@ -505,12 +846,17 @@ func wizardProvider(cfg *config.Config) bool {
 	renderStep(1, totalSteps, "Choose your LLM Provider")
 
 	initial := 0
-	if cfg.Provider == "lmstudio" {
-		initial = 1
-	}
 	providers := [][2]string{
+		{"codex", "ChatGPT subscription  ·  reuses Codex CLI login"},
 		{"openrouter", "Cloud API  ·  many models  ·  requires API key"},
+		{"openai", "OpenAI API  ·  Codex models  ·  usage-based API key"},
 		{"lmstudio", "Local inference  ·  no key needed  ·  offline-capable"},
+	}
+	for i, item := range providers {
+		if item[0] == cfg.Provider {
+			initial = i
+			break
+		}
 	}
 	idx := selectList(providers, initial, false) // step 1 has no back
 	if idx == goBack {
@@ -522,8 +868,14 @@ func wizardProvider(cfg *config.Config) bool {
 
 // wizardAPIKey is step 2 — dispatches to the correct credential flow.
 func wizardAPIKey(cfg *config.Config) bool {
+	if cfg.Provider == "codex" {
+		return wizardCodexCLIAuth(cfg)
+	}
 	if cfg.Provider == "openrouter" {
 		return wizardOpenRouterKey(cfg)
+	}
+	if cfg.Provider == "openai" {
+		return wizardOpenAIKey(cfg)
 	}
 	return wizardLMStudioURL(cfg)
 }
@@ -611,6 +963,125 @@ func wizardOpenRouterKey(cfg *config.Config) bool {
 	}
 }
 
+func wizardCodexCLIAuth(cfg *config.Config) bool {
+	for {
+		renderHeader()
+		renderStep(2, totalSteps, "Codex ChatGPT Login")
+
+		auth, err := provider.LoadCodexCLIAuth(provider.CodexAuthPath())
+		if err == nil {
+			fmt.Printf("  %s✔ Found Codex CLI ChatGPT login%s\n", fgGreen+ansiBold, ansiReset)
+			fmt.Printf("  %sAuth cache:%s %s%s%s\n", fgMuted, ansiReset, fgAccent, auth.AuthPath, ansiReset)
+			if auth.AccountID != "" {
+				fmt.Printf("  %sWorkspace/account:%s %s%s%s\n", fgMuted, ansiReset, fgWhite+ansiBold, auth.AccountID, ansiReset)
+			}
+			fmt.Printf("\n  %sCvkeHarness will reuse the current access token and leave token refresh to the official Codex CLI.%s\n\n",
+				fgGray, ansiReset)
+
+			choices := [][2]string{
+				{"Use this Codex login", "ChatGPT subscription limits apply"},
+				{"I changed accounts; check again", "re-read the Codex CLI auth cache"},
+				{"← Return to provider selection", ""},
+			}
+			switch selectList(choices, 0, true) {
+			case goBack, 2:
+				return false
+			case 1:
+				continue
+			default:
+				return true
+			}
+		}
+
+		fmt.Printf("  %sNo usable Codex CLI ChatGPT login was found.%s\n\n", fgYellow+ansiBold, ansiReset)
+		fmt.Printf("  %sTo use ChatGPT Plus/Pro/Business/Edu/Enterprise Codex access, run:%s\n\n", fgGray, ansiReset)
+		fmt.Printf("  %s%s  codex login%s\n\n", ansiBold, fgAccent, ansiReset)
+		fmt.Printf("  %sChoose %sSign in with ChatGPT%s, then return here.%s\n\n",
+			fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
+		fmt.Printf("  %sCurrent lookup path:%s %s%s%s\n\n", fgMuted, ansiReset, fgAccent, provider.CodexAuthPath(), ansiReset)
+		fmt.Printf("  %sDetails: %v%s\n\n", fgMuted, err, ansiReset)
+
+		choices := [][2]string{
+			{"Check again", "I completed `codex login`"},
+			{"← Return to provider selection", ""},
+		}
+		if selectList(choices, 0, true) != 0 {
+			return false
+		}
+	}
+}
+
+func wizardOpenAIKey(cfg *config.Config) bool {
+	// Store OpenAI credentials independently so switching providers does not
+	// overwrite a previously validated OpenRouter key.
+	keyToOffer := cfg.GetAPIKey("openai")
+	showReuseMenu := keyToOffer != ""
+
+	for {
+		renderHeader()
+		renderStep(2, totalSteps, "OpenAI API Key")
+
+		if showReuseMenu {
+			fmt.Printf("  %sAn OpenAI API key from a previous setup was found.%s\n\n", fgGray, ansiReset)
+			choices := [][2]string{
+				{"Reuse existing key", maskKey(keyToOffer)},
+				{"Enter a different key", "paste a usage-based OpenAI API key"},
+			}
+			idx := selectList(choices, 0, true)
+			switch idx {
+			case goBack:
+				return false
+			case 0:
+				return true
+			}
+			showReuseMenu = false
+		}
+
+		fmt.Printf("  %sStored locally in %s~/.cvkeharness/config.yaml%s\n",
+			fgGray, fgAccent+ansiBold, ansiReset)
+		fmt.Printf("  %sUse this for usage-based OpenAI API access. For ChatGPT subscription Codex access, choose the Codex provider instead.%s\n",
+			fgGray, ansiReset)
+		fmt.Printf("  %sOpenAI API keys are managed at: %shttps://platform.openai.com/api-keys%s\n\n",
+			fgGray, fgAccent, ansiReset)
+
+		key, back := promptText("Paste your OpenAI API key:", "", true)
+		if back {
+			if keyToOffer != "" {
+				showReuseMenu = true
+				continue
+			}
+			return false
+		}
+
+		renderHeader()
+		renderStep(2, totalSteps, "OpenAI API Key")
+		fmt.Printf("\n  %s%s⟳  Validating key …%s\n", ansiDim, fgGray, ansiReset)
+
+		if err := validateOpenAIKey(key); err != nil {
+			renderHeader()
+			renderStep(2, totalSteps, "OpenAI API Key")
+			fmt.Printf("\n  %s%s✗  %v%s\n\n", ansiBold, fgRed, err, ansiReset)
+
+			retry := [][2]string{
+				{"Try a different key", "paste or type another API key"},
+				{"← Return to provider selection", ""},
+			}
+			if selectList(retry, 0, false) == 1 {
+				return false
+			}
+			continue
+		}
+
+		cfg.SetAPIKey("openai", key)
+		renderHeader()
+		renderStep(2, totalSteps, "OpenAI API Key")
+		fmt.Printf("\n  %s%s✔  Key validated successfully%s\n",
+			ansiBold, fgGreen, ansiReset)
+		time.Sleep(900 * time.Millisecond)
+		return true
+	}
+}
+
 func wizardLMStudioURL(cfg *config.Config) bool {
 	renderHeader()
 	renderStep(2, totalSteps, "LM Studio Connection")
@@ -671,6 +1142,14 @@ func wizardModel(cfg *config.Config, result modelsResult) bool {
 			fmt.Printf("  %s⊙  Could not verify loaded models on local server%s\n\n", fgYellow+ansiDim, ansiReset)
 			cfg.DefaultModel = "local-model"
 		}
+	} else if cfg.Provider == "codex" {
+		res := fetchCodexModels(time.Now())
+		items = res.items
+		renderCodexModelStatus(res, time.Now())
+	} else if cfg.Provider == "openai" {
+		res := fetchOpenAIModels(cfg.GetAPIKey("openai"))
+		items = res.items
+		renderOpenAIModelStatus(res)
 	} else {
 		items = result.items
 		renderModelStatus(result)
@@ -688,7 +1167,7 @@ func wizardModel(cfg *config.Config, result modelsResult) bool {
 			"Model ID:",
 			cfg.PrimaryModel(),
 			fmt.Sprintf("  %sEnter the exact model ID used by your provider.%s", fgGray, ansiReset),
-			fmt.Sprintf("  %sExample: %santhropic/claude-sonnet-4.6%s", fgGray, fgAccent+ansiBold, ansiReset),
+			modelExample(cfg),
 		)
 		if back {
 			return false
@@ -698,6 +1177,20 @@ func wizardModel(cfg *config.Config, result modelsResult) bool {
 		setDefaultModel(cfg, items[idx][0])
 	}
 	return true
+}
+
+func modelExample(cfg *config.Config) string {
+	example := "anthropic/claude-sonnet-4.6"
+	if cfg.Provider == "codex" {
+		example = "gpt-5.1-codex-max"
+	}
+	if cfg.Provider == "openai" {
+		example = "gpt-5.2-codex"
+	}
+	if cfg.Provider == "lmstudio" {
+		example = "local-model"
+	}
+	return fmt.Sprintf("  %sExample: %s%s%s", fgGray, fgAccent+ansiBold, example, ansiReset)
 }
 
 func wizardTokens(cfg *config.Config) bool {
@@ -736,12 +1229,13 @@ func wizardSafetyModel(cfg *config.Config) bool {
 		fmt.Printf("  %sThe safety model reviews shell commands before execution.%s\n", fgGray, ansiReset)
 		fmt.Printf("  %sIt should be a capable, instruction-following model from your provider.%s\n\n", fgMuted+ansiDim, ansiReset)
 
-		idx := selectList(safetyModelOptions, optionIndexByValue(safetyModelOptions, cfg.SafetyModel), true)
+		options := safetyModelsForProvider(cfg)
+		idx := selectList(options, optionIndexByValue(options, cfg.SafetyModel), true)
 		if idx == goBack {
 			continue
 		}
 
-		if safetyModelOptions[idx][0] == "[ custom model ]" {
+		if options[idx][0] == "[ custom model ]" {
 			val, back := promptCustomValue(
 				4,
 				"Custom Safety Model Identifier",
@@ -753,9 +1247,9 @@ func wizardSafetyModel(cfg *config.Config) bool {
 			if back {
 				continue
 			}
-			cfg.SafetyModel = val
+			cfg.SafetyModel = config.NormalizeProviderModelID(cfg.Provider, val)
 		} else {
-			cfg.SafetyModel = safetyModelOptions[idx][0]
+			cfg.SafetyModel = config.NormalizeProviderModelID(cfg.Provider, options[idx][0])
 		}
 		return true
 	}
@@ -923,7 +1417,7 @@ func wizardConfirm(cfg *config.Config, profile soulProfile, hostNotes []string) 
 }
 
 func setDefaultModel(cfg *config.Config, model string) {
-	model = strings.TrimSpace(model)
+	model = config.NormalizeProviderModelID(cfg.Provider, model)
 	cfg.DefaultModel = model
 	ensureDefaultApproved(cfg)
 }
@@ -960,6 +1454,9 @@ func cloneConfig(cfg *config.Config) *config.Config {
 	if len(cfg.ApprovedModels) > 0 {
 		clone.ApprovedModels = append([]string(nil), cfg.ApprovedModels...)
 	}
+	if len(cfg.FavoriteModels) > 0 {
+		clone.FavoriteModels = append([]string(nil), cfg.FavoriteModels...)
+	}
 	return &clone
 }
 
@@ -983,6 +1480,13 @@ func ensureFetchedModels(modelsCh <-chan modelsResult, fetched *modelsResult) mo
 	}
 
 	return *fetched
+}
+
+func modelsForProvider(cfg *config.Config, modelsCh <-chan modelsResult, fetched *modelsResult) modelsResult {
+	if cfg.Provider != "openrouter" {
+		return modelsResult{}
+	}
+	return ensureFetchedModels(modelsCh, fetched)
 }
 
 type settingsMenuAction int
@@ -1009,21 +1513,40 @@ type settingsMenuEntry struct {
 
 func providerSummary(cfg *config.Config) string {
 	switch cfg.Provider {
+	case "codex":
+		return "Codex via ChatGPT"
 	case "lmstudio":
 		return "LM Studio"
+	case "openai":
+		return "OpenAI"
 	default:
 		return "OpenRouter"
 	}
 }
 
 func connectionLabel(cfg *config.Config) string {
+	if cfg.Provider == "codex" {
+		return "Codex Login"
+	}
 	if cfg.Provider == "lmstudio" {
 		return "Connection"
+	}
+	if cfg.Provider == "openai" {
+		return "API Key"
 	}
 	return "API Key"
 }
 
 func connectionSummary(cfg *config.Config) string {
+	if cfg.Provider == "codex" {
+		if auth, err := provider.LoadCodexCLIAuth(provider.CodexAuthPath()); err == nil {
+			if auth.AccountID != "" {
+				return "Found ChatGPT login"
+			}
+			return "Found ChatGPT login"
+		}
+		return "Run codex login"
+	}
 	if cfg.Provider == "lmstudio" {
 		if strings.TrimSpace(cfg.BaseURL) == "" {
 			return "Not configured"
@@ -1031,7 +1554,11 @@ func connectionSummary(cfg *config.Config) string {
 		return cfg.BaseURL
 	}
 
-	key := cfg.GetAPIKey("openrouter")
+	providerName := "openrouter"
+	if cfg.Provider == "openai" {
+		providerName = "openai"
+	}
+	key := cfg.GetAPIKey(providerName)
 	if strings.TrimSpace(key) == "" {
 		return "Not configured"
 	}
@@ -1164,7 +1691,7 @@ func runProviderEditor(cfg *config.Config, modelsCh <-chan modelsResult, fetched
 		*cfg = *before
 		return false
 	}
-	if !wizardModel(cfg, ensureFetchedModels(modelsCh, fetched)) {
+	if !wizardModel(cfg, modelsForProvider(cfg, modelsCh, fetched)) {
 		*cfg = *before
 		return false
 	}
@@ -1181,7 +1708,7 @@ func runConnectionEditor(cfg *config.Config) bool {
 
 func runModelEditor(cfg *config.Config, modelsCh <-chan modelsResult, fetched *modelsResult) bool {
 	before := cloneConfig(cfg)
-	if !wizardModel(cfg, ensureFetchedModels(modelsCh, fetched)) {
+	if !wizardModel(cfg, modelsForProvider(cfg, modelsCh, fetched)) {
 		return false
 	}
 	return configChanged(before, cfg)
@@ -1307,6 +1834,9 @@ func loadWizardConfig() *config.Config {
 	if len(existingCfg.ApprovedModels) > 0 {
 		cfg.ApprovedModels = existingCfg.ApprovedModels
 	}
+	if len(existingCfg.FavoriteModels) > 0 {
+		cfg.FavoriteModels = existingCfg.FavoriteModels
+	}
 	if existingCfg.MemoryDir != "" {
 		cfg.MemoryDir = existingCfg.MemoryDir
 	}
@@ -1342,10 +1872,10 @@ func runSetupWizard(mode string) {
 		case 1:
 			advanced = wizardProvider(cfg)
 		case 2:
-			// Step 2: API key (OpenRouter) or base URL (LM Studio).
+			// Step 2: provider credential or connection details.
 			advanced = wizardAPIKey(cfg)
 		case 3:
-			advanced = wizardModel(cfg, ensureFetchedModels(modelsCh, &fetchedModels))
+			advanced = wizardModel(cfg, modelsForProvider(cfg, modelsCh, &fetchedModels))
 		case 4:
 			advanced = wizardSafetyModel(cfg)
 		case 5:

@@ -103,6 +103,19 @@ func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTu
 		return 0, err
 	}
 
+	var provider string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT provider
+		FROM chat_sessions
+		WHERE id = ?`,
+		sessionID,
+	).Scan(&provider); err != nil {
+		return 0, err
+	}
+	if err := saveModelAliasTx(ctx, tx, provider, turn.RequestedModel, turn.ActualModel, turn.CreatedAt); err != nil {
+		return 0, err
+	}
+
 	for _, message := range messages {
 		createdAt := message.CreatedAt
 		if createdAt.IsZero() {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,6 +31,7 @@ type Config struct {
 	RoutingEnabled       bool              `yaml:"routing_enabled,omitempty"`
 	RoutingMode          string            `yaml:"routing_mode,omitempty"`
 	ApprovedModels       []string          `yaml:"approved_models,omitempty"`
+	FavoriteModels       []string          `yaml:"favorite_models,omitempty"`
 	MemoryDir            string            `yaml:"memory_dir,omitempty"`
 	StateDBPath          string            `yaml:"state_db_path,omitempty"`
 	MemoryMaxSnippets    int               `yaml:"memory_max_snippets,omitempty"`
@@ -60,6 +62,31 @@ func (c *Config) PrimaryModel() string {
 	return c.Model
 }
 
+// NormalizeProviderModelID canonicalizes configured model IDs that may have
+// been entered in provider/model form even though the runtime expects the raw
+// provider-native model identifier. For example, with provider=openrouter, both
+// "google/gemma-4-31b-it:free" and "openrouter/google/gemma-4-31b-it:free"
+// should execute as "google/gemma-4-31b-it:free". Special OpenRouter model
+// IDs such as "openrouter/auto" and "openrouter/free" are preserved.
+func NormalizeProviderModelID(provider, model string) string {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" || model == "" {
+		return model
+	}
+
+	prefix := provider + "/"
+	if !strings.HasPrefix(model, prefix) {
+		return model
+	}
+
+	if provider == "openrouter" && (model == "openrouter/auto" || model == "openrouter/free") {
+		return model
+	}
+
+	return strings.TrimPrefix(model, prefix)
+}
+
 // Normalize applies defaults and backward-compatible migrations in memory.
 func (c *Config) Normalize() {
 	// Preserve support for older configs that only set `model`, but treat
@@ -67,11 +94,14 @@ func (c *Config) Normalize() {
 	if c.DefaultModel == "" {
 		c.DefaultModel = c.Model
 	}
+	c.DefaultModel = NormalizeProviderModelID(c.Provider, c.DefaultModel)
+	c.Model = NormalizeProviderModelID(c.Provider, c.Model)
 
 	// Fallback for safety model if not found
 	if c.SafetyModel == "" {
 		c.SafetyModel = "x-ai/grok-4.1-fast"
 	}
+	c.SafetyModel = NormalizeProviderModelID(c.Provider, c.SafetyModel)
 	if c.SafetyMode == "" {
 		c.SafetyMode = "llm_judge"
 	}
@@ -93,6 +123,8 @@ func (c *Config) Normalize() {
 	if len(c.ApprovedModels) == 0 && c.DefaultModel != "" && c.Provider != "" {
 		c.ApprovedModels = []string{c.Provider + "/" + c.DefaultModel}
 	}
+	c.ApprovedModels = normalizeModelRefList(c.ApprovedModels)
+	c.FavoriteModels = normalizeModelRefList(c.FavoriteModels)
 	ensureAllowedCommand(c, "echo")
 }
 
@@ -204,4 +236,22 @@ func ensureAllowedCommand(cfg *Config, command string) {
 		}
 	}
 	cfg.AllowedCommands = append(cfg.AllowedCommands, command)
+}
+
+func normalizeModelRefList(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(items))
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	return out
 }
