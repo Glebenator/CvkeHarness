@@ -83,7 +83,7 @@ func TestTranscriptRendererRichAddsStyling(t *testing.T) {
 	if !strings.Contains(got, "\033[") {
 		t.Fatalf("expected rich transcript to include ANSI codes, got %q", got)
 	}
-	if !strings.Contains(got, "╭─ shell") {
+	if !strings.Contains(got, "shell") {
 		t.Fatalf("expected rich shell section line, got %q", got)
 	}
 	if !strings.Contains(got, "approval") {

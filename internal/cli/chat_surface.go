@@ -165,9 +165,9 @@ func (c *ChatSurface) RenderBanner(selection core.RoutingSelection) {
 	if c.rich {
 		fmt.Fprint(c.out, termui.ClearScreen)
 		lines := []string{
-			termui.FGWhite + termui.ANSIBold + "CvkeHarness chat" + termui.ANSIReset + "   " + termui.FGMuted + "interactive model workspace" + termui.ANSIReset,
+			termui.FGWhite + termui.ANSIBold + "CvkeHarness" + termui.ANSIReset + "  " + termui.FGMuted + "interactive model workspace" + termui.ANSIReset,
 			renderStatusBadges(
-				renderBadge("Pinned model", selection.Requested.String(), termui.FGAccent),
+				renderBadge("model", selection.Requested.String(), termui.FGAccent),
 				renderBadge("Commands", "/help  /clear  /exit", termui.FGGreen),
 			),
 		}
@@ -278,7 +278,7 @@ func (c *ChatSurface) Prompt() string {
 	if !c.rich {
 		return "\nYou> "
 	}
-	return "\n  " + termui.FGGreen + termui.ANSIBold + "You" + termui.ANSIReset + termui.FGMuted + " ╰▶ " + termui.ANSIReset
+	return "\n  " + termui.FGGreen + termui.ANSIBold + "You" + termui.ANSIReset + termui.FGMuted + " › " + termui.ANSIReset
 }
 
 func (c *ChatSurface) runSpinner(stop chan struct{}) {
@@ -339,16 +339,22 @@ func (c *ChatSurface) renderPanelLines(title, tone string, lines []string) []str
 	}
 
 	width := c.width
-	head := "╭─ " + truncateRunes(title, width-8) + " "
-	if pad := width - visibleRuneLen(head) - 1; pad > 0 {
-		head += strings.Repeat("─", pad)
+	label := truncateRunes(title, width-6)
+	head := "  " + tone + termui.ANSIBold + label + termui.ANSIReset
+	if pad := width - visibleRuneLen(label) - 5; pad > 0 {
+		head += " " + termui.FGMuted + strings.Repeat("─", pad) + termui.ANSIReset
 	}
 
-	out := []string{tone + head + "╮" + termui.ANSIReset}
+	out := []string{"", head}
 	for _, line := range lines {
-		out = append(out, tone+"│"+termui.ANSIReset+" "+padRight(line, width-4)+" "+tone+"│"+termui.ANSIReset)
+		if strings.TrimSpace(stripANSI(line)) == "" {
+			out = append(out, "")
+			continue
+		}
+		for _, wrapped := range wrapText(line, width-7) {
+			out = append(out, "  "+termui.FGMuted+"│"+termui.ANSIReset+" "+wrapped)
+		}
 	}
-	out = append(out, tone+"╰"+strings.Repeat("─", width-2)+"╯"+termui.ANSIReset)
 	return out
 }
 
@@ -362,7 +368,7 @@ func (c *ChatSurface) renderNoteLines(title, tone string, lines []string) []stri
 	}
 
 	width := c.width
-	header := tone + termui.ANSIBold + "• " + title + termui.ANSIReset
+	header := "  " + tone + termui.ANSIBold + title + termui.ANSIReset
 	out := []string{header}
 	for _, line := range lines {
 		for _, wrapped := range wrapText(strings.TrimSpace(line), width-6) {
@@ -430,7 +436,7 @@ func (c *ChatSurface) renderShellHeaderLines(command string) []string {
 		}
 	}
 	return []string{
-		termui.FGAccent + termui.ANSIBold + "• Shell" + termui.ANSIReset,
+		"  " + termui.FGAccent + termui.ANSIBold + "Shell" + termui.ANSIReset,
 		"  " + termui.FGMuted + "│" + termui.ANSIReset + " " + termui.FGWhite + termui.ANSIBold + "$" + termui.ANSIReset + " " + command,
 	}
 }
@@ -494,7 +500,7 @@ func renderStatusBadges(badges ...string) string {
 }
 
 func renderBadge(label, value, tone string) string {
-	return tone + termui.ANSIBold + label + termui.ANSIReset + termui.FGMuted + " " + value + termui.ANSIReset
+	return termui.FGMuted + label + " " + termui.ANSIReset + tone + value + termui.ANSIReset
 }
 
 func renderBodyLines(text string, width int) []string {

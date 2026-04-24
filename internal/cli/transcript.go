@@ -142,11 +142,11 @@ func (r *TranscriptRenderer) label(kind, message string) string {
 	if r.mode == streamModeRich {
 		switch kind {
 		case "tool":
-			return colorize("38;5;111", "[tool]") + " " + bold(message)
+			return colorize("38;5;250", "[tool]") + " " + bold(message)
 		case "done":
-			return colorize("38;5;82", "[done]") + " " + message
+			return colorize("38;5;108", "[done]") + " " + message
 		case "fail":
-			return colorize("38;5;196", "[fail]") + " " + message
+			return colorize("38;5;167", "[fail]") + " " + message
 		}
 	}
 	return "[" + kind + "] " + message
@@ -156,7 +156,7 @@ func (r *TranscriptRenderer) sectionLine(kind, label string) string {
 	switch kind {
 	case "shell":
 		if r.mode == streamModeRich {
-			return colorize("38;5;45", "╭─ shell") + " " + colorize("38;5;244", label)
+			return colorize("38;5;250", "shell") + " " + colorize("38;5;240", label)
 		}
 		return "--- shell: " + label + " ---"
 	default:
@@ -166,28 +166,28 @@ func (r *TranscriptRenderer) sectionLine(kind, label string) string {
 
 func (r *TranscriptRenderer) metaLine(label, value string) string {
 	if r.mode == streamModeRich {
-		return colorize("38;5;244", "  "+label+":") + " " + value
+		return colorize("38;5;240", "  "+label+":") + " " + value
 	}
 	return "  " + label + ": " + value
 }
 
 func (r *TranscriptRenderer) commandPrefix() string {
 	if r.mode == streamModeRich {
-		return colorize("1;97", "$")
+		return colorize("1;252", "$")
 	}
 	return "$"
 }
 
 func (r *TranscriptRenderer) outputPrefix() string {
 	if r.mode == streamModeRich {
-		return colorize("38;5;244", "│ ")
+		return colorize("38;5;240", "│ ")
 	}
 	return "| "
 }
 
 func (r *TranscriptRenderer) logPrefix() string {
 	if r.mode == streamModeRich {
-		return colorize("38;5;241", "· log ")
+		return colorize("38;5;240", "· log ")
 	}
 	return "[log] "
 }

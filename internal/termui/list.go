@@ -140,9 +140,9 @@ func formatListItem(item ListItem, selected bool, width int) string {
 	if selected {
 		b.WriteString("  ")
 		b.WriteString(BGSelected)
-		b.WriteString(FGAccent)
+		b.WriteString(FGWhite)
 		b.WriteString(ANSIBold)
-		b.WriteString("▶  ")
+		b.WriteString("›  ")
 		b.WriteString(label)
 		if descWidth > 0 {
 			b.WriteString(ANSIReset)
@@ -156,7 +156,7 @@ func formatListItem(item ListItem, selected bool, width int) string {
 	}
 
 	b.WriteString(strings.Repeat(" ", listItemPrefixWidth))
-	b.WriteString(FGMuted)
+	b.WriteString(FGGray)
 	b.WriteString(label)
 	b.WriteString(ANSIReset)
 	if descWidth > 0 {

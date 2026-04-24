@@ -25,7 +25,7 @@ func PromptText(label, defaultVal string, canGoBack bool) (string, bool, error) 
 		fmt.Printf("  %sleave blank to go back%s\n", FGMuted+ANSIDim, ANSIReset)
 	}
 
-	fmt.Printf("\n  %s%s╰▶%s  ", FGAccent, ANSIBold, ANSIReset)
+	fmt.Printf("\n  %s%s›%s  ", FGAccent, ANSIBold, ANSIReset)
 	fmt.Print(FGWhite + ANSIBold)
 	NotifyInputRequested(os.Stdout, label, "Response needed in the terminal.")
 
