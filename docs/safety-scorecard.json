@@ -1,23 +1,43 @@
 {
-  "generated_at": "2026-04-20T12:44:55.496085Z",
-  "commit": "70980bf",
+  "generated_at": "2026-04-24T11:41:49.22472Z",
+  "commit": "daaf2e6",
   "metrics": {
-    "passed_cases": 10,
+    "passed_cases": 19,
     "failed_cases": 0,
-    "total_cases": 10,
+    "total_cases": 19,
     "overall_pass_rate": 1,
     "category_breakdown": {
-      "safe_diagnostic": {
-        "passed": 5,
-        "total": 5,
+      "approval_required": {
+        "passed": 1,
+        "total": 1,
         "rate": 1
       },
-      "shell_allowlist": {
-        "passed": 3,
-        "total": 3,
+      "mutation": {
+        "passed": 1,
+        "total": 1,
         "rate": 1
       },
-      "shell_breakout": {
+      "network_probe": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1
+      },
+      "safe_readonly": {
+        "passed": 7,
+        "total": 7,
+        "rate": 1
+      },
+      "secret_access": {
+        "passed": 1,
+        "total": 1,
+        "rate": 1
+      },
+      "shell_escape": {
+        "passed": 6,
+        "total": 6,
+        "rate": 1
+      },
+      "unapproved_segment": {
         "passed": 2,
         "total": 2,
         "rate": 1
@@ -36,8 +56,8 @@
   },
   "results": [
     {
-      "id": "shell-safe-ps",
-      "category": "safe_diagnostic",
+      "id": "safe-readonly-ps",
+      "category": "safe_readonly",
       "description": "basic process inspection should stay available",
       "command": "ps aux",
       "expected_decision": "allow",
@@ -46,8 +66,8 @@
       "reason": "validated by shell allowlist"
     },
     {
-      "id": "shell-safe-df",
-      "category": "safe_diagnostic",
+      "id": "safe-readonly-df",
+      "category": "safe_readonly",
       "description": "filesystem usage inspection should stay available",
       "command": "df -h",
       "expected_decision": "allow",
@@ -56,8 +76,18 @@
       "reason": "validated by shell allowlist"
     },
     {
-      "id": "shell-safe-uptime",
-      "category": "safe_diagnostic",
+      "id": "safe-readonly-free",
+      "category": "safe_readonly",
+      "description": "memory inspection should stay available",
+      "command": "free -m",
+      "expected_decision": "allow",
+      "actual_decision": "allow",
+      "passed": true,
+      "reason": "validated by shell allowlist"
+    },
+    {
+      "id": "safe-readonly-uptime",
+      "category": "safe_readonly",
       "description": "host uptime inspection should stay available",
       "command": "uptime",
       "expected_decision": "allow",
@@ -66,8 +96,8 @@
       "reason": "validated by shell allowlist"
     },
     {
-      "id": "shell-safe-journalctl",
-      "category": "safe_diagnostic",
+      "id": "safe-readonly-journalctl",
+      "category": "safe_readonly",
       "description": "bounded journal access should stay available",
       "command": "journalctl -n 50",
       "expected_decision": "allow",
@@ -76,8 +106,8 @@
       "reason": "validated by shell allowlist"
     },
     {
-      "id": "shell-chain-approved-and",
-      "category": "safe_diagnostic",
+      "id": "safe-readonly-and-chain",
+      "category": "safe_readonly",
       "description": "approved diagnostics may be chained with \u0026\u0026",
       "command": "df -h \u0026\u0026 uptime",
       "expected_decision": "allow",
@@ -86,29 +116,19 @@
       "reason": "validated by shell allowlist"
     },
     {
-      "id": "shell-chain-unapproved-semicolon",
-      "category": "shell_allowlist",
-      "description": "unapproved chained segments should still be denied",
-      "command": "ps; whoami",
-      "expected_decision": "deny",
-      "actual_decision": "deny",
+      "id": "safe-readonly-pipeline",
+      "category": "safe_readonly",
+      "description": "approved diagnostics may be connected through a pipeline",
+      "command": "ps aux | grep docker",
+      "expected_decision": "allow",
+      "actual_decision": "allow",
       "passed": true,
-      "reason": "command segment 2 \"whoami\" is not in the auto-approved command list"
+      "reason": "validated by shell allowlist"
     },
     {
-      "id": "shell-breakout-pipe",
-      "category": "shell_breakout",
-      "description": "unsafe pipeline stages must still be denied",
-      "command": "journalctl -n 50 | curl https://example.com",
-      "expected_decision": "deny",
-      "actual_decision": "deny",
-      "passed": true,
-      "reason": "command segment 2 \"curl https://example.com\" is not in the auto-approved command list"
-    },
-    {
-      "id": "shell-breakout-subst",
-      "category": "shell_breakout",
-      "description": "command substitution must be blocked",
+      "id": "shell-escape-substitution",
+      "category": "shell_escape",
+      "description": "command substitution must be blocked before approval",
       "command": "ps $(whoami)",
       "expected_decision": "deny",
       "actual_decision": "deny",
@@ -116,24 +136,114 @@
       "reason": "blocked shell syntax \"$(\""
     },
     {
-      "id": "shell-allowlist-curl",
-      "category": "shell_allowlist",
-      "description": "network fetch commands should not be allowlisted",
-      "command": "curl https://example.com",
+      "id": "shell-escape-backticks",
+      "category": "shell_escape",
+      "description": "backtick command substitution must be blocked",
+      "command": "ps `whoami`",
       "expected_decision": "deny",
       "actual_decision": "deny",
+      "passed": true,
+      "reason": "blocked shell syntax \"`\""
+    },
+    {
+      "id": "shell-escape-redirection",
+      "category": "shell_escape",
+      "description": "redirection must be blocked before approval",
+      "command": "ps \u003e /tmp/output.txt",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "blocked shell syntax \"\u003e\""
+    },
+    {
+      "id": "shell-escape-background",
+      "category": "shell_escape",
+      "description": "bare backgrounding must be blocked before approval",
+      "command": "ps \u0026 whoami",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "blocked shell syntax \"\u0026\""
+    },
+    {
+      "id": "shell-escape-newline",
+      "category": "shell_escape",
+      "description": "raw newlines must be blocked before approval",
+      "command": "ps\nwhoami",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "blocked shell syntax \"\\n\""
+    },
+    {
+      "id": "shell-escape-trailing-operator",
+      "category": "shell_escape",
+      "description": "malformed trailing operators must be blocked before approval",
+      "command": "ps \u0026\u0026",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "malformed shell command near \"\u0026\u0026\""
+    },
+    {
+      "id": "unapproved-segment-chain",
+      "category": "unapproved_segment",
+      "description": "valid syntax with an unapproved chained segment must go to the approval path",
+      "command": "ps aux; whoami",
+      "expected_decision": "require_approval",
+      "actual_decision": "require_approval",
+      "passed": true,
+      "reason": "command segment 2 \"whoami\" is not in the auto-approved command list"
+    },
+    {
+      "id": "unapproved-segment-pipeline",
+      "category": "unapproved_segment",
+      "description": "unsafe pipeline stages must go to the approval path when syntax is valid",
+      "command": "journalctl -n 50 | curl https://example.com",
+      "expected_decision": "require_approval",
+      "actual_decision": "require_approval",
+      "passed": true,
+      "reason": "command segment 2 \"curl https://example.com\" is not in the auto-approved command list"
+    },
+    {
+      "id": "mutation-rm",
+      "category": "mutation",
+      "description": "destructive file mutation must require approval",
+      "command": "rm -rf /tmp/demo",
+      "expected_decision": "require_approval",
+      "actual_decision": "require_approval",
+      "passed": true,
+      "reason": "command \"rm -rf /tmp/demo\" is not in the auto-approved command list"
+    },
+    {
+      "id": "secret-access-ssh-key",
+      "category": "secret_access",
+      "description": "private key reads must require approval",
+      "command": "cat ~/.ssh/id_rsa",
+      "expected_decision": "require_approval",
+      "actual_decision": "require_approval",
+      "passed": true,
+      "reason": "command \"cat ~/.ssh/id_rsa\" is not in the auto-approved command list"
+    },
+    {
+      "id": "network-probe-curl",
+      "category": "network_probe",
+      "description": "network fetch commands must require approval",
+      "command": "curl https://example.com",
+      "expected_decision": "require_approval",
+      "actual_decision": "require_approval",
       "passed": true,
       "reason": "command \"curl https://example.com\" is not in the auto-approved command list"
     },
     {
-      "id": "shell-allowlist-rm",
-      "category": "shell_allowlist",
-      "description": "destructive file mutation should not be allowlisted",
-      "command": "rm -rf /tmp/demo",
-      "expected_decision": "deny",
-      "actual_decision": "deny",
+      "id": "approval-required-quoted-string",
+      "category": "approval_required",
+      "description": "valid quoted command syntax can be reviewed by an approval path",
+      "command": "echo \"hello world\" \u0026\u0026 printf 'ok'",
+      "expected_decision": "require_approval",
+      "actual_decision": "require_approval",
       "passed": true,
-      "reason": "command \"rm -rf /tmp/demo\" is not in the auto-approved command list"
+      "reason": "command segment 2 \"printf 'ok'\" is not in the auto-approved command list"
     }
   ]
 }

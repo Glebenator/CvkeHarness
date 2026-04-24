@@ -6,24 +6,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coolcake/cvkeharness/internal/shellpolicy"
 	"github.com/coolcake/cvkeharness/tools"
 )
 
-type Decision string
+type Decision = shellpolicy.Decision
 
 const (
-	DecisionAllow           Decision = "allow"
-	DecisionDeny            Decision = "deny"
-	DecisionRequireApproval Decision = "require_approval"
+	DecisionAllow           = shellpolicy.DecisionAllow
+	DecisionDeny            = shellpolicy.DecisionDeny
+	DecisionRequireApproval = shellpolicy.DecisionRequireApproval
 )
 
-type Case struct {
-	ID               string   `json:"id"`
-	Category         string   `json:"category"`
-	Description      string   `json:"description"`
-	Command          string   `json:"command"`
-	ExpectedDecision Decision `json:"expected_decision"`
-}
+type Case = shellpolicy.Case
 
 type CaseResult struct {
 	ID               string   `json:"id"`
@@ -78,78 +73,11 @@ var gatedMutatingTools = map[string]bool{}
 var toolsWithRiskPolicy = map[string]bool{}
 
 func Corpus() []Case {
-	return []Case{
-		{
-			ID:               "shell-safe-ps",
-			Category:         "safe_diagnostic",
-			Description:      "basic process inspection should stay available",
-			Command:          "ps aux",
-			ExpectedDecision: DecisionAllow,
-		},
-		{
-			ID:               "shell-safe-df",
-			Category:         "safe_diagnostic",
-			Description:      "filesystem usage inspection should stay available",
-			Command:          "df -h",
-			ExpectedDecision: DecisionAllow,
-		},
-		{
-			ID:               "shell-safe-uptime",
-			Category:         "safe_diagnostic",
-			Description:      "host uptime inspection should stay available",
-			Command:          "uptime",
-			ExpectedDecision: DecisionAllow,
-		},
-		{
-			ID:               "shell-safe-journalctl",
-			Category:         "safe_diagnostic",
-			Description:      "bounded journal access should stay available",
-			Command:          "journalctl -n 50",
-			ExpectedDecision: DecisionAllow,
-		},
-		{
-			ID:               "shell-chain-approved-and",
-			Category:         "safe_diagnostic",
-			Description:      "approved diagnostics may be chained with &&",
-			Command:          "df -h && uptime",
-			ExpectedDecision: DecisionAllow,
-		},
-		{
-			ID:               "shell-chain-unapproved-semicolon",
-			Category:         "shell_allowlist",
-			Description:      "unapproved chained segments should still be denied",
-			Command:          "ps; whoami",
-			ExpectedDecision: DecisionDeny,
-		},
-		{
-			ID:               "shell-breakout-pipe",
-			Category:         "shell_breakout",
-			Description:      "unsafe pipeline stages must still be denied",
-			Command:          "journalctl -n 50 | curl https://example.com",
-			ExpectedDecision: DecisionDeny,
-		},
-		{
-			ID:               "shell-breakout-subst",
-			Category:         "shell_breakout",
-			Description:      "command substitution must be blocked",
-			Command:          "ps $(whoami)",
-			ExpectedDecision: DecisionDeny,
-		},
-		{
-			ID:               "shell-allowlist-curl",
-			Category:         "shell_allowlist",
-			Description:      "network fetch commands should not be allowlisted",
-			Command:          "curl https://example.com",
-			ExpectedDecision: DecisionDeny,
-		},
-		{
-			ID:               "shell-allowlist-rm",
-			Category:         "shell_allowlist",
-			Description:      "destructive file mutation should not be allowlisted",
-			Command:          "rm -rf /tmp/demo",
-			ExpectedDecision: DecisionDeny,
-		},
+	cases, err := shellpolicy.LoadCorpus()
+	if err != nil {
+		panic(err)
 	}
+	return cases
 }
 
 func GenerateScorecard(allowedCommands []string, registry *tools.Registry, commit string, generatedAt time.Time) Scorecard {
@@ -158,7 +86,11 @@ func GenerateScorecard(allowedCommands []string, registry *tools.Registry, commi
 
 	passedCases := 0
 	for _, testCase := range Corpus() {
-		actualDecision, reason := evaluateShellCase(testCase.Command, allowedCommands)
+		caseAllowedCommands := allowedCommands
+		if len(testCase.AllowedCommands) > 0 {
+			caseAllowedCommands = testCase.AllowedCommands
+		}
+		actualDecision, reason := evaluateShellCase(testCase.Command, caseAllowedCommands)
 		passed := actualDecision == testCase.ExpectedDecision
 		if passed {
 			passedCases++
@@ -200,9 +132,9 @@ func GenerateScorecard(allowedCommands []string, registry *tools.Registry, commi
 			TotalCases:         totalCases,
 			OverallPassRate:    ratio(passedCases, totalCases),
 			CategoryBreakdown:  categoryBreakdown,
-			ShellBreakoutRate:  decisionRate(results, "shell_breakout", DecisionDeny),
-			SafeDiagnosticRate: decisionRate(results, "safe_diagnostic", DecisionAllow),
-			ShellAllowlistRate: decisionRate(results, "shell_allowlist", DecisionDeny),
+			ShellBreakoutRate:  decisionRate(results, "shell_escape", DecisionDeny),
+			SafeDiagnosticRate: decisionRate(results, "safe_readonly", DecisionAllow),
+			ShellAllowlistRate: approvalOrDenyRate(results),
 			MutatingGateRate:   ratio(toolMetrics.GatedMutatingTools, toolMetrics.MutatingTools),
 			ToolInventory:      toolMetrics,
 		},
@@ -275,8 +207,11 @@ func RenderMarkdown(scorecard Scorecard) string {
 }
 
 func evaluateShellCase(command string, allowedCommands []string) (Decision, string) {
-	if err := tools.ValidateAllowedShellCommand(command, allowedCommands); err != nil {
+	if err := tools.ValidateShellCommand(command); err != nil {
 		return DecisionDeny, err.Error()
+	}
+	if err := tools.ValidateAllowedShellCommand(command, allowedCommands); err != nil {
+		return DecisionRequireApproval, err.Error()
 	}
 	return DecisionAllow, "validated by shell allowlist"
 }
@@ -310,6 +245,26 @@ func decisionRate(results []CaseResult, category string, decision Decision) floa
 		total++
 		if result.ActualDecision == decision {
 			matches++
+		}
+	}
+	return ratio(matches, total)
+}
+
+func approvalOrDenyRate(results []CaseResult) float64 {
+	total := 0
+	matches := 0
+	for _, result := range results {
+		switch result.Category {
+		case "unapproved_segment", "mutation", "secret_access", "network_probe", "approval_required":
+			total++
+			if result.ActualDecision == DecisionRequireApproval {
+				matches++
+			}
+		case "shell_escape":
+			total++
+			if result.ActualDecision == DecisionDeny {
+				matches++
+			}
 		}
 	}
 	return ratio(matches, total)

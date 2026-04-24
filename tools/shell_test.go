@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/internal/shellpolicy"
 	"github.com/coolcake/cvkeharness/state"
 )
 
@@ -107,6 +109,132 @@ func TestValidateAllowedShellCommand_UsesAllowlist(t *testing.T) {
 	}
 	if err := ValidateAllowedShellCommand("ps aux | whoami", allowed); err == nil {
 		t.Fatal("expected piped disallowed command to be rejected")
+	}
+}
+
+func TestShellPolicyCorpus(t *testing.T) {
+	t.Parallel()
+
+	cases, err := shellpolicy.LoadCorpus()
+	if err != nil {
+		t.Fatalf("LoadCorpus returned unexpected error: %v", err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("expected shared shell policy corpus to include cases")
+	}
+
+	defaultAllowed := config.DefaultConfig().AllowedCommands
+	for _, testCase := range cases {
+		testCase := testCase
+		t.Run(testCase.ID, func(t *testing.T) {
+			t.Parallel()
+
+			actual := shellpolicy.DecisionAllow
+			allowed := defaultAllowed
+			if len(testCase.AllowedCommands) > 0 {
+				allowed = testCase.AllowedCommands
+			}
+			if err := ValidateShellCommand(testCase.Command); err != nil {
+				actual = shellpolicy.DecisionDeny
+			} else if err := ValidateAllowedShellCommand(testCase.Command, allowed); err != nil {
+				actual = shellpolicy.DecisionRequireApproval
+			}
+
+			if actual != testCase.ExpectedDecision {
+				t.Fatalf("expected %s for %q, got %s", testCase.ExpectedDecision, testCase.Command, actual)
+			}
+		})
+	}
+}
+
+func TestParseShellCommand_Regressions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		command   string
+		wantError bool
+		segments  []string
+		operators []string
+	}{
+		{
+			name:     "quoted strings",
+			command:  `printf "hello world" && printf 'done'`,
+			segments: []string{`printf "hello world"`, `printf 'done'`},
+			operators: []string{
+				"&&",
+			},
+		},
+		{
+			name:     "escaped spaces",
+			command:  `printf hello\ world`,
+			segments: []string{`printf hello\ world`},
+		},
+		{
+			name:      "empty input",
+			command:   "  ",
+			wantError: true,
+		},
+		{
+			name:      "unterminated single quote",
+			command:   `printf 'hello`,
+			wantError: true,
+		},
+		{
+			name:      "unterminated double quote",
+			command:   `printf "hello`,
+			wantError: true,
+		},
+		{
+			name:     "pipeline",
+			command:  "ps aux | grep docker",
+			segments: []string{"ps aux", "grep docker"},
+			operators: []string{
+				"|",
+			},
+		},
+		{
+			name:     "or chain",
+			command:  "uptime || df -h",
+			segments: []string{"uptime", "df -h"},
+			operators: []string{
+				"||",
+			},
+		},
+		{
+			name:      "trailing semicolon",
+			command:   "ps aux;",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			parsed, err := ParseShellCommand(tt.command)
+			if tt.wantError {
+				if err == nil {
+					t.Fatalf("ParseShellCommand(%q) unexpectedly succeeded", tt.command)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseShellCommand(%q) returned unexpected error: %v", tt.command, err)
+			}
+			if len(parsed.Segments) != len(tt.segments) {
+				t.Fatalf("expected %d segments, got %#v", len(tt.segments), parsed.Segments)
+			}
+			for idx, want := range tt.segments {
+				if parsed.Segments[idx].Normalized != want {
+					t.Fatalf("segment %d: expected %q, got %q", idx, want, parsed.Segments[idx].Normalized)
+				}
+			}
+			if strings.Join(parsed.Operators, ",") != strings.Join(tt.operators, ",") {
+				t.Fatalf("expected operators %#v, got %#v", tt.operators, parsed.Operators)
+			}
+		})
 	}
 }
 

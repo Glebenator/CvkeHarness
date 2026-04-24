@@ -1,0 +1,137 @@
+[
+  {
+    "id": "safe-readonly-ps",
+    "category": "safe_readonly",
+    "description": "basic process inspection should stay available",
+    "command": "ps aux",
+    "expected_decision": "allow"
+  },
+  {
+    "id": "safe-readonly-df",
+    "category": "safe_readonly",
+    "description": "filesystem usage inspection should stay available",
+    "command": "df -h",
+    "expected_decision": "allow"
+  },
+  {
+    "id": "safe-readonly-free",
+    "category": "safe_readonly",
+    "description": "memory inspection should stay available",
+    "command": "free -m",
+    "expected_decision": "allow"
+  },
+  {
+    "id": "safe-readonly-uptime",
+    "category": "safe_readonly",
+    "description": "host uptime inspection should stay available",
+    "command": "uptime",
+    "expected_decision": "allow"
+  },
+  {
+    "id": "safe-readonly-journalctl",
+    "category": "safe_readonly",
+    "description": "bounded journal access should stay available",
+    "command": "journalctl -n 50",
+    "expected_decision": "allow"
+  },
+  {
+    "id": "safe-readonly-and-chain",
+    "category": "safe_readonly",
+    "description": "approved diagnostics may be chained with &&",
+    "command": "df -h && uptime",
+    "expected_decision": "allow"
+  },
+  {
+    "id": "safe-readonly-pipeline",
+    "category": "safe_readonly",
+    "description": "approved diagnostics may be connected through a pipeline",
+    "command": "ps aux | grep docker",
+    "allowed_commands": ["ps", "grep"],
+    "expected_decision": "allow"
+  },
+  {
+    "id": "shell-escape-substitution",
+    "category": "shell_escape",
+    "description": "command substitution must be blocked before approval",
+    "command": "ps $(whoami)",
+    "expected_decision": "deny"
+  },
+  {
+    "id": "shell-escape-backticks",
+    "category": "shell_escape",
+    "description": "backtick command substitution must be blocked",
+    "command": "ps `whoami`",
+    "expected_decision": "deny"
+  },
+  {
+    "id": "shell-escape-redirection",
+    "category": "shell_escape",
+    "description": "redirection must be blocked before approval",
+    "command": "ps > /tmp/output.txt",
+    "expected_decision": "deny"
+  },
+  {
+    "id": "shell-escape-background",
+    "category": "shell_escape",
+    "description": "bare backgrounding must be blocked before approval",
+    "command": "ps & whoami",
+    "expected_decision": "deny"
+  },
+  {
+    "id": "shell-escape-newline",
+    "category": "shell_escape",
+    "description": "raw newlines must be blocked before approval",
+    "command": "ps\nwhoami",
+    "expected_decision": "deny"
+  },
+  {
+    "id": "shell-escape-trailing-operator",
+    "category": "shell_escape",
+    "description": "malformed trailing operators must be blocked before approval",
+    "command": "ps &&",
+    "expected_decision": "deny"
+  },
+  {
+    "id": "unapproved-segment-chain",
+    "category": "unapproved_segment",
+    "description": "valid syntax with an unapproved chained segment must go to the approval path",
+    "command": "ps aux; whoami",
+    "expected_decision": "require_approval"
+  },
+  {
+    "id": "unapproved-segment-pipeline",
+    "category": "unapproved_segment",
+    "description": "unsafe pipeline stages must go to the approval path when syntax is valid",
+    "command": "journalctl -n 50 | curl https://example.com",
+    "expected_decision": "require_approval"
+  },
+  {
+    "id": "mutation-rm",
+    "category": "mutation",
+    "description": "destructive file mutation must require approval",
+    "command": "rm -rf /tmp/demo",
+    "expected_decision": "require_approval"
+  },
+  {
+    "id": "secret-access-ssh-key",
+    "category": "secret_access",
+    "description": "private key reads must require approval",
+    "command": "cat ~/.ssh/id_rsa",
+    "expected_decision": "require_approval"
+  },
+  {
+    "id": "network-probe-curl",
+    "category": "network_probe",
+    "description": "network fetch commands must require approval",
+    "command": "curl https://example.com",
+    "expected_decision": "require_approval"
+  },
+  {
+    "id": "approval-required-quoted-string",
+    "category": "approval_required",
+    "description": "valid quoted command syntax can be reviewed by an approval path",
+    "command": "echo \"hello world\" && printf 'ok'",
+    "allowed_commands": ["echo"],
+    "expected_decision": "require_approval"
+  }
+]

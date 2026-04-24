@@ -219,6 +219,14 @@ func validateShellSegment(segment ShellSegment, allowedCommands, approvedCommand
 // ParseShellCommand tokenizes a shell command into approved segments and
 // control operators while rejecting unsupported shell features.
 func ParseShellCommand(command string) (ParsedShellCommand, error) {
+	if strings.ContainsAny(command, "\n\r") {
+		for _, ch := range command {
+			if ch == '\n' || ch == '\r' {
+				return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", string(ch))
+			}
+		}
+	}
+
 	cmd := strings.TrimSpace(command)
 	if cmd == "" {
 		return ParsedShellCommand{}, fmt.Errorf("command cannot be empty")

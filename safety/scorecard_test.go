@@ -22,6 +22,11 @@ func TestGenerateScorecard(t *testing.T) {
 	}
 
 	if scorecard.Metrics.PassedCases != scorecard.Metrics.TotalCases {
+		for _, result := range scorecard.Results {
+			if !result.Passed {
+				t.Logf("failed scorecard case %s: expected %s got %s (%s)", result.ID, result.ExpectedDecision, result.ActualDecision, result.Reason)
+			}
+		}
 		t.Fatalf("expected current deterministic corpus to pass fully, got %d/%d", scorecard.Metrics.PassedCases, scorecard.Metrics.TotalCases)
 	}
 
