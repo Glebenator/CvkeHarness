@@ -1,0 +1,177 @@
+{
+  "generated_at": "2026-04-24T12:01:10.590665Z",
+  "commit": "c5f3dfa",
+  "package": "./tools",
+  "fuzztime": "31s",
+  "metrics": {
+    "total_suites": 2,
+    "passed_suites": 2,
+    "failed_suites": 0,
+    "total_execs": 6358106,
+    "coverage_expanding_input_count": 742
+  },
+  "policy": {
+    "total_cases": 19,
+    "allow_cases": 7,
+    "deny_cases": 6,
+    "approval_cases": 6,
+    "categories": {
+      "approval_required": {
+        "total": 1,
+        "allow": 0,
+        "deny": 0,
+        "approval": 1
+      },
+      "mutation": {
+        "total": 1,
+        "allow": 0,
+        "deny": 0,
+        "approval": 1
+      },
+      "network_probe": {
+        "total": 1,
+        "allow": 0,
+        "deny": 0,
+        "approval": 1
+      },
+      "safe_readonly": {
+        "total": 7,
+        "allow": 7,
+        "deny": 0,
+        "approval": 0
+      },
+      "secret_access": {
+        "total": 1,
+        "allow": 0,
+        "deny": 0,
+        "approval": 1
+      },
+      "shell_escape": {
+        "total": 6,
+        "allow": 0,
+        "deny": 6,
+        "approval": 0
+      },
+      "unapproved_segment": {
+        "total": 2,
+        "allow": 0,
+        "deny": 0,
+        "approval": 2
+      }
+    },
+    "examples": {
+      "accepted": [
+        {
+          "id": "safe-readonly-ps",
+          "category": "safe_readonly",
+          "command": "ps aux"
+        },
+        {
+          "id": "safe-readonly-df",
+          "category": "safe_readonly",
+          "command": "df -h"
+        },
+        {
+          "id": "safe-readonly-free",
+          "category": "safe_readonly",
+          "command": "free -m"
+        }
+      ],
+      "denied": [
+        {
+          "id": "shell-escape-substitution",
+          "category": "shell_escape",
+          "command": "ps $(whoami)"
+        },
+        {
+          "id": "shell-escape-backticks",
+          "category": "shell_escape",
+          "command": "ps `whoami`"
+        },
+        {
+          "id": "shell-escape-redirection",
+          "category": "shell_escape",
+          "command": "ps \u003e /tmp/output.txt"
+        }
+      ],
+      "approval_required": [
+        {
+          "id": "unapproved-segment-chain",
+          "category": "unapproved_segment",
+          "command": "ps aux; whoami"
+        },
+        {
+          "id": "unapproved-segment-pipeline",
+          "category": "unapproved_segment",
+          "command": "journalctl -n 50 | curl https://example.com"
+        },
+        {
+          "id": "mutation-rm",
+          "category": "mutation",
+          "command": "rm -rf /tmp/demo"
+        }
+      ]
+    }
+  },
+  "invariants": [
+    {
+      "name": "raw newlines are rejected before trimming",
+      "status": "passed",
+      "covered_by": [
+        "FuzzParseShellCommand",
+        "FuzzValidateAllowedShellCommand"
+      ]
+    },
+    {
+      "name": "command substitution is rejected outside inert quoting",
+      "status": "passed",
+      "covered_by": [
+        "FuzzParseShellCommand",
+        "FuzzValidateAllowedShellCommand"
+      ]
+    },
+    {
+      "name": "redirection and bare backgrounding are rejected",
+      "status": "passed",
+      "covered_by": [
+        "FuzzParseShellCommand",
+        "FuzzValidateAllowedShellCommand"
+      ]
+    },
+    {
+      "name": "accepted normalized parses are idempotent",
+      "status": "passed",
+      "covered_by": [
+        "FuzzParseShellCommand"
+      ]
+    },
+    {
+      "name": "accepted chained commands keep operators equal to segments minus one",
+      "status": "passed",
+      "covered_by": [
+        "FuzzParseShellCommand",
+        "FuzzValidateAllowedShellCommand"
+      ]
+    }
+  ],
+  "suites": [
+    {
+      "name": "FuzzParseShellCommand",
+      "command": "go test ./tools -run ^$ -fuzz FuzzParseShellCommand -fuzztime 31s",
+      "passed": true,
+      "duration_ms": 31403,
+      "execs": 2937001,
+      "coverage_expanding_input_count": 298,
+      "output_tail": "fuzz: elapsed: 0s, gathering baseline coverage: 0/290 completed\nfuzz: elapsed: 0s, gathering baseline coverage: 290/290 completed, now fuzzing with 11 workers\nfuzz: elapsed: 3s, execs: 259162 (86378/sec), new interesting: 3 (total: 293)\nfuzz: elapsed: 6s, execs: 553183 (97985/sec), new interesting: 5 (total: 295)\nfuzz: elapsed: 9s, execs: 839317 (95396/sec), new interesting: 5 (total: 295)\nfuzz: elapsed: 12s, execs: 1137844 (99497/sec), new interesting: 6 (total: 296)\nfuzz: elapsed: 15s, execs: 1414108 (92102/sec), new interesting: 7 (total: 297)\nfuzz: elapsed: 18s, execs: 1699713 (95198/sec), new interesting: 7 (total: 297)\nfuzz: elapsed: 21s, execs: 1982790 (94368/sec), new interesting: 8 (total: 298)\nfuzz: elapsed: 24s, execs: 2266093 (94429/sec), new interesting: 8 (total: 298)\nfuzz: elapsed: 27s, execs: 2548347 (94094/sec), new interesting: 8 (total: 298)\nfuzz: elapsed: 30s, execs: 2840051 (97231/sec), new interesting: 8 (total: 298)\nfuzz: elapsed: 31s, execs: 2937001 (89151/sec), new interesting: 8 (total: 298)\nPASS\nok  \tgithub.com/coolcake/cvkeharness/tools\t31.123s"
+    },
+    {
+      "name": "FuzzValidateAllowedShellCommand",
+      "command": "go test ./tools -run ^$ -fuzz FuzzValidateAllowedShellCommand -fuzztime 31s",
+      "passed": true,
+      "duration_ms": 32294,
+      "execs": 3421105,
+      "coverage_expanding_input_count": 444,
+      "output_tail": "fuzz: elapsed: 0s, gathering baseline coverage: 0/421 completed\nfuzz: elapsed: 0s, gathering baseline coverage: 421/421 completed, now fuzzing with 11 workers\nfuzz: elapsed: 3s, execs: 264297 (88082/sec), new interesting: 2 (total: 423)\nfuzz: elapsed: 6s, execs: 617334 (117699/sec), new interesting: 6 (total: 427)\nfuzz: elapsed: 9s, execs: 957651 (113434/sec), new interesting: 9 (total: 430)\nfuzz: elapsed: 12s, execs: 1290811 (111055/sec), new interesting: 12 (total: 433)\nfuzz: elapsed: 15s, execs: 1588710 (99303/sec), new interesting: 13 (total: 434)\nfuzz: elapsed: 18s, execs: 1965987 (125743/sec), new interesting: 15 (total: 436)\nfuzz: elapsed: 21s, execs: 2316104 (116722/sec), new interesting: 20 (total: 441)\nfuzz: elapsed: 24s, execs: 2649083 (110983/sec), new interesting: 21 (total: 442)\nfuzz: elapsed: 27s, execs: 2925884 (92270/sec), new interesting: 21 (total: 442)\nfuzz: elapsed: 30s, execs: 3310200 (128088/sec), new interesting: 23 (total: 444)\nfuzz: elapsed: 32s, execs: 3421105 (73868/sec), new interesting: 23 (total: 444)\nPASS\nok  \tgithub.com/coolcake/cvkeharness/tools\t31.572s"
+    }
+  ]
+}
