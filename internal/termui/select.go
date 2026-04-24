@@ -21,13 +21,13 @@ const (
 	ansiBold  = "\033[1m"
 	ansiDim   = "\033[2m"
 
-	fgWhite = "\033[97m"
-	fgMuted = "\033[38;5;244m"
-	fgCyan  = "\033[38;5;45m"
-	fgGreen = "\033[38;5;84m"
-	fgCoral = "\033[38;5;209m"
+	fgWhite = "\033[38;5;252m"
+	fgMuted = "\033[38;5;240m"
+	fgCyan  = "\033[38;5;250m"
+	fgGreen = "\033[38;5;108m"
+	fgCoral = "\033[38;5;167m"
 
-	bgSelected = "\033[48;5;237m"
+	bgSelected = "\033[48;5;236m"
 )
 
 var ErrInterrupted = errors.New("interactive prompt interrupted")
@@ -233,7 +233,7 @@ func renderInteractiveHeader(out io.Writer, opts SelectOptions, boxWidth int) er
 	if _, err := fmt.Fprintln(out, clearLine("")); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(out, clearLine(colorize(fgCyan, boxTop(title, boxWidth)))); err != nil {
+	if _, err := fmt.Fprintln(out, clearLine(promptHeader(title, boxWidth, fgCyan))); err != nil {
 		return err
 	}
 
@@ -268,9 +268,6 @@ func renderInteractiveHeader(out io.Writer, opts SelectOptions, boxWidth int) er
 		}
 	}
 
-	if _, err := fmt.Fprintln(out, clearLine(colorize(fgCyan, boxBottom(boxWidth)))); err != nil {
-		return err
-	}
 	if _, err := fmt.Fprintln(out, clearLine("")); err != nil {
 		return err
 	}
@@ -288,7 +285,7 @@ func renderInteractiveChoices(out io.Writer, opts SelectOptions, selected, boxWi
 	selectedChoice := opts.Choices[selected]
 	tone := choiceTone(selectedChoice)
 
-	if _, err := fmt.Fprintln(out, clearLine(colorize(tone, boxTop(selectedChoice.Label, boxWidth)))); err != nil {
+	if _, err := fmt.Fprintln(out, clearLine(promptHeader(selectedChoice.Label, boxWidth, tone))); err != nil {
 		return 0, err
 	}
 	lineCount++
@@ -309,18 +306,8 @@ func renderInteractiveChoices(out io.Writer, opts SelectOptions, selected, boxWi
 		lineCount++
 	}
 
-	if _, err := fmt.Fprintln(out, clearLine(boxLine(boxWidth, ""))); err != nil {
-		return 0, err
-	}
-	lineCount++
-
 	confirmLine := colorize(ansiDim+fgMuted, "Press Enter to confirm this action.")
 	if _, err := fmt.Fprintln(out, clearLine(boxLine(boxWidth, confirmLine))); err != nil {
-		return 0, err
-	}
-	lineCount++
-
-	if _, err := fmt.Fprintln(out, clearLine(colorize(tone, boxBottom(boxWidth)))); err != nil {
 		return 0, err
 	}
 	lineCount++
@@ -334,21 +321,17 @@ func renderInteractiveChoices(out io.Writer, opts SelectOptions, selected, boxWi
 	return lineCount, nil
 }
 
-func boxTop(title string, width int) string {
-	title = truncateRunes(strings.TrimSpace(title), width-8)
-	head := "╭─ " + title + " "
-	if pad := width - utf8.RuneCountInString(head) - 1; pad > 0 {
-		head += strings.Repeat("─", pad)
+func promptHeader(title string, width int, tone string) string {
+	title = truncateRunes(strings.TrimSpace(title), width-5)
+	head := "  " + colorize(tone+ansiBold, title)
+	if pad := width - visibleRuneLen(title) - 4; pad > 0 {
+		head += " " + colorize(fgMuted, strings.Repeat("─", pad))
 	}
-	return head + "╮"
-}
-
-func boxBottom(width int) string {
-	return "╰" + strings.Repeat("─", width-2) + "╯"
+	return head
 }
 
 func boxLine(width int, content string) string {
-	return colorize(fgCyan, "│") + " " + padRight(content, width-4) + " " + colorize(fgCyan, "│")
+	return "  " + colorize(fgMuted, "│") + " " + padRight(content, width-4)
 }
 
 func renderChoiceTabs(choices []Choice, selected, width int) string {
@@ -357,9 +340,9 @@ func renderChoiceTabs(choices []Choice, selected, width int) string {
 		label := truncateRunes(choice.Label, 24)
 		tab := " " + label + " "
 		if i == selected {
-			tab = colorize(bgSelected+fgWhite+ansiBold, tab)
+			tab = colorize(bgSelected+fgWhite+ansiBold, "›"+tab)
 		} else {
-			tab = colorize(fgMuted, tab)
+			tab = colorize(fgMuted, " "+tab)
 		}
 		parts = append(parts, tab)
 	}

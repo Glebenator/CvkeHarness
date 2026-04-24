@@ -9,10 +9,10 @@ import (
 func RenderWizardHeader(appName, subtitle string) {
 	fmt.Print(ClearScreen)
 	fmt.Println()
-	fmt.Printf("%s%s%s\n", FGAccent+ANSIBold, HeaderSeparator, ANSIReset)
-	fmt.Printf("  %s%s◆  %s%s\n", ANSIBold, FGWhite, appName, ANSIReset)
+	fmt.Printf("%s%s%s\n", FGMuted, HeaderSeparator, ANSIReset)
+	fmt.Printf("  %s%s%s\n", ANSIBold+FGWhite, appName, ANSIReset)
 	fmt.Printf("  %s%s%s\n", FGMuted, subtitle, ANSIReset)
-	fmt.Printf("%s%s%s\n\n", FGAccent+ANSIBold, HeaderSeparator, ANSIReset)
+	fmt.Printf("%s%s%s\n\n", FGMuted, HeaderSeparator, ANSIReset)
 }
 
 // RenderWizardStep prints a standard step progress row and title.

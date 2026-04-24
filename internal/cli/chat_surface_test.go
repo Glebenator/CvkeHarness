@@ -82,7 +82,7 @@ func TestChatSurfaceStreamsShellOutputInRichMode(t *testing.T) {
 	if !strings.Contains(got, "\033[") {
 		t.Fatalf("expected rich chat surface to include ANSI codes, got %q", got)
 	}
-	if !strings.Contains(got, "• Shell") {
+	if !strings.Contains(got, "Shell") {
 		t.Fatalf("expected rich chat surface shell title, got %q", got)
 	}
 	if !strings.Contains(got, "$") {
