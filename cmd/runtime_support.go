@@ -20,22 +20,22 @@ func (r providerResolver) Resolve(providerName string) (provider.Provider, error
 }
 
 func resolveProvider(cfg *config.Config, providerName string) (provider.Provider, error) {
-	switch strings.TrimSpace(providerName) {
-	case "", cfg.Provider:
-		switch cfg.Provider {
-		case "openrouter":
-			return provider.NewOpenRouter(cfg.GetAPIKey("openrouter")), nil
-		case "lmstudio":
-			return provider.NewLMStudio(cfg.BaseURL), nil
-		default:
-			return nil, fmt.Errorf("unsupported provider %q", cfg.Provider)
-		}
+	name := strings.TrimSpace(providerName)
+	if name == "" {
+		name = strings.TrimSpace(cfg.Provider)
+	}
+
+	switch name {
+	case "codex":
+		return provider.NewCodexFromCLIAuth(), nil
 	case "openrouter":
 		return provider.NewOpenRouter(cfg.GetAPIKey("openrouter")), nil
+	case "openai":
+		return provider.NewOpenAI(cfg.GetAPIKey("openai")), nil
 	case "lmstudio":
 		return provider.NewLMStudio(cfg.BaseURL), nil
 	default:
-		return nil, fmt.Errorf("unsupported provider %q", providerName)
+		return nil, fmt.Errorf("unsupported provider %q", name)
 	}
 }
 

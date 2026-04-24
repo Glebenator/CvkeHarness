@@ -2,7 +2,9 @@ package termui
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -30,8 +32,23 @@ const (
 	listKeyBackspace
 )
 
+const (
+	listDefaultWidth        = 100
+	listDefaultHeight       = 24
+	listLabelWidth          = 42
+	listMinVisibleRows      = 4
+	listReservedScreenRows  = 13
+	listNonListContentRows  = 2
+	listItemPrefixWidth     = 5
+	listDescriptionGapWidth = 2
+)
+
 // SelectList renders an arrow-key navigable vertical list.
 func SelectList(items []ListItem, initial int, canGoBack bool) (int, error) {
+	if len(items) == 0 {
+		return 0, errors.New("select list requires at least one item")
+	}
+
 	selected := initial
 	if selected < 0 || selected >= len(items) {
 		selected = 0
@@ -47,27 +64,16 @@ func SelectList(items []ListItem, initial int, canGoBack bool) (int, error) {
 	fmt.Print(HideCursor)
 	defer fmt.Print(ShowCursor)
 
-	lineCount := len(items) + 2
+	width, height := listTerminalSize(fd)
+	visibleRows := listVisibleRows(len(items), height)
+	scrollTop := listScrollTop(selected, 0, len(items), visibleRows)
 
-	render := func() {
-		for i, item := range items {
-			fmt.Print("\033[2K\r")
-			if i == selected {
-				fmt.Printf("  %s%s ▶  %-42s%s  %s%s%s\n",
-					BGSelected, FGAccent+ANSIBold, item.Label, ANSIReset,
-					BGSelected+FGGray, item.Description, ANSIReset)
-			} else {
-				fmt.Printf("     %s%-42s%s  %s%s%s\n",
-					FGMuted, item.Label, ANSIReset,
-					ANSIDim+FGMuted, item.Description, ANSIReset)
-			}
-		}
-		fmt.Print("\033[2K\r\n")
-		fmt.Print("\033[2K\r")
-		fmt.Printf("  %s%s%s\n", FGGray, buildListHint(canGoBack), ANSIReset)
+	render := func() int {
+		scrollTop = listScrollTop(selected, scrollTop, len(items), visibleRows)
+		return renderListViewport(os.Stdout, items, selected, scrollTop, visibleRows, width, canGoBack)
 	}
 
-	render()
+	lineCount := render()
 	NotifyInputRequested(os.Stdout, "Choose an option", "Selection is waiting in the terminal.")
 
 	for {
@@ -93,8 +99,155 @@ func SelectList(items []ListItem, initial int, canGoBack bool) (int, error) {
 			continue
 		}
 		fmt.Printf("\033[%dA", lineCount)
-		render()
+		lineCount = render()
 	}
+}
+
+func renderListViewport(out io.Writer, items []ListItem, selected, scrollTop, visibleRows, width int, canGoBack bool) int {
+	lineCount := 0
+	end := scrollTop + visibleRows
+	if end > len(items) {
+		end = len(items)
+	}
+	for i := scrollTop; i < end; i++ {
+		fmt.Fprintln(out, clearLine(formatListItem(items[i], i == selected, width)))
+		lineCount++
+	}
+	fmt.Fprintln(out, clearLine(""))
+	lineCount++
+	fmt.Fprintln(out, clearLine(formatListHint(canGoBack, selected, len(items), visibleRows, width)))
+	lineCount++
+	return lineCount
+}
+
+func formatListItem(item ListItem, selected bool, width int) string {
+	if width <= 0 {
+		width = listDefaultWidth
+	}
+	if width <= listItemPrefixWidth {
+		text := item.Label
+		style := FGMuted
+		if selected {
+			text = "▶ " + text
+			style = BGSelected + FGAccent + ANSIBold
+		}
+		return style + truncateRunes(text, width) + ANSIReset
+	}
+	labelWidth, descWidth := listColumnWidths(width)
+	label := padRight(item.Label, labelWidth)
+
+	var b strings.Builder
+	if selected {
+		b.WriteString("  ")
+		b.WriteString(BGSelected)
+		b.WriteString(FGAccent)
+		b.WriteString(ANSIBold)
+		b.WriteString("▶  ")
+		b.WriteString(label)
+		if descWidth > 0 {
+			b.WriteString(ANSIReset)
+			b.WriteString(BGSelected)
+			b.WriteString(FGGray)
+			b.WriteString(strings.Repeat(" ", listDescriptionGapWidth))
+			b.WriteString(padRight(item.Description, descWidth))
+		}
+		b.WriteString(ANSIReset)
+		return b.String()
+	}
+
+	b.WriteString(strings.Repeat(" ", listItemPrefixWidth))
+	b.WriteString(FGMuted)
+	b.WriteString(label)
+	b.WriteString(ANSIReset)
+	if descWidth > 0 {
+		b.WriteString(strings.Repeat(" ", listDescriptionGapWidth))
+		b.WriteString(ANSIDim)
+		b.WriteString(FGMuted)
+		b.WriteString(padRight(item.Description, descWidth))
+		b.WriteString(ANSIReset)
+	}
+	return b.String()
+}
+
+func formatListHint(canGoBack bool, selected, itemCount, visibleRows, width int) string {
+	hint := buildListHint(canGoBack)
+	if itemCount > visibleRows {
+		hint = fmt.Sprintf("%s   %d/%d", hint, selected+1, itemCount)
+	}
+	contentWidth := width - 2
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	return "  " + FGGray + truncateRunes(hint, contentWidth) + ANSIReset
+}
+
+func listColumnWidths(width int) (int, int) {
+	if width <= 0 {
+		width = listDefaultWidth
+	}
+	available := width - listItemPrefixWidth
+	if available <= 0 {
+		return 0, 0
+	}
+	if available <= listLabelWidth+listDescriptionGapWidth {
+		return available, 0
+	}
+	descWidth := available - listLabelWidth - listDescriptionGapWidth
+	return listLabelWidth, descWidth
+}
+
+func listVisibleRows(itemCount, terminalHeight int) int {
+	if itemCount <= 0 {
+		return 0
+	}
+	if terminalHeight <= 0 {
+		terminalHeight = listDefaultHeight
+	}
+	available := terminalHeight - listReservedScreenRows
+	if available < listMinVisibleRows {
+		available = terminalHeight - listNonListContentRows
+	}
+	if available < 1 {
+		available = 1
+	}
+	if available > itemCount {
+		return itemCount
+	}
+	return available
+}
+
+func listScrollTop(selected, currentTop, itemCount, visibleRows int) int {
+	if visibleRows <= 0 || itemCount <= visibleRows {
+		return 0
+	}
+	maxTop := itemCount - visibleRows
+	if currentTop < 0 {
+		currentTop = 0
+	}
+	if currentTop > maxTop {
+		currentTop = maxTop
+	}
+	if selected < currentTop {
+		return selected
+	}
+	if selected >= currentTop+visibleRows {
+		return selected - visibleRows + 1
+	}
+	return currentTop
+}
+
+func listTerminalSize(fd int) (int, int) {
+	width, height, err := term.GetSize(fd)
+	if err != nil {
+		return listDefaultWidth, listDefaultHeight
+	}
+	if width <= 0 {
+		width = listDefaultWidth
+	}
+	if height <= 0 {
+		height = listDefaultHeight
+	}
+	return width, height
 }
 
 func numberedFallback(items []ListItem, initial int, canGoBack bool) (int, error) {

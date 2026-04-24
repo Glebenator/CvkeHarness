@@ -18,7 +18,7 @@ It focuses on:
 | `cmd/` | CLI surface: setup/settings wizard, runtime execution, chat, memory/model/command admin, safety commands. |
 | `agent/` | Main orchestration loop for routed planning, execution, chat, and deterministic memory curation. |
 | `core/` | Shared domain types for phases, routing, task classes, model refs, and retrieval context. |
-| `provider/` | Provider abstraction plus concrete OpenRouter and LM Studio adapters. |
+| `provider/` | Provider abstraction plus concrete Codex ChatGPT, OpenRouter, OpenAI, and LM Studio adapters. |
 | `router/` | Historical model routing based on SQLite-backed model statistics and approval state. |
 | `tools/` | Tool registry, shell execution guardrails, and ad hoc memory recording tool. |
 | `memory/` | Target-aware readable memory files, target resolution, retrieval brief rendering, deterministic curation, reindex, rollback. |
@@ -72,7 +72,9 @@ flowchart TB
 
     subgraph Providers["Provider Layer (`provider/`)"]
         providerIface["provider.Provider\nChatCompletion(ctx, request)"]
+        codex["provider.Codex\nChatGPT subscription auth"]
         openrouter["provider.OpenRouter"]
+        openai["provider.OpenAI"]
         lmstudio["provider.LMStudio"]
         httpClient["internal/httputil.Client\nTimeout + retry/backoff"]
         remoteLLM["Remote or local LLM endpoint"]
@@ -168,10 +170,14 @@ flowchart TB
 
     routingCfg --> configPkg
     routingCfg --> store
+    providerResolver --> codex
     providerResolver --> openrouter
+    providerResolver --> openai
     providerResolver --> lmstudio
 
+    codex --> providerIface
     openrouter --> providerIface
+    openai --> providerIface
     lmstudio --> providerIface
     providerIface --> httpClient --> remoteLLM
 
@@ -374,7 +380,7 @@ sequenceDiagram
 - `cmd/chat.go` assembles the same runtime components for interactive work.
 - `cmd/setup.go` and `cmd/setup_soul.go` form a full-screen setup wizard that:
   - selects the provider
-  - validates OpenRouter keys or captures LM Studio base URLs
+  - validates Codex CLI ChatGPT login, OpenRouter/OpenAI credentials, or LM Studio base URLs
   - configures safety mode, routing, token/iteration limits, and logging
   - writes `config.yaml`
   - bootstraps `soul.md` plus the structured memory files
@@ -509,7 +515,7 @@ The provider package intentionally exposes one small interface:
 
 `ChatCompletion(ctx, *ChatRequest) -> *ChatResponse`
 
-Both OpenRouter and LM Studio implement this same contract using OpenAI-style chat payloads with tool definitions.
+OpenRouter and LM Studio implement this contract with OpenAI-style chat payloads. The OpenAI adapter maps the same harness messages and tool calls onto the Responses API for usage-based API access, and the Codex provider reuses the official Codex CLI ChatGPT OAuth cache against the ChatGPT Codex backend.
 
 Shared HTTP behavior comes from `internal/httputil.Client`:
 

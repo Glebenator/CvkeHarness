@@ -22,10 +22,11 @@ type ChatRequest struct {
 
 // Message represents a single turn in the conversation.
 type Message struct {
-	Role       string     `json:"role"` // "system", "user", "assistant", "tool"
-	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // populated when model returns tools
-	ToolCallID string     `json:"tool_call_id,omitempty"` // used when role is "tool"
+	Role          string            `json:"role"` // "system", "user", "assistant", "tool"
+	Content       string            `json:"content,omitempty"`
+	ToolCalls     []ToolCall        `json:"tool_calls,omitempty"`   // populated when model returns tools
+	ToolCallID    string            `json:"tool_call_id,omitempty"` // used when role is "tool"
+	ResponseItems []json.RawMessage `json:"-"`                      // provider-native response items to preserve reasoning/tool-call state
 }
 
 // ToolCall represents a specific tool invocation requested by the model.

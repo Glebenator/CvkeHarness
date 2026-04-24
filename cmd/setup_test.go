@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/tools"
@@ -55,6 +56,57 @@ func TestEnsureDefaultApprovedAvoidsDuplicates(t *testing.T) {
 	}
 }
 
+func TestSetDefaultModelNormalizesProviderQualifiedOpenRouterIDs(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Provider: "openrouter",
+	}
+
+	setDefaultModel(cfg, "openrouter/google/gemma-4-31b-it:free")
+
+	if cfg.DefaultModel != "google/gemma-4-31b-it:free" {
+		t.Fatalf("expected default model to be normalized, got %q", cfg.DefaultModel)
+	}
+	if len(cfg.ApprovedModels) != 1 || cfg.ApprovedModels[0] != "openrouter/google/gemma-4-31b-it:free" {
+		t.Fatalf("expected approved model to retain provider/model format, got %#v", cfg.ApprovedModels)
+	}
+}
+
+func TestSetDefaultModelNormalizesProviderQualifiedOpenAIIDs(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Provider: "openai",
+	}
+
+	setDefaultModel(cfg, "openai/gpt-5.2-codex")
+
+	if cfg.DefaultModel != "gpt-5.2-codex" {
+		t.Fatalf("expected default model to be normalized, got %q", cfg.DefaultModel)
+	}
+	if len(cfg.ApprovedModels) != 1 || cfg.ApprovedModels[0] != "openai/gpt-5.2-codex" {
+		t.Fatalf("expected approved model to retain provider/model format, got %#v", cfg.ApprovedModels)
+	}
+}
+
+func TestSetDefaultModelNormalizesProviderQualifiedCodexIDs(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Provider: "codex",
+	}
+
+	setDefaultModel(cfg, "codex/gpt-5.1-codex-max")
+
+	if cfg.DefaultModel != "gpt-5.1-codex-max" {
+		t.Fatalf("expected default model to be normalized, got %q", cfg.DefaultModel)
+	}
+	if len(cfg.ApprovedModels) != 1 || cfg.ApprovedModels[0] != "codex/gpt-5.1-codex-max" {
+		t.Fatalf("expected approved model to retain provider/model format, got %#v", cfg.ApprovedModels)
+	}
+}
+
 func TestCloneConfigCopiesReferenceFields(t *testing.T) {
 	t.Parallel()
 
@@ -62,12 +114,14 @@ func TestCloneConfigCopiesReferenceFields(t *testing.T) {
 		APIKeys:         map[string]string{"openrouter": "secret"},
 		AllowedCommands: []string{"echo"},
 		ApprovedModels:  []string{"openrouter/model"},
+		FavoriteModels:  []string{"openrouter/favorite"},
 	}
 
 	clone := cloneConfig(cfg)
 	clone.APIKeys["openrouter"] = "updated"
 	clone.AllowedCommands[0] = "pwd"
 	clone.ApprovedModels[0] = "openrouter/other"
+	clone.FavoriteModels[0] = "openrouter/else"
 
 	if cfg.APIKeys["openrouter"] != "secret" {
 		t.Fatalf("expected source API keys to remain unchanged, got %#v", cfg.APIKeys)
@@ -77,6 +131,9 @@ func TestCloneConfigCopiesReferenceFields(t *testing.T) {
 	}
 	if cfg.ApprovedModels[0] != "openrouter/model" {
 		t.Fatalf("expected source approved models to remain unchanged, got %#v", cfg.ApprovedModels)
+	}
+	if cfg.FavoriteModels[0] != "openrouter/favorite" {
+		t.Fatalf("expected source favorite models to remain unchanged, got %#v", cfg.FavoriteModels)
 	}
 }
 
@@ -112,6 +169,179 @@ func TestSettingsMenuEntriesReflectCurrentProvider(t *testing.T) {
 	}
 	if entries[4].Description != "Default model only" {
 		t.Fatalf("expected routing summary, got %#v", entries[4])
+	}
+}
+
+func TestSettingsMenuEntriesReflectCodexProvider(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Provider:       "codex",
+		DefaultModel:   "gpt-5.1-codex-max",
+		SafetyMode:     tools.SafetyModeUserConfirm,
+		RoutingEnabled: false,
+		RoutingMode:    "disabled",
+		MaxTokens:      2048,
+		MaxIterations:  10,
+		LogLevel:       "warn",
+		MemoryDir:      t.TempDir(),
+	}
+
+	entries := settingsMenuEntries(cfg, defaultSoulProfile())
+
+	if entries[0].Label != "Provider" || entries[0].Description != "Codex via ChatGPT" {
+		t.Fatalf("expected Codex provider summary, got %#v", entries[0])
+	}
+	if entries[1].Label != "Codex Login" {
+		t.Fatalf("expected Codex login entry, got %#v", entries[1])
+	}
+}
+
+func TestSafetyModelsFollowProvider(t *testing.T) {
+	t.Parallel()
+
+	codexOptions := safetyModelsForProvider(&config.Config{Provider: "codex"})
+	if codexOptions[0][0] != "gpt-5.1-codex-mini" {
+		t.Fatalf("expected Codex safety model options, got %#v", codexOptions)
+	}
+
+	openAIOptions := safetyModelsForProvider(&config.Config{Provider: "openai"})
+	if openAIOptions[0][0] != "gpt-5-nano" {
+		t.Fatalf("expected OpenAI safety model options, got %#v", openAIOptions)
+	}
+}
+
+func TestFetchCodexModelsUsesFreshCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+
+	now := time.Date(2026, 4, 23, 14, 0, 0, 0, time.UTC)
+	writeCodexModelsCache(t, home, `{
+		"fetched_at": "2026-04-23T13:45:00Z",
+		"client_version": "0.122.0",
+		"models": [
+			{
+				"slug": "hidden-model",
+				"display_name": "Hidden",
+				"description": "Hidden model",
+				"visibility": "hidden",
+				"supported_in_api": true,
+				"priority": 1
+			},
+			{
+				"slug": "gpt-5.4-mini",
+				"display_name": "GPT-5.4-Mini",
+				"description": "Small model",
+				"visibility": "list",
+				"supported_in_api": true,
+				"priority": 4
+			},
+			{
+				"slug": "gpt-5.4",
+				"display_name": "gpt-5.4",
+				"description": "Strong model",
+				"visibility": "list",
+				"supported_in_api": true,
+				"priority": 2
+			}
+		]
+	}`)
+
+	result := fetchCodexModels(now)
+
+	if !result.isLive {
+		t.Fatalf("expected fresh cache to be live, got %#v", result)
+	}
+	if result.source != "codex-cache" {
+		t.Fatalf("expected codex cache source, got %q", result.source)
+	}
+	if len(result.items) < 3 {
+		t.Fatalf("expected cached models plus custom entry, got %#v", result.items)
+	}
+	if result.items[0][0] != "gpt-5.4" || result.items[1][0] != "gpt-5.4-mini" {
+		t.Fatalf("expected priority ordering, got %#v", result.items)
+	}
+}
+
+func TestFetchCodexModelsMarksStaleCacheNotLive(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+
+	now := time.Date(2026, 4, 23, 14, 0, 0, 0, time.UTC)
+	writeCodexModelsCache(t, home, `{
+		"fetched_at": "2026-04-22T01:00:00Z",
+		"models": [
+			{
+				"slug": "gpt-5.4",
+				"display_name": "gpt-5.4",
+				"description": "Strong model",
+				"visibility": "list",
+				"supported_in_api": true,
+				"priority": 2
+			}
+		]
+	}`)
+
+	result := fetchCodexModels(now)
+
+	if result.isLive {
+		t.Fatalf("expected stale cache to be non-live, got %#v", result)
+	}
+	if result.source != "codex-cache" {
+		t.Fatalf("expected stale codex cache to still be used, got %q", result.source)
+	}
+	if result.items[0][0] != "gpt-5.4" {
+		t.Fatalf("expected stale cache models to be listed, got %#v", result.items)
+	}
+}
+
+func TestFetchCodexModelsFallsBackWhenCacheMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+
+	result := fetchCodexModels(time.Date(2026, 4, 23, 14, 0, 0, 0, time.UTC))
+
+	if result.isLive {
+		t.Fatalf("expected missing cache fallback to be non-live, got %#v", result)
+	}
+	if result.source != "fallback" {
+		t.Fatalf("expected fallback source, got %q", result.source)
+	}
+	if len(result.items) == 0 || result.items[0][0] != "gpt-5.1-codex-max" {
+		t.Fatalf("expected built-in Codex fallback models, got %#v", result.items)
+	}
+}
+
+func writeCodexModelsCache(t *testing.T, home, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(home, "models_cache.json"), []byte(body), 0600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+}
+
+func TestSettingsMenuEntriesReflectOpenAIProvider(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{
+		Provider:       "openai",
+		APIKeys:        map[string]string{"openai": "sk-test-secret"},
+		DefaultModel:   "gpt-5.2-codex",
+		SafetyMode:     tools.SafetyModeUserConfirm,
+		RoutingEnabled: false,
+		RoutingMode:    "disabled",
+		MaxTokens:      2048,
+		MaxIterations:  10,
+		LogLevel:       "warn",
+		MemoryDir:      t.TempDir(),
+	}
+
+	entries := settingsMenuEntries(cfg, defaultSoulProfile())
+
+	if entries[0].Label != "Provider" || entries[0].Description != "OpenAI" {
+		t.Fatalf("expected OpenAI provider summary, got %#v", entries[0])
+	}
+	if entries[1].Label != "API Key" || entries[1].Description == "Not configured" {
+		t.Fatalf("expected OpenAI credential entry, got %#v", entries[1])
 	}
 }
 

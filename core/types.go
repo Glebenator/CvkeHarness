@@ -63,7 +63,7 @@ func ParseModelRef(raw, defaultProvider string) ModelRef {
 		return NewModelRef(parts[0], strings.Join(parts[1:], "/"))
 	}
 	if len(parts) == 2 {
-		if parts[0] == "openrouter" || parts[0] == "lmstudio" {
+		if parts[0] == "codex" || parts[0] == "openrouter" || parts[0] == "openai" || parts[0] == "lmstudio" {
 			return NewModelRef(parts[0], parts[1])
 		}
 	}
