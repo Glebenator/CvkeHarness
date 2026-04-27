@@ -21,13 +21,13 @@ const (
 	ansiBold  = "\033[1m"
 	ansiDim   = "\033[2m"
 
-	fgWhite = "\033[38;5;252m"
-	fgMuted = "\033[38;5;240m"
-	fgCyan  = "\033[38;5;250m"
-	fgGreen = "\033[38;5;108m"
-	fgCoral = "\033[38;5;167m"
+	fgWhite = FGWhite
+	fgMuted = FGMuted
+	fgCyan  = FGAccent
+	fgGreen = FGGreen
+	fgCoral = FGRed
 
-	bgSelected = "\033[48;5;236m"
+	bgSelected = BGSelected
 )
 
 var ErrInterrupted = errors.New("interactive prompt interrupted")
@@ -236,6 +236,9 @@ func renderInteractiveHeader(out io.Writer, opts SelectOptions, boxWidth int) er
 	if _, err := fmt.Fprintln(out, clearLine(promptHeader(title, boxWidth, fgCyan))); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintln(out, clearLine(colorize(FGSubtle, "  "+strings.Repeat("─", boxWidth-2)))); err != nil {
+		return err
+	}
 
 	for i, detail := range opts.Details {
 		if i > 0 {
@@ -340,7 +343,7 @@ func renderChoiceTabs(choices []Choice, selected, width int) string {
 		label := truncateRunes(choice.Label, 24)
 		tab := " " + label + " "
 		if i == selected {
-			tab = colorize(bgSelected+fgWhite+ansiBold, "›"+tab)
+			tab = colorize(bgSelected+fgWhite+ansiBold, "▸"+tab)
 		} else {
 			tab = colorize(fgMuted, " "+tab)
 		}

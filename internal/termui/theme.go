@@ -5,13 +5,14 @@ const (
 	ANSIBold  = "\033[1m"
 	ANSIDim   = "\033[2m"
 
-	FGWhite  = "\033[38;5;252m"
-	FGGray   = "\033[38;5;247m"
-	FGMuted  = "\033[38;5;240m"
-	FGAccent = "\033[38;5;250m"
-	FGGreen  = "\033[38;5;108m"
-	FGYellow = "\033[38;5;180m"
-	FGRed    = "\033[38;5;167m"
+	FGWhite  = "\033[38;5;252m" // bright stone
+	FGGray   = "\033[38;5;248m" // warm body text
+	FGMuted  = "\033[38;5;240m" // subdued stone
+	FGSubtle = "\033[38;5;238m" // faint rules
+	FGAccent = "\033[38;5;180m" // dashboard amber
+	FGGreen  = "\033[38;5;108m" // sage
+	FGYellow = "\033[38;5;179m" // dusty gold
+	FGRed    = "\033[38;5;173m" // terracotta
 
 	BGSelected = "\033[48;5;236m"
 
@@ -19,5 +20,5 @@ const (
 	ShowCursor  = "\033[?25h"
 	ClearScreen = "\033[2J\033[H"
 
-	HeaderSeparator = "  ───────────────────────────────────────────────"
+	HeaderSeparator = "────────────────────────────────────────────────"
 )

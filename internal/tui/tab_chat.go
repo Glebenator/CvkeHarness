@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -25,6 +26,7 @@ type chatTab struct {
 	detail   state.ChatSessionDetail
 	loaded   bool
 	scroll   int
+	message  string
 }
 
 func newChatTab() tabModel {
@@ -36,6 +38,24 @@ func (t *chatTab) Init(svc *Service) tea.Cmd {
 }
 
 func (t *chatTab) Consuming() bool { return false }
+
+func (t *chatTab) StatusHints() []string {
+	if t.expanded {
+		return []string{
+			renderKeyHint("esc", "back"),
+			renderKeyHint("↑↓", "scroll"),
+		}
+	}
+	if len(t.sessions) > 0 {
+		return []string{
+			renderKeyHint("n", "new chat"),
+			renderKeyHint("↑↓", "move"),
+			renderKeyHint("enter", "detail"),
+			positionIndicator(t.cursor, len(t.sessions)),
+		}
+	}
+	return []string{renderKeyHint("n", "new chat")}
+}
 
 func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -79,6 +99,15 @@ func (t *chatTab) updateList(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 				return chatDetailMsg{detail: detail}
 			}
 		}
+	case key.Matches(msg, keys.NewChat):
+		t.message = "Chat session closed"
+		cmd := exec.Command(svc.BinaryName(), "chat")
+		return t, tea.ExecProcess(cmd, func(err error) tea.Msg {
+			if err != nil {
+				return chatDataMsg{sessions: t.sessions}
+			}
+			return loadChatData(svc)
+		})
 	}
 	return t, nil
 }
@@ -114,14 +143,22 @@ func (t *chatTab) viewList(width, height int) string {
 
 	b.WriteString("\n")
 	b.WriteString("  ")
-	b.WriteString(renderKeyHint("enter", "view turns"))
-	b.WriteString(styleMuted.Render("  "))
-	b.WriteString(renderKeyHint("↑/↓", "navigate"))
+	b.WriteString(styleSectionTitle.Render("Chat"))
+	b.WriteString("  ")
+	b.WriteString(styleMuted.Render("history and live entry point"))
 	b.WriteString("\n\n")
+
+	if t.message != "" {
+		b.WriteString("  ")
+		b.WriteString(styleSuccess.Render(t.message))
+		b.WriteString("\n\n")
+	}
 
 	if len(t.sessions) == 0 {
 		b.WriteString("  ")
 		b.WriteString(styleMuted.Render("No chat sessions recorded yet"))
+		b.WriteString("\n\n  ")
+		b.WriteString(styleAccent.Render("Press n to start a chat session."))
 		b.WriteString("\n")
 		return b.String()
 	}
@@ -140,8 +177,20 @@ func (t *chatTab) viewList(width, height int) string {
 	b.WriteString(horizontalRule(col))
 	b.WriteString("\n")
 
-	visible := minInt(len(t.sessions), height-6)
-	for i := 0; i < visible; i++ {
+	// Windowed rendering
+	listHeight := height - 5
+	if listHeight < 3 {
+		listHeight = 3
+	}
+	start, end := listWindow(t.cursor, len(t.sessions), listHeight)
+
+	if start > 0 {
+		b.WriteString("  ")
+		b.WriteString(styleSubtle.Render(fmt.Sprintf("  ↑ %d more", start)))
+		b.WriteString("\n")
+	}
+
+	for i := start; i < end; i++ {
 		session := t.sessions[i]
 		selected := i == t.cursor
 		b.WriteString("  ")
@@ -149,13 +198,18 @@ func (t *chatTab) viewList(width, height int) string {
 		b.WriteString("\n")
 	}
 
+	if end < len(t.sessions) {
+		b.WriteString("  ")
+		b.WriteString(styleSubtle.Render(fmt.Sprintf("  ↓ %d more", len(t.sessions)-end)))
+		b.WriteString("\n")
+	}
+
 	return b.String()
 }
 
 func (t *chatTab) renderSessionRow(session state.ChatSessionSummary, col int, selected bool) string {
-	active := !session.FinishedAt.IsZero()
 	icon := styleMuted.Render("●")
-	if active {
+	if !session.FinishedAt.IsZero() {
 		icon = styleSuccess.Render("●")
 	}
 	if session.ExitReason == "interrupt" || session.ExitReason == "terminated" {
@@ -176,105 +230,80 @@ func (t *chatTab) renderSessionRow(session state.ChatSessionSummary, col int, se
 
 	row := fmt.Sprintf("%s  %s  %s  %s  %s  %s", icon, date, model, turns, dur, exit)
 	if selected {
-		return styleSelectedRow.Render(row)
+		return styleAccent.Render("▸ ") + styleSelectedRow.Render(row)
 	}
-	return row
+	return "  " + row
 }
 
 func (t *chatTab) viewDetail(width, height int) string {
-	var b strings.Builder
-
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyHint("esc", "back to list"))
-	b.WriteString(styleMuted.Render("  "))
-	b.WriteString(renderKeyHint("↑/↓", "scroll"))
-	b.WriteString("\n\n")
-
 	session := t.detail.Session
-	b.WriteString("  ")
-	b.WriteString(styleSectionTitle.Render(fmt.Sprintf("Chat Session #%d", session.ID)))
-	b.WriteString("\n\n")
 
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Model", session.PinnedModel))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Provider", session.Provider))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Started", fmtTime(session.StartedAt)))
-	b.WriteString("\n")
+	// Build all lines then apply scroll window.
+	var lines []string
+
+	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("  %s", styleSectionTitle.Render(fmt.Sprintf("Chat Session #%d", session.ID))))
+	lines = append(lines, "")
+	lines = append(lines, "  "+renderKeyValue("Model", session.PinnedModel))
+	lines = append(lines, "  "+renderKeyValue("Provider", session.Provider))
+	lines = append(lines, "  "+renderKeyValue("Started", fmtTime(session.StartedAt)))
 	if !session.StartedAt.IsZero() && !session.FinishedAt.IsZero() {
-		b.WriteString("  ")
-		b.WriteString(renderKeyValue("Duration", fmtDuration(session.FinishedAt.Sub(session.StartedAt))))
-		b.WriteString("\n")
+		lines = append(lines, "  "+renderKeyValue("Duration", fmtDuration(session.FinishedAt.Sub(session.StartedAt))))
 	}
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Turns", fmt.Sprintf("%d", session.TurnCount)))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Exit", session.ExitReason))
-	b.WriteString("\n")
+	lines = append(lines, "  "+renderKeyValue("Turns", fmt.Sprintf("%d", session.TurnCount)))
+	lines = append(lines, "  "+renderKeyValue("Exit", session.ExitReason))
 
-	// Turn-by-turn transcript
 	if len(t.detail.Turns) > 0 {
-		b.WriteString("\n  ")
-		b.WriteString(horizontalRule(width - 4))
-		b.WriteString("\n\n")
-		b.WriteString("  ")
-		b.WriteString(styleSectionTitle.Render("Turns"))
-		b.WriteString("\n\n")
+		lines = append(lines, "")
+		lines = append(lines, "  "+horizontalRule(width-4))
+		lines = append(lines, "")
 
-		// Apply scroll offset
-		start := clamp(t.scroll, 0, maxInt(len(t.detail.Turns)-1, 0))
-		end := minInt(start+height-15, len(t.detail.Turns))
+		for _, turn := range t.detail.Turns {
+			header := fmt.Sprintf("  %s %s  %s  %s tokens",
+				styleMuted.Render(fmt.Sprintf("#%d", turn.TurnIndex+1)),
+				statusIcon(turn.Success),
+				styleMuted.Render(fmtDurationMs(turn.LatencyMs)),
+				styleMuted.Render(formatTokens(turn.TotalTokens)))
+			lines = append(lines, header)
 
-		for i := start; i < end; i++ {
-			turn := t.detail.Turns[i]
-			b.WriteString("  ")
-			b.WriteString(styleMuted.Render(fmt.Sprintf("#%d ", turn.TurnIndex+1)))
-			b.WriteString(statusIcon(turn.Success))
-			b.WriteString("  ")
-			b.WriteString(styleMuted.Render(fmtDurationMs(turn.LatencyMs)))
-			b.WriteString("  ")
-			b.WriteString(styleMuted.Render(formatTokens(turn.TotalTokens) + " tokens"))
-			b.WriteString("\n")
+			lines = append(lines, "  "+styleSuccess.Render("You: ")+styleBase.Render(truncate(turn.UserInput, width-12)))
 
-			// User input
-			b.WriteString("  ")
-			b.WriteString(styleSuccess.Render("You: "))
-			b.WriteString(styleBase.Render(truncate(turn.UserInput, width-12)))
-			b.WriteString("\n")
-
-			// Assistant output
 			if output := strings.TrimSpace(turn.FinalOutput); output != "" {
-				lines := strings.Split(output, "\n")
-				maxLines := minInt(len(lines), 3)
-				for j, line := range lines[:maxLines] {
-					b.WriteString("  ")
+				outLines := strings.Split(output, "\n")
+				maxShow := minInt(len(outLines), 4)
+				for j, line := range outLines[:maxShow] {
+					prefix := "    "
 					if j == 0 {
-						b.WriteString(styleSectionTitle.Render("AI: "))
-					} else {
-						b.WriteString("    ")
+						prefix = "  " + styleSectionTitle.Render("AI: ")
 					}
-					b.WriteString(styleMuted.Render(truncate(line, width-12)))
-					b.WriteString("\n")
+					lines = append(lines, prefix+styleMuted.Render(truncate(line, width-12)))
 				}
-				if len(lines) > maxLines {
-					b.WriteString("      ")
-					b.WriteString(styleSubtle.Render(fmt.Sprintf("… %d more lines", len(lines)-maxLines)))
-					b.WriteString("\n")
+				if len(outLines) > maxShow {
+					lines = append(lines, fmt.Sprintf("      %s", styleSubtle.Render(fmt.Sprintf("… %d more lines", len(outLines)-maxShow))))
 				}
 			}
 
 			if turn.ErrorMessage != "" {
-				b.WriteString("  ")
-				b.WriteString(styleError.Render("Error: " + truncate(turn.ErrorMessage, width-14)))
-				b.WriteString("\n")
+				lines = append(lines, "  "+styleError.Render("Error: "+truncate(turn.ErrorMessage, width-14)))
 			}
-			b.WriteString("\n")
+			lines = append(lines, "")
 		}
+	}
+
+	// Apply scroll window
+	maxScroll := maxInt(len(lines)-height+2, 0)
+	t.scroll = clamp(t.scroll, 0, maxScroll)
+
+	var b strings.Builder
+	end := minInt(t.scroll+height-1, len(lines))
+	for i := t.scroll; i < end; i++ {
+		b.WriteString(lines[i])
+		b.WriteString("\n")
+	}
+
+	if maxScroll > 0 {
+		b.WriteString("  ")
+		b.WriteString(scrollHints(t.scroll, end, len(lines)))
 	}
 
 	return b.String()

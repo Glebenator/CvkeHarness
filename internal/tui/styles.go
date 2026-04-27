@@ -63,9 +63,12 @@ var (
 			Foreground(colorError)
 
 	// Selected row highlight
+	colorHighlight = lipgloss.Color("#3a3533") // clearly raised surface for selection
+
 	styleSelectedRow = lipgloss.NewStyle().
-				Background(colorSurface).
-				Foreground(colorBrightText)
+			Background(colorHighlight).
+			Foreground(colorBrightText).
+			Bold(true)
 
 	// Status bar at bottom
 	styleStatusBar = lipgloss.NewStyle().

@@ -110,6 +110,29 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-n)
 }
 
+// wrapText breaks a string into lines that fit within maxWidth runes.
+func wrapText(s string, maxWidth int) []string {
+	if maxWidth <= 0 {
+		return []string{s}
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return nil
+	}
+	var lines []string
+	current := words[0]
+	for _, word := range words[1:] {
+		if utf8.RuneCountInString(current)+1+utf8.RuneCountInString(word) > maxWidth {
+			lines = append(lines, current)
+			current = word
+		} else {
+			current += " " + word
+		}
+	}
+	lines = append(lines, current)
+	return lines
+}
+
 func formatTokens(n int) string {
 	if n <= 0 {
 		return "—"
@@ -143,6 +166,55 @@ func horizontalRule(width int) string {
 	}
 	return styleSubtle.Render(strings.Repeat("─", width))
 }
+
+// ── list windowing ──────────────────────────────────────────────────
+// Keeps the cursor visible by computing a scroll window.
+
+func listWindow(cursor, total, viewportHeight int) (start, end int) {
+	if total <= viewportHeight {
+		return 0, total
+	}
+	half := viewportHeight / 2
+	start = cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end = start + viewportHeight
+	if end > total {
+		end = total
+		start = end - viewportHeight
+		if start < 0 {
+			start = 0
+		}
+	}
+	return start, end
+}
+
+// scrollHint returns a string like "↑ 3 more" / "↓ 5 more" or empty if
+// the list is fully visible.
+func scrollHints(start, end, total int) string {
+	var parts []string
+	if start > 0 {
+		parts = append(parts, styleSubtle.Render(fmt.Sprintf("↑ %d more", start)))
+	}
+	if end < total {
+		parts = append(parts, styleSubtle.Render(fmt.Sprintf("↓ %d more", total-end)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, styleMuted.Render("  "))
+}
+
+// positionIndicator renders a compact "3/15" cursor indicator.
+func positionIndicator(cursor, total int) string {
+	if total == 0 {
+		return ""
+	}
+	return styleMuted.Render(fmt.Sprintf("%d/%d", cursor+1, total))
+}
+
+// ── arithmetic ──────────────────────────────────────────────────────
 
 func maxInt(a, b int) int {
 	if a > b {

@@ -165,14 +165,14 @@ func (c *ChatSurface) RenderBanner(selection core.RoutingSelection) {
 	if c.rich {
 		fmt.Fprint(c.out, termui.ClearScreen)
 		lines := []string{
-			termui.FGWhite + termui.ANSIBold + "CvkeHarness" + termui.ANSIReset + "  " + termui.FGMuted + "interactive model workspace" + termui.ANSIReset,
+			termui.FGWhite + termui.ANSIBold + "CvkeHarness" + termui.ANSIReset + "  " + termui.FGMuted + "interactive chat workspace" + termui.ANSIReset,
 			renderStatusBadges(
 				renderBadge("model", selection.Requested.String(), termui.FGAccent),
-				renderBadge("Commands", "/help  /clear  /exit", termui.FGGreen),
+				renderBadge("commands", "/help  /clear  /exit", termui.FGGreen),
 			),
 		}
 		if reason := strings.TrimSpace(selection.Reason); reason != "" {
-			lines = append(lines, termui.FGMuted+"Routing note:"+termui.ANSIReset+" "+truncateRunes(reason, c.width-18))
+			lines = append(lines, termui.FGMuted+"routing"+termui.ANSIReset+" "+truncateRunes(reason, c.width-14))
 		}
 		c.writeLinesLocked(c.renderPanelLines("Session", termui.FGAccent, lines))
 		return
@@ -278,7 +278,7 @@ func (c *ChatSurface) Prompt() string {
 	if !c.rich {
 		return "\nYou> "
 	}
-	return "\n  " + termui.FGGreen + termui.ANSIBold + "You" + termui.ANSIReset + termui.FGMuted + " › " + termui.ANSIReset
+	return "\n  " + termui.FGGreen + termui.ANSIBold + "You" + termui.ANSIReset + termui.FGMuted + " ▸ " + termui.ANSIReset
 }
 
 func (c *ChatSurface) runSpinner(stop chan struct{}) {
@@ -342,7 +342,7 @@ func (c *ChatSurface) renderPanelLines(title, tone string, lines []string) []str
 	label := truncateRunes(title, width-6)
 	head := "  " + tone + termui.ANSIBold + label + termui.ANSIReset
 	if pad := width - visibleRuneLen(label) - 5; pad > 0 {
-		head += " " + termui.FGMuted + strings.Repeat("─", pad) + termui.ANSIReset
+		head += " " + termui.FGSubtle + strings.Repeat("─", pad) + termui.ANSIReset
 	}
 
 	out := []string{"", head}
@@ -437,7 +437,7 @@ func (c *ChatSurface) renderShellHeaderLines(command string) []string {
 	}
 	return []string{
 		"  " + termui.FGAccent + termui.ANSIBold + "Shell" + termui.ANSIReset,
-		"  " + termui.FGMuted + "│" + termui.ANSIReset + " " + termui.FGWhite + termui.ANSIBold + "$" + termui.ANSIReset + " " + command,
+		"  " + termui.FGMuted + "│" + termui.ANSIReset + " " + termui.FGAccent + termui.ANSIBold + "$" + termui.ANSIReset + " " + command,
 	}
 }
 

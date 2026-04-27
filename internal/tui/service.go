@@ -19,6 +19,8 @@ type Service struct {
 	cron      *systemcron.Client
 	scheduler *scheduler.Service
 	runJobNow RunJobFunc
+	binary    string
+	setupMode bool
 }
 
 // NewService creates a dashboard data service.
@@ -40,6 +42,36 @@ func NewService(
 
 // Config returns the loaded configuration.
 func (s *Service) Config() *config.Config { return s.cfg }
+
+// MarkSetupMode tells the TUI that it is editing default first-run settings.
+func (s *Service) MarkSetupMode() { s.setupMode = true }
+
+// SetupMode reports whether the current config still needs its first save.
+func (s *Service) SetupMode() bool { return s.setupMode }
+
+// SetBinaryName records the current executable for TUI-launched child commands.
+func (s *Service) SetBinaryName(binary string) { s.binary = binary }
+
+// BinaryName returns the executable used to launch this dashboard.
+func (s *Service) BinaryName() string {
+	if s.binary == "" {
+		return "cvkeharness"
+	}
+	return s.binary
+}
+
+// SaveConfig persists a configuration edited inside the TUI.
+func (s *Service) SaveConfig(cfg *config.Config) error {
+	if cfg == nil {
+		return nil
+	}
+	if err := cfg.Save(); err != nil {
+		return err
+	}
+	s.cfg = cfg
+	s.setupMode = false
+	return nil
+}
 
 // RecentRuns returns the most recent agent runs.
 func (s *Service) RecentRuns(ctx context.Context, limit int) ([]state.RunSummary, error) {
