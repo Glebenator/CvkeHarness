@@ -30,15 +30,17 @@ var tuiCmd = &cobra.Command{
 		}
 		defer store.Close()
 
+		sched := scheduler.New(store)
+
 		runJobNow := func(ctx context.Context, id string) (state.ScheduledJobRun, error) {
 			runner, err := newScheduledAgentRunner(ctx, store)
 			if err != nil {
 				return state.ScheduledJobRun{}, err
 			}
-			return scheduler.New(store).RunNow(ctx, runner, id, true)
+			return sched.RunNow(ctx, runner, id, true)
 		}
 
-		service := dashboard.NewService(cfg, store, systemcron.New(nil), runJobNow)
+		service := dashboard.NewService(cfg, store, systemcron.New(nil), sched, runJobNow)
 		return dashboard.Run(service, os.Args[0])
 	},
 }
