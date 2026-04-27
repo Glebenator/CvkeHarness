@@ -254,18 +254,21 @@ type CommandApproval struct {
 
 // ScheduledJob stores a durable CvkeHarness-owned background task.
 type ScheduledJob struct {
-	ID              string
-	Name            string
-	ScheduleKind    string
-	ScheduleSpec    string
-	Prompt          string
-	Enabled         bool
-	NextRunAt       time.Time
-	LastRunAt       time.Time
-	LastRunStatus   string
-	ConsecutiveFail int
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID               string
+	Name             string
+	ScheduleKind     string
+	ScheduleSpec     string
+	Prompt           string
+	Enabled          bool
+	NextRunAt        time.Time
+	LastRunAt        time.Time
+	LastRunStatus    string
+	ConsecutiveFail  int
+	ClaimedBy        string
+	ClaimExpiresAt   time.Time
+	ClaimHeartbeatAt time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // ScheduledJobRun stores one scheduler execution attempt.

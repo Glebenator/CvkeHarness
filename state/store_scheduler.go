@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -27,11 +28,20 @@ func (s *Store) SaveScheduledJob(ctx context.Context, job ScheduledJob) error {
 	if !job.LastRunAt.IsZero() {
 		last = job.LastRunAt.UTC()
 	}
+	var claimExpires any
+	if !job.ClaimExpiresAt.IsZero() {
+		claimExpires = job.ClaimExpiresAt.UTC()
+	}
+	var claimHeartbeat any
+	if !job.ClaimHeartbeatAt.IsZero() {
+		claimHeartbeat = job.ClaimHeartbeatAt.UTC()
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO scheduled_jobs (
 			id, name, schedule_kind, schedule_spec, prompt, enabled, next_run_at,
-			last_run_at, last_run_status, consecutive_failures, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			last_run_at, last_run_status, consecutive_failures, claimed_by,
+			claim_expires_at, claim_heartbeat_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			schedule_kind = excluded.schedule_kind,
@@ -42,10 +52,13 @@ func (s *Store) SaveScheduledJob(ctx context.Context, job ScheduledJob) error {
 			last_run_at = excluded.last_run_at,
 			last_run_status = excluded.last_run_status,
 			consecutive_failures = excluded.consecutive_failures,
+			claimed_by = excluded.claimed_by,
+			claim_expires_at = excluded.claim_expires_at,
+			claim_heartbeat_at = excluded.claim_heartbeat_at,
 			updated_at = excluded.updated_at`,
 		job.ID, job.Name, job.ScheduleKind, job.ScheduleSpec, job.Prompt,
 		boolToInt(job.Enabled), next, last, job.LastRunStatus, job.ConsecutiveFail,
-		job.CreatedAt.UTC(), job.UpdatedAt.UTC(),
+		job.ClaimedBy, claimExpires, claimHeartbeat, job.CreatedAt.UTC(), job.UpdatedAt.UTC(),
 	)
 	return err
 }
@@ -57,7 +70,8 @@ func (s *Store) GetScheduledJob(ctx context.Context, id string) (ScheduledJob, e
 	}
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, schedule_kind, schedule_spec, prompt, enabled, next_run_at,
-			last_run_at, last_run_status, consecutive_failures, created_at, updated_at
+			last_run_at, last_run_status, consecutive_failures, claimed_by,
+			claim_expires_at, claim_heartbeat_at, created_at, updated_at
 		FROM scheduled_jobs WHERE id = ?`, id)
 	return scanScheduledJob(row)
 }
@@ -69,7 +83,8 @@ func (s *Store) ListScheduledJobs(ctx context.Context, includeDisabled bool) ([]
 	}
 	query := `
 		SELECT id, name, schedule_kind, schedule_spec, prompt, enabled, next_run_at,
-			last_run_at, last_run_status, consecutive_failures, created_at, updated_at
+			last_run_at, last_run_status, consecutive_failures, claimed_by,
+			claim_expires_at, claim_heartbeat_at, created_at, updated_at
 		FROM scheduled_jobs`
 	if !includeDisabled {
 		query += ` WHERE enabled = 1`
@@ -98,7 +113,8 @@ func (s *Store) ListDueScheduledJobs(ctx context.Context, now time.Time) ([]Sche
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, schedule_kind, schedule_spec, prompt, enabled, next_run_at,
-			last_run_at, last_run_status, consecutive_failures, created_at, updated_at
+			last_run_at, last_run_status, consecutive_failures, claimed_by,
+			claim_expires_at, claim_heartbeat_at, created_at, updated_at
 		FROM scheduled_jobs
 		WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
 		ORDER BY next_run_at ASC`, now.UTC())
@@ -115,6 +131,159 @@ func (s *Store) ListDueScheduledJobs(ctx context.Context, now time.Time) ([]Sche
 		out = append(out, job)
 	}
 	return out, rows.Err()
+}
+
+// ClaimDueScheduledJobs atomically claims enabled due jobs for one scheduler owner.
+func (s *Store) ClaimDueScheduledJobs(ctx context.Context, owner string, now time.Time, lease time.Duration, limit int) ([]ScheduledJob, error) {
+	if !s.Available() {
+		return nil, s.Err()
+	}
+	if owner == "" {
+		return nil, fmt.Errorf("claim owner cannot be empty")
+	}
+	if lease <= 0 {
+		return nil, fmt.Errorf("claim lease must be positive")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	now = now.UTC()
+	expires := now.Add(lease).UTC()
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id
+		FROM scheduled_jobs
+		WHERE enabled = 1
+			AND next_run_at IS NOT NULL
+			AND next_run_at <= ?
+			AND (claimed_by = '' OR claim_expires_at IS NULL OR claim_expires_at <= ?)
+		ORDER BY next_run_at ASC
+		LIMIT ?`, now, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	var claimed []ScheduledJob
+	for _, id := range ids {
+		res, err := s.db.ExecContext(ctx, `
+			UPDATE scheduled_jobs
+			SET claimed_by = ?, claim_expires_at = ?, claim_heartbeat_at = ?, updated_at = ?
+			WHERE id = ?
+				AND enabled = 1
+				AND next_run_at IS NOT NULL
+				AND next_run_at <= ?
+				AND (claimed_by = '' OR claim_expires_at IS NULL OR claim_expires_at <= ?)`,
+			owner, expires, now, now, id, now, now)
+		if err != nil {
+			return nil, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			continue
+		}
+		job, err := s.GetScheduledJob(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		claimed = append(claimed, job)
+	}
+	return claimed, nil
+}
+
+// ClaimScheduledJob atomically claims one job for manual execution.
+func (s *Store) ClaimScheduledJob(ctx context.Context, id, owner string, now time.Time, lease time.Duration) (ScheduledJob, error) {
+	if !s.Available() {
+		return ScheduledJob{}, s.Err()
+	}
+	if owner == "" {
+		return ScheduledJob{}, fmt.Errorf("claim owner cannot be empty")
+	}
+	if lease <= 0 {
+		return ScheduledJob{}, fmt.Errorf("claim lease must be positive")
+	}
+	now = now.UTC()
+	expires := now.Add(lease).UTC()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE scheduled_jobs
+		SET claimed_by = ?, claim_expires_at = ?, claim_heartbeat_at = ?, updated_at = ?
+		WHERE id = ?
+			AND (claimed_by = '' OR claimed_by = ? OR claim_expires_at IS NULL OR claim_expires_at <= ?)`,
+		owner, expires, now, now, id, owner, now)
+	if err != nil {
+		return ScheduledJob{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return ScheduledJob{}, err
+	}
+	if n == 0 {
+		if _, getErr := s.GetScheduledJob(ctx, id); getErr != nil {
+			return ScheduledJob{}, getErr
+		}
+		return ScheduledJob{}, fmt.Errorf("scheduled job %q is already claimed", id)
+	}
+	return s.GetScheduledJob(ctx, id)
+}
+
+// RefreshScheduledJobClaim extends a claim owned by the current scheduler.
+func (s *Store) RefreshScheduledJobClaim(ctx context.Context, id, owner string, now time.Time, lease time.Duration) error {
+	if !s.Available() {
+		return s.Err()
+	}
+	if owner == "" {
+		return fmt.Errorf("claim owner cannot be empty")
+	}
+	if lease <= 0 {
+		return fmt.Errorf("claim lease must be positive")
+	}
+	now = now.UTC()
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE scheduled_jobs
+		SET claim_expires_at = ?, claim_heartbeat_at = ?, updated_at = ?
+		WHERE id = ? AND claimed_by = ?`,
+		now.Add(lease).UTC(), now, now, id, owner)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("scheduled job %q claim is not owned by %q", id, owner)
+	}
+	return nil
+}
+
+// ReleaseScheduledJobClaim clears a claim owned by the current scheduler.
+func (s *Store) ReleaseScheduledJobClaim(ctx context.Context, id, owner string) error {
+	if !s.Available() {
+		return s.Err()
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE scheduled_jobs
+		SET claimed_by = '', claim_expires_at = NULL, claim_heartbeat_at = NULL, updated_at = ?
+		WHERE id = ? AND claimed_by = ?`,
+		time.Now().UTC(), id, owner)
+	if err != nil {
+		return err
+	}
+	_, err = res.RowsAffected()
+	return err
 }
 
 // DeleteScheduledJob removes a scheduled job and its run records.
@@ -206,10 +375,11 @@ type scheduledJobScanner interface {
 func scanScheduledJob(scanner scheduledJobScanner) (ScheduledJob, error) {
 	var job ScheduledJob
 	var enabled int
-	var next, last sql.NullTime
+	var next, last, claimExpires, claimHeartbeat sql.NullTime
 	err := scanner.Scan(
 		&job.ID, &job.Name, &job.ScheduleKind, &job.ScheduleSpec, &job.Prompt,
 		&enabled, &next, &last, &job.LastRunStatus, &job.ConsecutiveFail,
+		&job.ClaimedBy, &claimExpires, &claimHeartbeat,
 		&job.CreatedAt, &job.UpdatedAt,
 	)
 	if err != nil {
@@ -224,6 +394,12 @@ func scanScheduledJob(scanner scheduledJobScanner) (ScheduledJob, error) {
 	}
 	if last.Valid {
 		job.LastRunAt = last.Time
+	}
+	if claimExpires.Valid {
+		job.ClaimExpiresAt = claimExpires.Time
+	}
+	if claimHeartbeat.Valid {
+		job.ClaimHeartbeatAt = claimHeartbeat.Time
 	}
 	return job, nil
 }

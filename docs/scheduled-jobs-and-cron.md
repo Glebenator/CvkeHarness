@@ -62,6 +62,33 @@ cvkeharness jobs runs <job-id>
 them. Each run creates a scheduled job run record and also flows through the
 regular agent run recorder.
 
+### Linux systemd daemon
+
+On Linux hosts with systemd, CvkeHarness can install a lightweight service unit
+for the internal scheduler daemon:
+
+```bash
+cvkeharness daemon install
+systemctl --user enable cvkeharness.service
+systemctl --user start cvkeharness.service
+```
+
+The user service is written to
+`~/.config/systemd/user/cvkeharness.service`. For always-on user services after
+logout, either pass `--enable-linger` during install or run the printed
+`loginctl` command yourself.
+
+System services are explicit and require a target user:
+
+```bash
+sudo cvkeharness daemon install --system --user appuser
+sudo systemctl enable cvkeharness.service
+sudo systemctl start cvkeharness.service
+```
+
+The daemon uses SQLite job claims with a renewing lease so multiple daemon
+processes do not run the same scheduled job at the same time.
+
 ## System Crontab Management
 
 System cron support lives behind explicit user intent. The agent tool
@@ -237,7 +264,6 @@ without losing the lightweight design.
 
 ### Scheduler Reliability
 
-- Add job claiming/locking so multiple daemons cannot run the same job at once.
 - Track `running_at`, timeout, and stale-run recovery in SQLite.
 - Add bounded retry policy with backoff for internal scheduled jobs.
 - Add missed-run catch-up behavior after daemon downtime.
@@ -290,4 +316,3 @@ without losing the lightweight design.
 - Keep these as separate adapters, not replacements for the internal scheduler.
 - Maintain the same rule: internal scheduler by default, platform scheduler only
   on explicit request.
-

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +15,9 @@ import (
 const (
 	RunStatusOK    = "ok"
 	RunStatusError = "error"
+
+	DefaultClaimLease        = 5 * time.Minute
+	DefaultHeartbeatInterval = time.Minute
 )
 
 // Runner executes a scheduled prompt.
@@ -23,13 +27,40 @@ type Runner interface {
 
 // Service manages durable scheduled jobs.
 type Service struct {
-	store *state.Store
-	now   func() time.Time
+	store             *state.Store
+	now               func() time.Time
+	owner             string
+	claimLease        time.Duration
+	heartbeatInterval time.Duration
 }
 
 // New creates a scheduler service.
 func New(store *state.Store) *Service {
-	return &Service{store: store, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{
+		store:             store,
+		now:               func() time.Time { return time.Now().UTC() },
+		claimLease:        DefaultClaimLease,
+		heartbeatInterval: DefaultHeartbeatInterval,
+	}
+}
+
+// SetClaimOwner sets the stable owner ID used for scheduler job claims.
+func (s *Service) SetClaimOwner(owner string) {
+	s.owner = strings.TrimSpace(owner)
+}
+
+// SetClaimLease sets the claim lease duration.
+func (s *Service) SetClaimLease(lease time.Duration) {
+	if lease > 0 {
+		s.claimLease = lease
+	}
+}
+
+// SetHeartbeatInterval sets how often active claims are renewed.
+func (s *Service) SetHeartbeatInterval(interval time.Duration) {
+	if interval > 0 {
+		s.heartbeatInterval = interval
+	}
 }
 
 // Create validates and persists a new scheduled job.
@@ -123,14 +154,14 @@ func (s *Service) SetEnabled(ctx context.Context, id string, enabled bool) (stat
 
 // RunDue executes all due jobs once.
 func (s *Service) RunDue(ctx context.Context, runner Runner) ([]state.ScheduledJobRun, error) {
-	jobs, err := s.store.ListDueScheduledJobs(ctx, s.now())
+	jobs, err := s.store.ClaimDueScheduledJobs(ctx, s.claimOwner(), s.now(), s.claimLease, 100)
 	if err != nil {
 		return nil, err
 	}
 	var runs []state.ScheduledJobRun
 	var firstErr error
 	for _, job := range jobs {
-		run, err := s.RunNow(ctx, runner, job.ID, false)
+		run, err := s.runClaimed(ctx, runner, job, false)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -146,7 +177,20 @@ func (s *Service) RunDue(ctx context.Context, runner Runner) ([]state.ScheduledJ
 
 // RunNow executes one job, optionally preserving schedule for manual runs.
 func (s *Service) RunNow(ctx context.Context, runner Runner, id string, manual bool) (state.ScheduledJobRun, error) {
-	job, err := s.store.GetScheduledJob(ctx, id)
+	job, err := s.store.ClaimScheduledJob(ctx, id, s.claimOwner(), s.now(), s.claimLease)
+	if err != nil {
+		return state.ScheduledJobRun{}, err
+	}
+	return s.runClaimed(ctx, runner, job, manual)
+}
+
+func (s *Service) runClaimed(ctx context.Context, runner Runner, job state.ScheduledJob, manual bool) (state.ScheduledJobRun, error) {
+	owner := s.claimOwner()
+	stopHeartbeat := s.startHeartbeat(ctx, job.ID, owner)
+	defer stopHeartbeat()
+	defer func() { _ = s.store.ReleaseScheduledJobClaim(context.Background(), job.ID, owner) }()
+
+	job, err := s.store.GetScheduledJob(ctx, job.ID)
 	if err != nil {
 		return state.ScheduledJobRun{}, err
 	}
@@ -192,11 +236,69 @@ func (s *Service) RunNow(ctx context.Context, runner Runner, id string, manual b
 			job.NextRunAt = time.Time{}
 		}
 	}
+	job.ClaimedBy = ""
+	job.ClaimExpiresAt = time.Time{}
+	job.ClaimHeartbeatAt = time.Time{}
 	job.UpdatedAt = finished
 	if err := s.store.SaveScheduledJob(ctx, job); err != nil {
 		return state.ScheduledJobRun{}, err
 	}
 	return run, execErr
+}
+
+func (s *Service) startHeartbeat(ctx context.Context, jobID, owner string) func() {
+	interval := s.heartbeatInterval
+	if interval <= 0 {
+		interval = DefaultHeartbeatInterval
+	}
+	if interval >= s.claimLease && s.claimLease > 0 {
+		interval = s.claimLease / 2
+	}
+	if interval <= 0 {
+		interval = time.Second
+	}
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case <-ticker.C:
+				_ = s.store.RefreshScheduledJobClaim(context.Background(), jobID, owner, s.now(), s.claimLease)
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (s *Service) claimOwner() string {
+	if s.owner == "" {
+		owner, err := newClaimOwner()
+		if err != nil {
+			return "unknown"
+		}
+		s.owner = owner
+	}
+	return s.owner
+}
+
+func newClaimOwner() (string, error) {
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		host = "unknown-host"
+	}
+	id, err := newID("owner")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s:%d:%s", host, os.Getpid(), id), nil
 }
 
 func newID(prefix string) (string, error) {
