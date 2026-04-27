@@ -142,7 +142,7 @@ func formatListItem(item ListItem, selected bool, width int) string {
 		b.WriteString(BGSelected)
 		b.WriteString(FGWhite)
 		b.WriteString(ANSIBold)
-		b.WriteString("›  ")
+		b.WriteString("▸  ")
 		b.WriteString(label)
 		if descWidth > 0 {
 			b.WriteString(ANSIReset)
@@ -178,7 +178,7 @@ func formatListHint(canGoBack bool, selected, itemCount, visibleRows, width int)
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
-	return "  " + FGGray + truncateRunes(hint, contentWidth) + ANSIReset
+	return "  " + FGMuted + truncateRunes(hint, contentWidth) + ANSIReset
 }
 
 func listColumnWidths(width int) (int, int) {

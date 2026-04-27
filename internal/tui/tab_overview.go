@@ -36,6 +36,8 @@ func (t *overviewTab) Init(svc *Service) tea.Cmd {
 
 func (t *overviewTab) Consuming() bool { return false }
 
+func (t *overviewTab) StatusHints() []string { return nil }
+
 func (t *overviewTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case overviewDataMsg:

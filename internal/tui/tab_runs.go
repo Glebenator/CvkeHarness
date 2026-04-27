@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -17,7 +16,7 @@ type runsDataMsg struct {
 type runsTab struct {
 	runs     []state.RunSummary
 	cursor   int
-	expanded bool // Whether we're viewing run detail
+	expanded bool
 	loaded   bool
 	scroll   int // scroll offset for the detail view
 }
@@ -32,6 +31,23 @@ func (t *runsTab) Init(svc *Service) tea.Cmd {
 
 func (t *runsTab) Consuming() bool { return false }
 
+func (t *runsTab) StatusHints() []string {
+	if t.expanded {
+		return []string{
+			renderKeyHint("esc", "back"),
+			renderKeyHint("↑↓", "scroll"),
+		}
+	}
+	if len(t.runs) > 0 {
+		return []string{
+			renderKeyHint("↑↓", "move"),
+			renderKeyHint("enter", "detail"),
+			positionIndicator(t.cursor, len(t.runs)),
+		}
+	}
+	return nil
+}
+
 func (t *runsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case runsDataMsg:
@@ -43,14 +59,14 @@ func (t *runsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 
 	case tea.KeyMsg:
 		if t.expanded {
-			return t.updateDetail(msg)
+			return t.updateDetail(msg, height)
 		}
-		return t.updateList(msg, svc)
+		return t.updateList(msg)
 	}
 	return t, nil
 }
 
-func (t *runsTab) updateList(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
+func (t *runsTab) updateList(msg tea.KeyMsg) (tabModel, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Down):
 		if t.cursor < len(t.runs)-1 {
@@ -69,7 +85,7 @@ func (t *runsTab) updateList(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 	return t, nil
 }
 
-func (t *runsTab) updateDetail(msg tea.KeyMsg) (tabModel, tea.Cmd) {
+func (t *runsTab) updateDetail(msg tea.KeyMsg, height int) (tabModel, tea.Cmd) {
 	switch {
 	case key.Matches(msg, keys.Back):
 		t.expanded = false
@@ -99,11 +115,6 @@ func (t *runsTab) viewList(width, height int) string {
 	col := width - 4
 
 	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyHint("enter", "expand"))
-	b.WriteString(styleMuted.Render("  "))
-	b.WriteString(renderKeyHint("↑/↓", "navigate"))
-	b.WriteString("\n\n")
 
 	if len(t.runs) == 0 {
 		b.WriteString("  ")
@@ -113,8 +124,8 @@ func (t *runsTab) viewList(width, height int) string {
 	}
 
 	// Column headers
-	b.WriteString("  ")
 	nameCol := maxInt(col-70, 15)
+	b.WriteString("  ")
 	b.WriteString(styleMuted.Render(
 		padRight("", 3) +
 			padRight("Task", nameCol) + "  " +
@@ -128,8 +139,21 @@ func (t *runsTab) viewList(width, height int) string {
 	b.WriteString(horizontalRule(col))
 	b.WriteString("\n")
 
-	visible := minInt(len(t.runs), height-6)
-	for i := 0; i < visible; i++ {
+	// Windowed rendering: cursor stays visible
+	listHeight := height - 5
+	if listHeight < 3 {
+		listHeight = 3
+	}
+	start, end := listWindow(t.cursor, len(t.runs), listHeight)
+
+	// Scroll-up indicator
+	if start > 0 {
+		b.WriteString("  ")
+		b.WriteString(styleSubtle.Render(fmt.Sprintf("  ↑ %d more", start)))
+		b.WriteString("\n")
+	}
+
+	for i := start; i < end; i++ {
 		run := t.runs[i]
 		selected := i == t.cursor
 		b.WriteString("  ")
@@ -137,9 +161,11 @@ func (t *runsTab) viewList(width, height int) string {
 		b.WriteString("\n")
 	}
 
-	if len(t.runs) > visible {
-		b.WriteString("\n  ")
-		b.WriteString(styleMuted.Render(fmt.Sprintf("… and %d more", len(t.runs)-visible)))
+	// Scroll-down indicator
+	if end < len(t.runs) {
+		b.WriteString("  ")
+		b.WriteString(styleSubtle.Render(fmt.Sprintf("  ↓ %d more", len(t.runs)-end)))
+		b.WriteString("\n")
 	}
 
 	return b.String()
@@ -175,9 +201,9 @@ func (t *runsTab) renderRunRow(run state.RunSummary, col, nameCol int, selected 
 
 	row := fmt.Sprintf("%s  %s  %s  %s  %s  %s  %s", icon, task, model, dur, tokens, toolCount, when)
 	if selected {
-		return styleSelectedRow.Render(row)
+		return styleAccent.Render("▸ ") + styleSelectedRow.Render(row)
 	}
-	return row
+	return "  " + row
 }
 
 func (t *runsTab) viewDetail(width, height int) string {
@@ -186,122 +212,158 @@ func (t *runsTab) viewDetail(width, height int) string {
 	}
 	run := t.runs[t.cursor]
 
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyHint("esc", "back to list"))
-	b.WriteString(styleMuted.Render("  "))
-	b.WriteString(renderKeyHint("↑/↓", "scroll"))
-	b.WriteString("\n\n")
+	// Build all the detail lines, then apply scroll window.
+	var lines []string
 
-	b.WriteString("  ")
-	b.WriteString(styleSectionTitle.Render("Run #"))
-	b.WriteString(styleSectionTitle.Render(fmt.Sprintf("%d", run.ID)))
-	b.WriteString("  ")
-	b.WriteString(statusIcon(run.Success))
-	b.WriteString("\n\n")
-
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Task", run.Task))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Provider", run.Provider))
-	b.WriteString("\n")
+	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("  %s  %s",
+		styleSectionTitle.Render(fmt.Sprintf("Run #%d", run.ID)),
+		statusIcon(run.Success)))
+	lines = append(lines, "")
+	lines = append(lines, "  "+renderKeyValue("Task", run.Task))
+	if run.TaskClass != "" {
+		lines = append(lines, "  "+renderKeyValue("Task Class", string(run.TaskClass)))
+	}
+	lines = append(lines, "  "+renderKeyValue("Provider", run.Provider))
 	if !run.StartedAt.IsZero() {
-		b.WriteString("  ")
-		b.WriteString(renderKeyValue("Started", fmtTime(run.StartedAt)))
-		b.WriteString("\n")
+		lines = append(lines, "  "+renderKeyValue("Started", fmtTime(run.StartedAt)))
 	}
 	if !run.StartedAt.IsZero() && !run.FinishedAt.IsZero() {
-		b.WriteString("  ")
-		b.WriteString(renderKeyValue("Duration", fmtDuration(run.FinishedAt.Sub(run.StartedAt))))
-		b.WriteString("\n")
+		lines = append(lines, "  "+renderKeyValue("Duration", fmtDuration(run.FinishedAt.Sub(run.StartedAt))))
 	}
-	if run.VerificationStatus != "" {
-		b.WriteString("  ")
-		b.WriteString(renderKeyValue("Verification", run.VerificationStatus))
-		b.WriteString("\n")
-	}
-	if run.ErrorMessage != "" {
-		b.WriteString("  ")
-		b.WriteString(renderKeyValue("Error", styleError.Render(truncate(run.ErrorMessage, width-22))))
-		b.WriteString("\n")
+	if run.RoutingEnabled {
+		lines = append(lines, "  "+renderKeyValue("Routing", styleSuccess.Render("enabled")))
 	}
 
-	// Phases
+	// Verification section
+	if run.VerificationStatus != "" {
+		lines = append(lines, "")
+		lines = append(lines, "  "+styleSectionTitle.Render("Verification"))
+		lines = append(lines, "")
+		verStyle := styleSuccess
+		if run.VerificationStatus != "pass" && run.VerificationStatus != "ok" {
+			verStyle = styleWarning
+		}
+		lines = append(lines, "  "+renderKeyValue("Status", verStyle.Render(run.VerificationStatus)))
+		if run.VerificationReason != "" {
+			// Wrap long reason text
+			for _, line := range wrapText(run.VerificationReason, width-22) {
+				lines = append(lines, "  "+renderKeyValue("Reason", styleMuted.Render(line)))
+			}
+		}
+		if run.VerificationMissingActions != "" {
+			lines = append(lines, "  "+renderKeyValue("Missing", styleWarning.Render(truncate(run.VerificationMissingActions, width-22))))
+		}
+		if run.VerificationRepairTriggered {
+			lines = append(lines, "  "+renderKeyValue("Auto-Repair", styleWarning.Render("triggered")))
+		}
+	}
+
+	if run.ErrorMessage != "" {
+		lines = append(lines, "")
+		lines = append(lines, "  "+renderKeyValue("Error", styleError.Render(truncate(run.ErrorMessage, width-22))))
+	}
+
+	// Phases section with token breakdown
 	if len(run.Phases) > 0 {
-		b.WriteString("\n  ")
-		b.WriteString(styleSectionTitle.Render("Phases"))
-		b.WriteString("\n\n")
+		lines = append(lines, "")
+		lines = append(lines, "  "+styleSectionTitle.Render("Phases"))
+		lines = append(lines, "")
 		for _, phase := range run.Phases {
 			icon := statusIcon(phase.Success)
 			model := phase.ActualModel
 			if model == "" {
 				model = phase.RequestedModel
 			}
-			b.WriteString(fmt.Sprintf("  %s  %s  %s  %s  %s tokens\n",
+			lines = append(lines, fmt.Sprintf("  %s  %s  %s  %s  %s tokens",
 				icon,
 				styleMuted.Render(padRight(string(phase.Phase), 12)),
 				styleBase.Render(padRight(truncate(model, 30), 30)),
 				styleMuted.Render(fmtDurationMs(phase.LatencyMs)),
 				styleMuted.Render(formatTokens(phase.TotalTokens)),
 			))
+			// Token breakdown sub-line
+			var tokenParts []string
+			if phase.PromptTokens > 0 {
+				tokenParts = append(tokenParts, fmt.Sprintf("prompt %s", formatTokens(phase.PromptTokens)))
+			}
+			if phase.CompletionTokens > 0 {
+				tokenParts = append(tokenParts, fmt.Sprintf("completion %s", formatTokens(phase.CompletionTokens)))
+			}
+			if phase.CachedTokensKnown && phase.CachedTokens > 0 {
+				tokenParts = append(tokenParts, fmt.Sprintf("cached %s", formatTokens(phase.CachedTokens)))
+			}
+			if len(tokenParts) > 0 {
+				lines = append(lines, "       "+styleSubtle.Render(strings.Join(tokenParts, "  ·  ")))
+			}
+			if phase.Confidence > 0 {
+				lines = append(lines, "       "+styleSubtle.Render(fmt.Sprintf("confidence %.0f%%", phase.Confidence*100)))
+			}
+			if phase.Explanation != "" {
+				lines = append(lines, "       "+styleSubtle.Render(truncate(phase.Explanation, width-12)))
+			}
 		}
 	}
 
-	// Tools
+	// Tool outcomes with more detail
 	if len(run.Tools) > 0 {
-		b.WriteString("\n  ")
-		b.WriteString(styleSectionTitle.Render("Tool Outcomes"))
-		b.WriteString("\n\n")
+		lines = append(lines, "")
+		lines = append(lines, "  "+styleSectionTitle.Render("Tool Outcomes"))
+		lines = append(lines, "")
 		for _, tool := range run.Tools {
 			icon := statusIcon(tool.Success)
 			denied := ""
 			if tool.PolicyDenied {
 				denied = styleWarning.Render(" denied")
+				if tool.DenialClass != "" {
+					denied += styleMuted.Render(" ("+tool.DenialClass+")")
+				}
 			}
-			b.WriteString(fmt.Sprintf("  %s  %s  %s%s\n",
+			phaseBadge := ""
+			if tool.Phase != "" {
+				phaseBadge = styleSubtle.Render("["+string(tool.Phase)+"] ")
+			}
+			lines = append(lines, fmt.Sprintf("  %s  %s%s  %s%s",
 				icon,
+				phaseBadge,
 				styleBase.Render(padRight(tool.ToolName, 20)),
 				styleMuted.Render(fmtDurationMs(tool.DurationMs)),
 				denied,
 			))
 			if tool.ErrorMessage != "" {
-				b.WriteString(fmt.Sprintf("     %s\n", styleError.Render(truncate(tool.ErrorMessage, width-10))))
+				lines = append(lines, fmt.Sprintf("     %s", styleError.Render(truncate(tool.ErrorMessage, width-10))))
 			}
 		}
 	}
 
-	// Output preview
+	// Final output — always show prominently
 	if output := strings.TrimSpace(run.FinalOutput); output != "" {
-		b.WriteString("\n  ")
-		b.WriteString(styleSectionTitle.Render("Output"))
-		b.WriteString("\n\n")
-		lines := strings.Split(output, "\n")
-		maxLines := minInt(len(lines), height-20)
-		if maxLines < 1 {
-			maxLines = 3
+		lines = append(lines, "")
+		lines = append(lines, "  "+horizontalRule(width-4))
+		lines = append(lines, "")
+		lines = append(lines, "  "+styleSectionTitle.Render("Agent Output"))
+		lines = append(lines, "")
+		for _, line := range strings.Split(output, "\n") {
+			lines = append(lines, "  "+styleBase.Render(truncate(line, width-6)))
 		}
-		for _, line := range lines[:maxLines] {
-			b.WriteString("  ")
-			b.WriteString(styleMuted.Render(truncate(line, width-6)))
-			b.WriteString("\n")
-		}
-		if len(lines) > maxLines {
-			b.WriteString("  ")
-			b.WriteString(styleSubtle.Render(fmt.Sprintf("… %d more lines", len(lines)-maxLines)))
-			b.WriteString("\n")
-		}
+	}
+
+	// Apply scroll offset
+	maxScroll := maxInt(len(lines)-height+2, 0)
+	t.scroll = clamp(t.scroll, 0, maxScroll)
+
+	var b strings.Builder
+	end := minInt(t.scroll+height-1, len(lines))
+	for i := t.scroll; i < end; i++ {
+		b.WriteString(lines[i])
+		b.WriteString("\n")
+	}
+
+	// Scroll indicator
+	if maxScroll > 0 {
+		b.WriteString("  ")
+		b.WriteString(scrollHints(t.scroll, end, len(lines)))
 	}
 
 	return b.String()
-}
-
-func loadRunDetail(svc *Service, runID int64) tea.Cmd {
-	return func() tea.Msg {
-		ctx := context.Background()
-		runs, _ := svc.RecentRuns(ctx, 1)
-		_ = runs
-		return nil
-	}
 }

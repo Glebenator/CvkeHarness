@@ -69,16 +69,17 @@ type jobsTab struct {
 	message string // Transient feedback message
 
 	// Detail mode
-	detailRuns  []state.ScheduledJobRun
-	detailJobID string
+	detailRuns   []state.ScheduledJobRun
+	detailJobID  string
+	detailScroll int
 
 	// Create wizard
-	createStep    createStep
-	createName    textinput.Model
-	createKind    int // 0=every, 1=cron, 2=at
-	createSpec    textinput.Model
-	createPrompt  textinput.Model
-	createError   string
+	createStep   createStep
+	createName   textinput.Model
+	createKind   int // 0=every, 1=cron, 2=at
+	createSpec   textinput.Model
+	createPrompt textinput.Model
+	createError  string
 
 	// Delete confirmation
 	deleteConfirm bool
@@ -106,6 +107,38 @@ func (t *jobsTab) Consuming() bool {
 	return t.mode == jobsModeCreate || t.mode == jobsModeDelete
 }
 
+func (t *jobsTab) StatusHints() []string {
+	switch t.mode {
+	case jobsModeCreate:
+		step := createStepLabels[t.createStep]
+		return []string{
+			styleMuted.Render("Creating: " + step),
+			renderKeyHint("esc", "cancel"),
+		}
+	case jobsModeDelete:
+		return []string{
+			renderKeyHint("y", "confirm"),
+			renderKeyHint("n", "cancel"),
+		}
+	case jobsModeDetail:
+		return []string{
+			renderKeyHint("esc", "back"),
+			renderKeyHint("↑↓", "scroll"),
+		}
+	default:
+		if len(t.jobs) > 0 {
+			return []string{
+				renderKeyHint("n", "new"),
+				renderKeyHint("r", "run"),
+				renderKeyHint("p", "pause"),
+				renderKeyHint("x", "del"),
+				positionIndicator(t.cursor, len(t.jobs)),
+			}
+		}
+		return []string{renderKeyHint("n", "new job")}
+	}
+}
+
 func (t *jobsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case jobsDataMsg:
@@ -125,7 +158,7 @@ func (t *jobsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		if msg.err != nil {
 			t.message = styleError.Render("Error: " + msg.err.Error())
 		} else {
-			t.message = styleSuccess.Render(msg.action)
+			t.message = styleSuccess.Render("✓ " + msg.action)
 		}
 		return t, func() tea.Msg { return loadJobsData(svc) }
 
@@ -134,7 +167,7 @@ func (t *jobsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		case jobsModeList:
 			return t.updateList(msg, svc)
 		case jobsModeDetail:
-			return t.updateDetail(msg, svc)
+			return t.updateDetail(msg, height)
 		case jobsModeCreate:
 			return t.updateCreate(msg, svc)
 		case jobsModeDelete:
@@ -147,18 +180,22 @@ func (t *jobsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 // ── list mode ───────────────────────────────────────────────────────
 
 func (t *jobsTab) updateList(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
+	// Clear transient message on any navigation
 	switch {
 	case key.Matches(msg, keys.Down):
+		t.message = ""
 		if t.cursor < len(t.jobs)-1 {
 			t.cursor++
 		}
 	case key.Matches(msg, keys.Up):
+		t.message = ""
 		if t.cursor > 0 {
 			t.cursor--
 		}
 	case key.Matches(msg, keys.Enter):
 		if len(t.jobs) > 0 {
 			t.mode = jobsModeDetail
+			t.detailScroll = 0
 			job := t.jobs[t.cursor]
 			return t, func() tea.Msg {
 				ctx := context.Background()
@@ -170,6 +207,7 @@ func (t *jobsTab) updateList(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		t.mode = jobsModeCreate
 		t.createStep = createStepName
 		t.createError = ""
+		t.message = ""
 		t.initCreateInputs()
 		return t, t.createName.Focus()
 	case key.Matches(msg, keys.DeleteJob):
@@ -207,11 +245,17 @@ func (t *jobsTab) updateList(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 
 // ── detail mode ─────────────────────────────────────────────────────
 
-func (t *jobsTab) updateDetail(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
-	if key.Matches(msg, keys.Back) {
+func (t *jobsTab) updateDetail(msg tea.KeyMsg, height int) (tabModel, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keys.Back):
 		t.mode = jobsModeList
 		t.detailRuns = nil
-		return t, nil
+	case key.Matches(msg, keys.Down):
+		t.detailScroll++
+	case key.Matches(msg, keys.Up):
+		if t.detailScroll > 0 {
+			t.detailScroll--
+		}
 	}
 	return t, nil
 }
@@ -225,7 +269,7 @@ func (t *jobsTab) initCreateInputs() {
 	t.createName.Width = 50
 	t.createName.PromptStyle = styleInputPrompt
 	t.createName.TextStyle = styleInputActive
-	t.createName.Prompt = "  "
+	t.createName.Prompt = "  › "
 
 	t.createKind = 0
 
@@ -234,7 +278,7 @@ func (t *jobsTab) initCreateInputs() {
 	t.createSpec.Width = 50
 	t.createSpec.PromptStyle = styleInputPrompt
 	t.createSpec.TextStyle = styleInputActive
-	t.createSpec.Prompt = "  "
+	t.createSpec.Prompt = "  › "
 	t.updateSpecPlaceholder()
 
 	t.createPrompt = textinput.New()
@@ -243,7 +287,7 @@ func (t *jobsTab) initCreateInputs() {
 	t.createPrompt.Width = 60
 	t.createPrompt.PromptStyle = styleInputPrompt
 	t.createPrompt.TextStyle = styleInputActive
-	t.createPrompt.Prompt = "  "
+	t.createPrompt.Prompt = "  › "
 }
 
 func (t *jobsTab) updateSpecPlaceholder() {
@@ -385,18 +429,6 @@ func (t *jobsTab) viewList(width, height int) string {
 
 	b.WriteString("\n")
 
-	// Action hints
-	b.WriteString("  ")
-	hints := []string{
-		renderKeyHint("n", "new"),
-		renderKeyHint("r", "run now"),
-		renderKeyHint("p", "pause/resume"),
-		renderKeyHint("x", "delete"),
-		renderKeyHint("enter", "details"),
-	}
-	b.WriteString(strings.Join(hints, styleMuted.Render("  ")))
-	b.WriteString("\n\n")
-
 	if t.message != "" {
 		b.WriteString("  ")
 		b.WriteString(t.message)
@@ -413,10 +445,11 @@ func (t *jobsTab) viewList(width, height int) string {
 	}
 
 	// Column headers
+	nameCol := maxInt(col-65, 15)
 	b.WriteString("  ")
 	b.WriteString(styleMuted.Render(
 		padRight("", 3) +
-			padRight("Name", maxInt(col-65, 15)) + "  " +
+			padRight("Name", nameCol) + "  " +
 			padRight("Schedule", 22) + "  " +
 			padRight("Status", 10) + "  " +
 			padRight("Next Run", 16) + "  " +
@@ -426,19 +459,42 @@ func (t *jobsTab) viewList(width, height int) string {
 	b.WriteString(horizontalRule(col))
 	b.WriteString("\n")
 
-	for i, job := range t.jobs {
+	// Windowed rendering
+	headerLines := 4 // top padding + message + headers + rule
+	if t.message != "" {
+		headerLines += 2
+	}
+	listHeight := height - headerLines
+	if listHeight < 3 {
+		listHeight = 3
+	}
+	start, end := listWindow(t.cursor, len(t.jobs), listHeight)
+
+	if start > 0 {
 		b.WriteString("  ")
-		line := t.renderJobRow(job, col, i == t.cursor)
-		b.WriteString(line)
+		b.WriteString(styleSubtle.Render(fmt.Sprintf("  ↑ %d more", start)))
+		b.WriteString("\n")
+	}
+
+	for i := start; i < end; i++ {
+		job := t.jobs[i]
+		b.WriteString("  ")
+		b.WriteString(t.renderJobRow(job, col, nameCol, i == t.cursor))
+		b.WriteString("\n")
+	}
+
+	if end < len(t.jobs) {
+		b.WriteString("  ")
+		b.WriteString(styleSubtle.Render(fmt.Sprintf("  ↓ %d more", len(t.jobs)-end)))
 		b.WriteString("\n")
 	}
 
 	return b.String()
 }
 
-func (t *jobsTab) renderJobRow(job state.ScheduledJob, col int, selected bool) string {
+func (t *jobsTab) renderJobRow(job state.ScheduledJob, col, nameCol int, selected bool) string {
 	icon := enabledIcon(job.Enabled)
-	name := padRight(truncate(job.Name, maxInt(col-65, 15)), maxInt(col-65, 15))
+	name := padRight(truncate(job.Name, nameCol), nameCol)
 	sched := padRight(truncate(job.ScheduleKind+" "+job.ScheduleSpec, 22), 22)
 
 	status := styleMuted.Render(padRight("—", 10))
@@ -454,73 +510,66 @@ func (t *jobsTab) renderJobRow(job state.ScheduledJob, col int, selected bool) s
 	row := fmt.Sprintf("%s  %s  %s  %s  %s  %s", icon, name, sched, status, next, last)
 
 	if selected {
-		// Apply subtle highlight to the entire row
-		return styleSelectedRow.Render(row)
+		return styleAccent.Render("▸ ") + styleSelectedRow.Render(row)
 	}
-	return row
+	return "  " + row
 }
 
 func (t *jobsTab) viewDetail(width, height int) string {
-	var b strings.Builder
-
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyHint("esc", "back to list"))
-	b.WriteString("\n\n")
-
 	if t.cursor >= len(t.jobs) {
-		return b.String()
+		return ""
 	}
 	job := t.jobs[t.cursor]
 
-	b.WriteString("  ")
-	b.WriteString(styleSectionTitle.Render(job.Name))
-	b.WriteString("\n\n")
-
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("ID", job.ID))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Schedule", job.ScheduleKind+" "+job.ScheduleSpec))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Status", func() string {
+	// Build all lines, then apply scroll window.
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, "  "+styleSectionTitle.Render(job.Name))
+	lines = append(lines, "")
+	lines = append(lines, "  "+renderKeyValue("ID", job.ID))
+	lines = append(lines, "  "+renderKeyValue("Schedule", job.ScheduleKind+" "+job.ScheduleSpec))
+	lines = append(lines, "  "+renderKeyValue("Status", func() string {
 		if job.Enabled {
 			return styleSuccess.Render("active")
 		}
 		return styleWarning.Render("paused")
 	}()))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Next Run", fmtTime(job.NextRunAt)))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(renderKeyValue("Prompt", truncate(job.Prompt, width-22)))
-	b.WriteString("\n\n")
-
-	b.WriteString("  ")
-	b.WriteString(styleSectionTitle.Render("Run History"))
-	b.WriteString("\n\n")
+	lines = append(lines, "  "+renderKeyValue("Next Run", fmtTime(job.NextRunAt)))
+	lines = append(lines, "  "+renderKeyValue("Prompt", truncate(job.Prompt, width-22)))
+	lines = append(lines, "")
+	lines = append(lines, "  "+styleSectionTitle.Render("Run History"))
+	lines = append(lines, "")
 
 	if len(t.detailRuns) == 0 {
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("No runs yet"))
-		b.WriteString("\n")
+		lines = append(lines, "  "+styleMuted.Render("No runs yet"))
 	}
 	for _, run := range t.detailRuns {
-		b.WriteString("  ")
 		icon := statusIcon(run.Status == "ok")
-		b.WriteString(fmt.Sprintf("%s  %s  %s  %s",
+		line := fmt.Sprintf("  %s  %s  %s  %s",
 			icon,
 			styleMuted.Render(padRight(run.Status, 8)),
 			styleMuted.Render(fmtTime(run.StartedAt)),
 			styleMuted.Render(fmtDuration(run.FinishedAt.Sub(run.StartedAt))),
-		))
+		)
 		if run.Error != "" {
-			b.WriteString("  ")
-			b.WriteString(styleError.Render(truncate(run.Error, width-60)))
+			line += "  " + styleError.Render(truncate(run.Error, width-60))
 		}
+		lines = append(lines, line)
+	}
+
+	// Apply scroll window
+	maxScroll := maxInt(len(lines)-height+2, 0)
+	t.detailScroll = clamp(t.detailScroll, 0, maxScroll)
+
+	var b strings.Builder
+	end := minInt(t.detailScroll+height-1, len(lines))
+	for i := t.detailScroll; i < end; i++ {
+		b.WriteString(lines[i])
 		b.WriteString("\n")
+	}
+	if maxScroll > 0 {
+		b.WriteString("  ")
+		b.WriteString(scrollHints(t.detailScroll, end, len(lines)))
 	}
 
 	return b.String()
@@ -558,6 +607,35 @@ func (t *jobsTab) viewCreate(width, height int) string {
 	b.WriteString(horizontalRule(width - 4))
 	b.WriteString("\n\n")
 
+	// Show completed fields above the current step
+	if t.createStep > createStepName {
+		b.WriteString("  ")
+		b.WriteString(styleMuted.Render("Name: "))
+		b.WriteString(styleBase.Render(t.createName.Value()))
+		b.WriteString("\n")
+	}
+	if t.createStep > createStepKind {
+		b.WriteString("  ")
+		b.WriteString(styleMuted.Render("Type: "))
+		b.WriteString(styleBase.Render(scheduleKinds[t.createKind].label))
+		b.WriteString("\n")
+	}
+	if t.createStep > createStepSpec {
+		b.WriteString("  ")
+		b.WriteString(styleMuted.Render("Schedule: "))
+		b.WriteString(styleBase.Render(t.createSpec.Value()))
+		b.WriteString("\n")
+	}
+	if t.createStep > createStepPrompt {
+		b.WriteString("  ")
+		b.WriteString(styleMuted.Render("Prompt: "))
+		b.WriteString(styleBase.Render(truncate(t.createPrompt.Value(), width-16)))
+		b.WriteString("\n")
+	}
+	if t.createStep > createStepName {
+		b.WriteString("\n")
+	}
+
 	switch t.createStep {
 	case createStepName:
 		b.WriteString("  ")
@@ -567,11 +645,6 @@ func (t *jobsTab) viewCreate(width, height int) string {
 		b.WriteString(styleMuted.Render("A short, descriptive name for this job"))
 		b.WriteString("\n\n")
 		b.WriteString(t.createName.View())
-		b.WriteString("\n\n")
-		b.WriteString("  ")
-		b.WriteString(renderKeyHint("enter", "next"))
-		b.WriteString(styleMuted.Render("  "))
-		b.WriteString(renderKeyHint("esc", "cancel"))
 
 	case createStepKind:
 		b.WriteString("  ")
@@ -595,32 +668,17 @@ func (t *jobsTab) viewCreate(width, height int) string {
 			}
 			b.WriteString("\n")
 		}
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(renderKeyHint("↑/↓", "select"))
-		b.WriteString(styleMuted.Render("  "))
-		b.WriteString(renderKeyHint("enter", "next"))
-		b.WriteString(styleMuted.Render("  "))
-		b.WriteString(renderKeyHint("esc", "cancel"))
 
 	case createStepSpec:
 		kindInfo := scheduleKinds[t.createKind]
 		b.WriteString("  ")
 		b.WriteString(styleInputLabel.Render("Schedule "))
 		b.WriteString(styleMuted.Render("(" + kindInfo.label + ")"))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("Format: " + kindInfo.hint))
 		b.WriteString("\n\n")
 		b.WriteString(t.createSpec.View())
 		b.WriteString("\n\n")
 		b.WriteString("  ")
 		b.WriteString(t.specContextHelp())
-		b.WriteString("\n\n")
-		b.WriteString("  ")
-		b.WriteString(renderKeyHint("enter", "next"))
-		b.WriteString(styleMuted.Render("  "))
-		b.WriteString(renderKeyHint("esc", "cancel"))
 
 	case createStepPrompt:
 		b.WriteString("  ")
@@ -630,28 +688,8 @@ func (t *jobsTab) viewCreate(width, height int) string {
 		b.WriteString(styleMuted.Render("What should the agent do when this job runs?"))
 		b.WriteString("\n\n")
 		b.WriteString(t.createPrompt.View())
-		b.WriteString("\n\n")
-		b.WriteString("  ")
-		b.WriteString(renderKeyHint("enter", "next"))
-		b.WriteString(styleMuted.Render("  "))
-		b.WriteString(renderKeyHint("esc", "cancel"))
 
 	case createStepConfirm:
-		b.WriteString("  ")
-		b.WriteString(styleInputLabel.Render("Review"))
-		b.WriteString("\n\n")
-		b.WriteString("  ")
-		b.WriteString(renderKeyValue("Name", t.createName.Value()))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(renderKeyValue("Type", scheduleKinds[t.createKind].label))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(renderKeyValue("Schedule", t.createSpec.Value()))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(renderKeyValue("Prompt", truncate(t.createPrompt.Value(), width-22)))
-		b.WriteString("\n\n")
 		b.WriteString("  ")
 		b.WriteString(styleBright.Render("Create this job?"))
 		b.WriteString("  ")

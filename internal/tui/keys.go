@@ -6,6 +6,8 @@ type keyMap struct {
 	Quit      key.Binding
 	Tab       key.Binding
 	ShiftTab  key.Binding
+	Left      key.Binding
+	Right     key.Binding
 	Tab1      key.Binding
 	Tab2      key.Binding
 	Tab3      key.Binding
@@ -18,6 +20,7 @@ type keyMap struct {
 	RunJob    key.Binding
 	PauseJob  key.Binding
 	NewJob    key.Binding
+	NewChat   key.Binding
 	DeleteJob key.Binding
 	Help      key.Binding
 }
@@ -35,11 +38,19 @@ var keys = keyMap{
 		key.WithKeys("shift+tab"),
 		key.WithHelp("shift+tab", "prev tab"),
 	),
+	Left: key.NewBinding(
+		key.WithKeys("left"),
+		key.WithHelp("←", "prev tab"),
+	),
+	Right: key.NewBinding(
+		key.WithKeys("right"),
+		key.WithHelp("→", "next tab"),
+	),
 	Tab1: key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "overview")),
 	Tab2: key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "jobs")),
 	Tab3: key.NewBinding(key.WithKeys("3"), key.WithHelp("3", "runs")),
 	Tab4: key.NewBinding(key.WithKeys("4"), key.WithHelp("4", "chat")),
-	Tab5: key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "config")),
+	Tab5: key.NewBinding(key.WithKeys("5"), key.WithHelp("5", "settings")),
 	Up: key.NewBinding(
 		key.WithKeys("up", "k"),
 		key.WithHelp("↑/k", "up"),
@@ -67,6 +78,10 @@ var keys = keyMap{
 	NewJob: key.NewBinding(
 		key.WithKeys("n"),
 		key.WithHelp("n", "new job"),
+	),
+	NewChat: key.NewBinding(
+		key.WithKeys("n"),
+		key.WithHelp("n", "new chat"),
 	),
 	DeleteJob: key.NewBinding(
 		key.WithKeys("x"),

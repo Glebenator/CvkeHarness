@@ -44,17 +44,19 @@ const goBack = termui.GoBack
 // ─── UI components ────────────────────────────────────────────────────────────
 
 func renderHeader() {
-	termui.RenderWizardHeader("C V K E H A R N E S S", "AI DevOps Agent  ·  Configuration Wizard")
+	termui.RenderWizardHeader("CvkeHarness", "AI DevOps agent  ·  configuration wizard")
 }
 
 func renderSettingsHeader(dirty bool) {
-	termui.RenderWizardHeader("C V K E H A R N E S S", "AI DevOps Agent  ·  Interactive Settings")
+	termui.RenderWizardHeader("CvkeHarness", "AI DevOps agent  ·  interactive settings")
 	fmt.Printf("  %sJump straight to any setting. Each change returns here, so you can update one thing and leave.%s\n", fgGray, ansiReset)
 	if dirty {
-		fmt.Printf("  %s● Unsaved changes%s\n\n", fgYellow+ansiBold, ansiReset)
+		termui.RenderNote("Status", fgYellow, fgYellow+ansiBold+"● Unsaved changes"+ansiReset)
+		fmt.Println()
 		return
 	}
-	fmt.Printf("  %sNo unsaved changes yet.%s\n\n", fgMuted+ansiDim, ansiReset)
+	termui.RenderNote("Status", fgMuted, fgMuted+ansiDim+"No unsaved changes yet."+ansiReset)
+	fmt.Println()
 }
 
 func renderStep(step, total int, title string) {
@@ -171,41 +173,39 @@ func maskKey(key string) string {
 
 // renderReview prints a structured summary of cfg.
 func renderReview(cfg *config.Config) {
-	topSep := "  " + fgGray + ansiBold + "┌" + strings.Repeat("─", 52) + ansiReset
-	botSep := "  " + fgGray + ansiBold + "└" + strings.Repeat("─", 52) + ansiReset
-	row := func(label, value string) {
-		fmt.Printf("  %s%s│%s  %s%-16s%s  %s%s%s\n",
-			ansiBold, fgGray, ansiReset,
-			fgMuted, label, ansiReset,
-			ansiBold, fgWhite, value+ansiReset)
+	row := func(label, value string) string {
+		return fmt.Sprintf("%s%-16s%s  %s%s%s", fgMuted, label, ansiReset, ansiBold+fgWhite, value, ansiReset)
 	}
-	fmt.Println(topSep)
-	row("Provider", cfg.Provider)
-	row("Default Model", cfg.PrimaryModel())
+	lines := []string{
+		row("Provider", cfg.Provider),
+		row("Default Model", cfg.PrimaryModel()),
+	}
 	switch cfg.SafetyMode {
 	case tools.SafetyModeUserConfirm:
-		row("Command Approval", "Manual user confirmation")
+		lines = append(lines, row("Command Approval", "Manual user confirmation"))
 	default:
-		row("Command Approval", "LLM judge")
-		row("Safety Model", cfg.SafetyModel)
+		lines = append(lines, row("Command Approval", "LLM judge"))
+		lines = append(lines, row("Safety Model", cfg.SafetyModel))
 	}
 	if cfg.RoutingEnabled {
-		row("Routing", "Auto within approved models")
+		lines = append(lines, row("Routing", "Auto within approved models"))
 	} else {
-		row("Routing", "Default model only")
+		lines = append(lines, row("Routing", "Default model only"))
 	}
-	row("Approved Models", strconv.Itoa(len(cfg.ApprovedModels)))
-	row("Favorite Models", strconv.Itoa(len(cfg.FavoriteModels)))
+	lines = append(lines, row("Approved Models", strconv.Itoa(len(cfg.ApprovedModels))))
+	lines = append(lines, row("Favorite Models", strconv.Itoa(len(cfg.FavoriteModels))))
 	if cfg.BaseURL != "" {
-		row("Base URL", cfg.BaseURL)
+		lines = append(lines, row("Base URL", cfg.BaseURL))
 	}
 	if key := cfg.GetAPIKey(cfg.Provider); key != "" {
-		row("API Key", maskKey(key))
+		lines = append(lines, row("API Key", maskKey(key)))
 	}
-	row("Max Tokens", strconv.Itoa(cfg.MaxTokens))
-	row("Max Iterations", strconv.Itoa(cfg.MaxIterations))
-	row("Log Level", cfg.LogLevel)
-	fmt.Println(botSep)
+	lines = append(lines,
+		row("Max Tokens", strconv.Itoa(cfg.MaxTokens)),
+		row("Max Iterations", strconv.Itoa(cfg.MaxIterations)),
+		row("Log Level", cfg.LogLevel),
+	)
+	termui.RenderNote("Configuration", fgAccent, lines...)
 }
 
 func summarizeReviewNotes(notes []string, maxLen int) string {
@@ -1940,9 +1940,9 @@ func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProf
 
 	fmt.Print(clearScreen)
 	fmt.Println()
-	fmt.Printf("%s%s%s\n", fgGreen+ansiBold, hSep, ansiReset)
+	fmt.Printf("  %s%s%s\n", fgGreen+ansiBold, hSep, ansiReset)
 	fmt.Printf("  %s%s✔  %s%s Configuration saved.\n", ansiBold, fgGreen, successTitle, ansiReset)
-	fmt.Printf("%s%s%s\n\n", fgGreen+ansiBold, hSep, ansiReset)
+	fmt.Printf("  %s%s%s\n\n", fgGreen+ansiBold, hSep, ansiReset)
 
 	renderReview(cfg)
 

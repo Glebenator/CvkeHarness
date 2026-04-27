@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -24,7 +25,7 @@ var tabNames = [tabCount]string{
 	"Jobs",
 	"Runs",
 	"Chat",
-	"Config",
+	"Settings",
 }
 
 // ── messages ────────────────────────────────────────────────────────
@@ -33,11 +34,6 @@ type tickMsg time.Time
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
-}
-
-type dataLoadedMsg struct {
-	tab  int
-	data interface{}
 }
 
 // ── tab interface ───────────────────────────────────────────────────
@@ -49,6 +45,8 @@ type tabModel interface {
 	// Consuming returns true when the tab is in a mode that should capture
 	// all key input (e.g. form input, confirmation dialog).
 	Consuming() bool
+	// StatusHints returns context-sensitive key hints for the status bar.
+	StatusHints() []string
 }
 
 // ── root model ──────────────────────────────────────────────────────
@@ -65,6 +63,9 @@ type model struct {
 
 // Run starts the Bubble Tea TUI.
 func Run(svc *Service, binaryName string) error {
+	if svc != nil {
+		svc.SetBinaryName(binaryName)
+	}
 	m := model{
 		svc:        svc,
 		binaryName: binaryName,
@@ -102,37 +103,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// If the active tab is consuming input (e.g. a form), forward everything.
+		// If the active tab is consuming input (e.g. a form), forward
+		// everything except ctrl+c which always quits.
 		if m.tabs[m.activeTab].Consuming() {
+			if msg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
 			tab, cmd := m.tabs[m.activeTab].Update(msg, m.svc, m.contentWidth(), m.contentHeight())
 			m.tabs[m.activeTab] = tab
 			return m, cmd
 		}
 
+		// Dismiss help overlay on any key.
+		if m.showHelp {
+			m.showHelp = false
+			return m, nil
+		}
+
 		switch {
+		case msg.String() == "ctrl+c":
+			return m, tea.Quit
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
-		case key.Matches(msg, keys.Tab):
-			m.activeTab = (m.activeTab + 1) % tabCount
-			return m, nil
-		case key.Matches(msg, keys.ShiftTab):
-			m.activeTab = (m.activeTab - 1 + tabCount) % tabCount
-			return m, nil
+		case key.Matches(msg, keys.Tab), key.Matches(msg, keys.Right):
+			return m, m.switchTab((m.activeTab + 1) % tabCount)
+		case key.Matches(msg, keys.ShiftTab), key.Matches(msg, keys.Left):
+			return m, m.switchTab((m.activeTab - 1 + tabCount) % tabCount)
 		case key.Matches(msg, keys.Tab1):
-			m.activeTab = tabOverview
-			return m, nil
+			return m, m.switchTab(tabOverview)
 		case key.Matches(msg, keys.Tab2):
-			m.activeTab = tabJobs
-			return m, nil
+			return m, m.switchTab(tabJobs)
 		case key.Matches(msg, keys.Tab3):
-			m.activeTab = tabRuns
-			return m, nil
+			return m, m.switchTab(tabRuns)
 		case key.Matches(msg, keys.Tab4):
-			m.activeTab = tabChat
-			return m, nil
+			return m, m.switchTab(tabChat)
 		case key.Matches(msg, keys.Tab5):
-			m.activeTab = tabConfig
-			return m, nil
+			return m, m.switchTab(tabConfig)
 		case key.Matches(msg, keys.Help):
 			m.showHelp = !m.showHelp
 			return m, nil
@@ -150,6 +156,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// switchTab changes the active tab and triggers a data refresh.
+func (m *model) switchTab(idx int) tea.Cmd {
+	m.activeTab = idx
+	return m.tabs[idx].Init(m.svc)
+}
+
 func (m model) View() string {
 	var b strings.Builder
 
@@ -159,9 +171,14 @@ func (m model) View() string {
 	b.WriteString(horizontalRule(m.width))
 	b.WriteString("\n")
 
-	// Content area
-	content := m.tabs[m.activeTab].View(m.contentWidth(), m.contentHeight())
-	b.WriteString(content)
+	// Help overlay replaces content when active.
+	if m.showHelp {
+		b.WriteString(m.renderHelp())
+	} else {
+		// Content area
+		content := m.tabs[m.activeTab].View(m.contentWidth(), m.contentHeight())
+		b.WriteString(content)
+	}
 
 	// Pad to fill the screen
 	rendered := b.String()
@@ -181,14 +198,12 @@ func (m model) View() string {
 func (m model) renderTabBar() string {
 	var parts []string
 	for i, name := range tabNames {
-		label := strings.Builder{}
-		label.WriteString(" ")
-		label.WriteString(name)
-		label.WriteString(" ")
+		num := fmt.Sprintf("%d", i+1)
+		label := " " + num + "·" + name + " "
 		if i == m.activeTab {
-			parts = append(parts, styleActiveTab.Render(label.String()))
+			parts = append(parts, styleActiveTab.Render(label))
 		} else {
-			parts = append(parts, styleTab.Render(label.String()))
+			parts = append(parts, styleTab.Render(label))
 		}
 	}
 	bar := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
@@ -198,18 +213,96 @@ func (m model) renderTabBar() string {
 func (m model) renderStatusBar() string {
 	left := styleStatusBar.Render("CvkeHarness")
 
-	hints := []string{
-		renderKeyHint("tab", "switch"),
+	// Context-sensitive hints from the active tab.
+	var hints []string
+	if tabHints := m.tabs[m.activeTab].StatusHints(); len(tabHints) > 0 {
+		hints = append(hints, tabHints...)
+		hints = append(hints, styleMuted.Render("│"))
+	}
+	hints = append(hints,
+		renderKeyHint("←→", "switch"),
 		renderKeyHint("?", "help"),
 		renderKeyHint("q", "quit"),
-	}
-	right := strings.Join(hints, styleMuted.Render(" · "))
+	)
+	right := strings.Join(hints, styleMuted.Render(" "))
 
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 	}
 	return left + strings.Repeat(" ", gap) + right
+}
+
+func (m model) renderHelp() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString("  ")
+	b.WriteString(styleSectionTitle.Render("Keyboard Shortcuts"))
+	b.WriteString("\n\n")
+
+	groups := []struct {
+		title string
+		items [][2]string
+	}{
+		{
+			"Navigation",
+			[][2]string{
+				{"←/→ or tab/shift+tab", "Cycle through tabs"},
+				{"1-5", "Jump to tab directly"},
+				{"↑/k  ↓/j", "Move cursor in lists"},
+				{"enter", "Expand / select item"},
+				{"esc", "Go back / collapse detail"},
+			},
+		},
+		{
+			"Jobs Tab",
+			[][2]string{
+				{"n", "Create a new scheduled job"},
+				{"r", "Trigger a job run now"},
+				{"p", "Pause or resume a job"},
+				{"x", "Delete a job"},
+			},
+		},
+		{
+			"Chat Tab",
+			[][2]string{
+				{"n", "Start a live chat session"},
+				{"enter", "Open the selected transcript"},
+			},
+		},
+		{
+			"Settings Tab",
+			[][2]string{
+				{"enter", "Edit or toggle the selected setting"},
+				{"s", "Save configuration"},
+				{"r", "Reset unsaved edits"},
+			},
+		},
+		{
+			"General",
+			[][2]string{
+				{"?", "Toggle this help"},
+				{"q / ctrl+c", "Quit the dashboard"},
+			},
+		},
+	}
+
+	for _, group := range groups {
+		b.WriteString("  ")
+		b.WriteString(styleBright.Render(group.title))
+		b.WriteString("\n")
+		for _, item := range group.items {
+			b.WriteString("    ")
+			b.WriteString(styleKeyHelpKey.Render(padRight(item[0], 20)))
+			b.WriteString(styleBase.Render(item[1]))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("  ")
+	b.WriteString(styleMuted.Render("Press any key to dismiss"))
+	return b.String()
 }
 
 func (m model) contentWidth() int {
@@ -248,12 +341,12 @@ func loadJobsData(svc *Service) tea.Msg {
 
 func loadRunsData(svc *Service) tea.Msg {
 	ctx := context.Background()
-	runs, _ := svc.RecentRuns(ctx, 20)
+	runs, _ := svc.RecentRuns(ctx, 50)
 	return runsDataMsg{runs: runs}
 }
 
 func loadChatData(svc *Service) tea.Msg {
 	ctx := context.Background()
-	sessions, _ := svc.RecentChatSessions(ctx, 20)
+	sessions, _ := svc.RecentChatSessions(ctx, 50)
 	return chatDataMsg{sessions: sessions}
 }

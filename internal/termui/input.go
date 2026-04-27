@@ -14,18 +14,18 @@ import (
 // - Pressing Enter with an empty field and no default goes back.
 // - Pressing Enter with an empty field that has a default uses the default.
 func PromptText(label, defaultVal string, canGoBack bool) (string, bool, error) {
-	fmt.Printf("  %s%s%s\n", FGGray, label, ANSIReset)
+	RenderSectionTitle(label)
 	if defaultVal != "" {
-		fmt.Printf("  %s(default: %s%s%s%s)%s\n",
-			FGMuted, FGAccent+ANSIBold, defaultVal, ANSIReset, FGMuted, ANSIReset)
+		fmt.Printf("  %s│%s %sdefault%s %s%s%s\n",
+			FGMuted, ANSIReset, FGMuted, ANSIReset, FGAccent+ANSIBold, defaultVal, ANSIReset)
 		if canGoBack {
-			fmt.Printf("  %stype :back to return to the previous step%s\n", FGMuted+ANSIDim, ANSIReset)
+			fmt.Printf("  %s│%s %stype :back to return to the previous step%s\n", FGMuted, ANSIReset, FGMuted+ANSIDim, ANSIReset)
 		}
 	} else if canGoBack {
-		fmt.Printf("  %sleave blank to go back%s\n", FGMuted+ANSIDim, ANSIReset)
+		fmt.Printf("  %s│%s %sleave blank to go back%s\n", FGMuted, ANSIReset, FGMuted+ANSIDim, ANSIReset)
 	}
 
-	fmt.Printf("\n  %s%s›%s  ", FGAccent, ANSIBold, ANSIReset)
+	fmt.Printf("\n  %s%s▸%s  ", FGAccent, ANSIBold, ANSIReset)
 	fmt.Print(FGWhite + ANSIBold)
 	NotifyInputRequested(os.Stdout, label, "Response needed in the terminal.")
 

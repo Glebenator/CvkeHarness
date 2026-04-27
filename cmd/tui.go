@@ -18,9 +18,12 @@ var tuiCmd = &cobra.Command{
 	Use:   "tui",
 	Short: "Open the interactive CvkeHarness operations dashboard",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		setupMode := false
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			return err
+			cfg = config.DefaultConfig()
+			cfg.Normalize()
+			setupMode = true
 		}
 		log.Init(cfg.LogLevel, "text")
 
@@ -41,6 +44,9 @@ var tuiCmd = &cobra.Command{
 		}
 
 		service := dashboard.NewService(cfg, store, systemcron.New(nil), sched, runJobNow)
+		if setupMode {
+			service.MarkSetupMode()
+		}
 		return dashboard.Run(service, os.Args[0])
 	},
 }
