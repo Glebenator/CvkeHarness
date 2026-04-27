@@ -293,6 +293,45 @@ type SystemCronAudit struct {
 	CreatedAt      time.Time
 }
 
+// RunSummary is a compact persisted run view for inspection surfaces.
+type RunSummary struct {
+	ID                          int64
+	StartedAt                   time.Time
+	FinishedAt                  time.Time
+	Provider                    string
+	Task                        string
+	TaskClass                   core.TaskClass
+	Success                     bool
+	ErrorMessage                string
+	FinalOutput                 string
+	VerificationStatus          string
+	VerificationReason          string
+	VerificationMissingActions  string
+	VerificationRepairTriggered bool
+	RoutingEnabled              bool
+	Phases                      []PhaseRecord
+	Tools                       []ToolOutcome
+}
+
+// ChatSessionSummary is a compact persisted chat session view.
+type ChatSessionSummary struct {
+	ID             int64
+	StartedAt      time.Time
+	FinishedAt     time.Time
+	Provider       string
+	PinnedModel    string
+	RoutingEnabled bool
+	ExitReason     string
+	TurnCount      int
+}
+
+// ChatSessionDetail contains a session and its persisted turns/messages.
+type ChatSessionDetail struct {
+	Session  ChatSessionSummary
+	Turns    []ChatTurn
+	Messages []ChatMessage
+}
+
 // ChatSession stores one interactive chat lifecycle.
 type ChatSession struct {
 	ID             int64
