@@ -10,10 +10,11 @@ import (
 type Phase string
 
 const (
-	PhasePlanning  Phase = "planning"
-	PhaseExecution Phase = "execution"
-	PhaseChat      Phase = "chat"
-	PhaseCuration  Phase = "memory_curation"
+	PhasePlanning     Phase = "planning"
+	PhaseExecution    Phase = "execution"
+	PhaseChat         Phase = "chat"
+	PhaseVerification Phase = "verification"
+	PhaseCuration     Phase = "memory_curation"
 )
 
 // RoutingMode controls how model routing behaves.

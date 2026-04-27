@@ -87,14 +87,15 @@ func TestPlanningRoutingUsesEmptyToolsetProfile(t *testing.T) {
 
 	router := &capturingRouter{}
 	agent := New(Options{
-		Provider:      provider,
-		ProviderName:  "openrouter",
-		ToolRegistry:  registry,
-		DefaultModel:  "test-model",
-		MaxIterations: 3,
-		MaxTokens:     512,
-		RoutingConfig: core.RoutingConfig{Enabled: true},
-		Router:        router,
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  registry,
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		RoutingConfig:                 core.RoutingConfig{Enabled: true},
+		Router:                        router,
 	})
 
 	if _, err := agent.Run(context.Background(), "inspect process list"); err != nil {

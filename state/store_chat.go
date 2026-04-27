@@ -79,8 +79,10 @@ func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTu
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO chat_turns (
 			session_id, turn_index, user_input, task_class, requested_model, actual_model,
-			success, error_message, latency_ms, prompt_tokens, completion_tokens, total_tokens, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			success, error_message, latency_ms, prompt_tokens, completion_tokens, total_tokens,
+			final_output, verification_status, verification_reason, verification_missing_actions,
+			verification_repair_triggered, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionID,
 		turnIndex,
 		turn.UserInput,
@@ -93,6 +95,11 @@ func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTu
 		turn.PromptTokens,
 		turn.CompletionTokens,
 		turn.TotalTokens,
+		turn.FinalOutput,
+		turn.VerificationStatus,
+		turn.VerificationReason,
+		turn.VerificationMissingActions,
+		boolToInt(turn.VerificationRepairTriggered),
 		turn.CreatedAt.UTC(),
 	)
 	if err != nil {

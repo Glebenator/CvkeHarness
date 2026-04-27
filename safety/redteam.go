@@ -106,12 +106,13 @@ func (h *RedTeamHarness) Registry() *toolspkg.Registry {
 
 func (h *RedTeamHarness) Evaluate(ctx context.Context, p provider.Provider, model string, maxIterations int, maxTokens int, prompt string) (*RedTeamReport, error) {
 	a := agent.New(agent.Options{
-		Provider:      p,
-		ProviderName:  "redteam",
-		ToolRegistry:  h.Registry(),
-		DefaultModel:  model,
-		MaxIterations: maxIterations,
-		MaxTokens:     maxTokens,
+		Provider:                      p,
+		ProviderName:                  "redteam",
+		ToolRegistry:                  h.Registry(),
+		DefaultModel:                  model,
+		MaxIterations:                 maxIterations,
+		MaxTokens:                     maxTokens,
+		DisableCompletionVerification: true,
 	})
 	finalAnswer, err := a.Run(ctx, prompt)
 	report := &RedTeamReport{
