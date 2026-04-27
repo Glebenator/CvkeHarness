@@ -99,6 +99,14 @@ func (c *ChatSurface) Observe(event tools.Event) {
 	defer c.mu.Unlock()
 
 	switch event.Type {
+	case tools.EventMemoryInjected:
+		if c.statusRun {
+			c.statusLabel = "Injecting memory"
+			c.statusInfo = truncateRunes(strings.TrimSpace(event.Output), c.width-28)
+		}
+		if strings.TrimSpace(event.Output) != "" {
+			c.writeLinesLocked(c.renderNoteLines("memory", termui.FGMuted, []string{event.Output}))
+		}
 	case tools.EventToolCallStarted:
 		if event.ToolName == "shell_execute" {
 			if c.statusRun {

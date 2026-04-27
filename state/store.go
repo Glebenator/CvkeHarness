@@ -640,6 +640,27 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
 			FOREIGN KEY(turn_id) REFERENCES chat_turns(id)
 		);`,
+		`CREATE TABLE IF NOT EXISTS chat_tool_outcomes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id INTEGER NOT NULL,
+			turn_id INTEGER NOT NULL,
+			phase TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			model TEXT NOT NULL,
+			tool_name TEXT NOT NULL,
+			toolset TEXT NOT NULL DEFAULT '',
+			arguments TEXT NOT NULL DEFAULT '',
+			command TEXT NOT NULL DEFAULT '',
+			success INTEGER NOT NULL,
+			policy_denied INTEGER NOT NULL DEFAULT 0,
+			denial_class TEXT NOT NULL DEFAULT '',
+			error_message TEXT NOT NULL DEFAULT '',
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			task_class TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
+			FOREIGN KEY(turn_id) REFERENCES chat_turns(id)
+		);`,
 		`CREATE TABLE IF NOT EXISTS snapshots (
 			id TEXT PRIMARY KEY,
 			source_file TEXT NOT NULL,

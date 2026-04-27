@@ -53,6 +53,16 @@ type RetrievalResult struct {
 	PlaybookBrief      string
 	CautionBrief       string
 	FallbackBrief      string
+	Sources            []InjectionSource
+}
+
+// InjectionSource describes a memory section that was prepared for prompt
+// injection. It is safe for logs and UI summaries because Preview is bounded.
+type InjectionSource struct {
+	Name    string
+	Origin  string
+	Chars   int
+	Preview string
 }
 
 // Lesson keeps backward-compatible ad hoc finding writes available to tools.

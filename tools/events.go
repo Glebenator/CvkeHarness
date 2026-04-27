@@ -16,6 +16,7 @@ const (
 	EventShellApproval        EventType = "shell_approval"
 	EventShellOutput          EventType = "shell_output"
 	EventShellCommandFinished EventType = "shell_command_finished"
+	EventMemoryInjected       EventType = "memory_injected"
 )
 
 // Event captures a single execution update.

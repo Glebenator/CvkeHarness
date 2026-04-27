@@ -332,9 +332,10 @@ type ChatSessionSummary struct {
 
 // ChatSessionDetail contains a session and its persisted turns/messages.
 type ChatSessionDetail struct {
-	Session  ChatSessionSummary
-	Turns    []ChatTurn
-	Messages []ChatMessage
+	Session       ChatSessionSummary
+	Turns         []ChatTurn
+	Messages      []ChatMessage
+	ToolsByTurnID map[int64][]ToolOutcome
 }
 
 // ChatSession stores one interactive chat lifecycle.

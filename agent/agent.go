@@ -240,6 +240,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	if err != nil {
 		return "", state.PhaseRecord{}, state.PhaseRecord{}, CompletionVerification{}, nil, nil, targetResolution, err
 	}
+	emitMemoryInjection(ctx, core.PhaseExecution, retrieved)
 
 	systemMessages := initialSystemMessages(retrieved, planningNotes)
 	chat := NewChatState(append(systemMessages, provider.Message{Role: "user", Content: prompt})...)
@@ -397,6 +398,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 						},
 					})
 					if refreshErr == nil {
+						emitMemoryInjection(ctx, core.PhaseExecution, refresh)
 						if refreshedText := retrievedBrief(refresh); strings.TrimSpace(refreshedText) != "" {
 							chat.AddSystem("Refreshed learned context after tool trouble:\n" + refreshedText)
 						}
@@ -494,6 +496,7 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 	if err != nil {
 		return "", state.PhaseRecord{}, "", err
 	}
+	emitMemoryInjection(ctx, phase, retrieved)
 
 	p, err := a.resolveProvider(selection.Requested.Provider)
 	if err != nil {
@@ -538,14 +541,86 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 
 func (a *Agent) retrieveMemory(ctx context.Context, input core.RetrievalContext) (memory.RetrievalResult, error) {
 	if a.opts.MemoryRetriever == nil {
-		return memory.RetrievalResult{
-			BuiltInRules: `You are CvkeHarness.
+		rules := `You are CvkeHarness.
 Before deciding to use a tool, think through the problem step-by-step.
-If you encounter an error using a tool, read the error message carefully and try a different approach or adjust your arguments.`,
-			RuntimeHostSummary: fmt.Sprintf("Runtime host summary:\n- active model: %s", input.ActiveModel.String()),
+If you encounter an error using a tool, read the error message carefully and try a different approach or adjust your arguments.`
+		hostSummary := fmt.Sprintf("Runtime host summary:\n- active model: %s", input.ActiveModel.String())
+		return memory.RetrievalResult{
+			BuiltInRules:       rules,
+			RuntimeHostSummary: hostSummary,
+			Sources: []memory.InjectionSource{
+				{Name: "built-in rules", Origin: "harness fallback", Chars: len([]rune(rules)), Preview: compactMemoryPreview(rules)},
+				{Name: memory.HostFile, Origin: "runtime host summary", Chars: len([]rune(hostSummary)), Preview: compactMemoryPreview(hostSummary)},
+			},
 		}, nil
 	}
 	return a.opts.MemoryRetriever.Retrieve(ctx, input)
+}
+
+func emitMemoryInjection(ctx context.Context, phase core.Phase, retrieved memory.RetrievalResult) {
+	sources := retrieved.Sources
+	if len(sources) == 0 {
+		sources = memorySourcesFromResult(retrieved)
+	}
+	if len(sources) == 0 {
+		return
+	}
+	var parts []string
+	var total int
+	for _, source := range sources {
+		total += source.Chars
+		label := source.Name
+		if source.Origin != "" {
+			label += " (" + source.Origin + ")"
+		}
+		parts = append(parts, fmt.Sprintf("%s: %d chars", label, source.Chars))
+	}
+	summary := fmt.Sprintf("%s memory injected: %s", phase, strings.Join(parts, "; "))
+	log.FromContext(ctx).Info("memory injected", "phase", phase, "sections", len(sources), "chars", total, "summary", summary)
+	tools.EmitEvent(ctx, tools.Event{
+		Type:   tools.EventMemoryInjected,
+		Output: summary,
+	})
+}
+
+func memorySourcesFromResult(result memory.RetrievalResult) []memory.InjectionSource {
+	sections := []struct {
+		name   string
+		origin string
+		text   string
+	}{
+		{name: "built-in rules", origin: "harness", text: result.BuiltInRules},
+		{name: memory.OperatorFile, origin: "memory file", text: result.Operator},
+		{name: memory.SoulFile, origin: "memory file", text: result.Soul},
+		{name: memory.HostFile, origin: "runtime host summary", text: result.RuntimeHostSummary},
+		{name: memory.TargetsFile, origin: "target summary", text: result.TargetSummary},
+		{name: memory.PlaybooksFile, origin: "playbook match", text: result.PlaybookBrief},
+		{name: memory.CautionsFile, origin: "caution match", text: result.CautionBrief},
+		{name: memory.FindingsFile, origin: "fallback finding", text: result.FallbackBrief},
+	}
+	sources := make([]memory.InjectionSource, 0, len(sections))
+	for _, section := range sections {
+		text := strings.TrimSpace(section.text)
+		if text == "" {
+			continue
+		}
+		sources = append(sources, memory.InjectionSource{
+			Name:    section.name,
+			Origin:  section.origin,
+			Chars:   len([]rune(text)),
+			Preview: compactMemoryPreview(text),
+		})
+	}
+	return sources
+}
+
+func compactMemoryPreview(text string) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	runes := []rune(text)
+	if len(runes) <= 160 {
+		return text
+	}
+	return strings.TrimSpace(string(runes[:159])) + "…"
 }
 
 func initialSystemMessages(retrieved memory.RetrievalResult, planningNotes string) []provider.Message {

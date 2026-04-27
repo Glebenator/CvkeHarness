@@ -104,7 +104,17 @@ func TestChatPersistenceUsesDedicatedTables(t *testing.T) {
 	}, []ChatMessage{
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi there"},
-	})
+	}, []ToolOutcome{{
+		Phase:      core.PhaseChat,
+		Provider:   "openrouter",
+		Model:      "chat-model",
+		ToolName:   "shell",
+		Toolset:    "shell_execute",
+		Arguments:  `{"command":"go test ./..."}`,
+		Command:    "go test ./...",
+		Success:    true,
+		DurationMs: 25,
+	}})
 	if err != nil {
 		t.Fatalf("AppendChatTurn returned error: %v", err)
 	}
@@ -113,7 +123,7 @@ func TestChatPersistenceUsesDedicatedTables(t *testing.T) {
 		t.Fatalf("FinishChatSession returned error: %v", err)
 	}
 
-	var runs, sessions, turns, messages int
+	var runs, sessions, turns, messages, tools int
 	if err := store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM runs`).Scan(&runs); err != nil {
 		t.Fatalf("count runs returned error: %v", err)
 	}
@@ -126,12 +136,15 @@ func TestChatPersistenceUsesDedicatedTables(t *testing.T) {
 	if err := store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM chat_messages`).Scan(&messages); err != nil {
 		t.Fatalf("count chat_messages returned error: %v", err)
 	}
+	if err := store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM chat_tool_outcomes`).Scan(&tools); err != nil {
+		t.Fatalf("count chat_tool_outcomes returned error: %v", err)
+	}
 
 	if runs != 0 {
 		t.Fatalf("expected chat persistence to avoid runs table, got %d rows", runs)
 	}
-	if sessions != 1 || turns != 1 || messages != 2 {
-		t.Fatalf("expected dedicated chat tables to be populated, got sessions=%d turns=%d messages=%d", sessions, turns, messages)
+	if sessions != 1 || turns != 1 || messages != 2 || tools != 1 {
+		t.Fatalf("expected dedicated chat tables to be populated, got sessions=%d turns=%d messages=%d tools=%d", sessions, turns, messages, tools)
 	}
 
 	var finalOutput, verificationStatus string
@@ -140,6 +153,14 @@ func TestChatPersistenceUsesDedicatedTables(t *testing.T) {
 	}
 	if finalOutput != "hi there" || verificationStatus != "satisfied" {
 		t.Fatalf("expected chat verification metadata, got final=%q status=%q", finalOutput, verificationStatus)
+	}
+
+	detail, err := store.GetChatSessionDetail(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("GetChatSessionDetail returned error: %v", err)
+	}
+	if got := detail.ToolsByTurnID[detail.Turns[0].ID]; len(got) != 1 || got[0].Command != "go test ./..." {
+		t.Fatalf("expected chat tool outcome detail, got %#v", detail.ToolsByTurnID)
 	}
 }
 
@@ -332,7 +353,7 @@ func TestAppendChatTurnTracksModelAliases(t *testing.T) {
 		RequestedModel: "shadow-model",
 		ActualModel:    "vendor/revealed-model",
 		Success:        true,
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("AppendChatTurn returned error: %v", err)
 	}
@@ -389,7 +410,7 @@ func TestListRecentModelUsageIncludesRunsAndChat(t *testing.T) {
 		ActualModel:    "vendor/revealed-model",
 		Success:        false,
 		CreatedAt:      time.Date(2026, 4, 21, 9, 1, 0, 0, time.UTC),
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("AppendChatTurn returned error: %v", err)
 	}

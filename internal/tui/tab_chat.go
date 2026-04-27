@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/coolcake/cvkeharness/state"
 )
 
@@ -44,6 +45,8 @@ func (t *chatTab) StatusHints() []string {
 		return []string{
 			renderKeyHint("esc", "back"),
 			renderKeyHint("↑↓", "scroll"),
+			renderKeyHint("pgup/pgdn", "page"),
+			renderKeyHint("home/end", "jump"),
 		}
 	}
 	if len(t.sessions) > 0 {
@@ -122,6 +125,14 @@ func (t *chatTab) updateDetail(msg tea.KeyMsg) (tabModel, tea.Cmd) {
 		if t.scroll > 0 {
 			t.scroll--
 		}
+	case msg.String() == "pgdown":
+		t.scroll += 10
+	case msg.String() == "pgup":
+		t.scroll = maxInt(t.scroll-10, 0)
+	case msg.String() == "home":
+		t.scroll = 0
+	case msg.String() == "end":
+		t.scroll = 1 << 30
 	}
 	return t, nil
 }
@@ -237,6 +248,9 @@ func (t *chatTab) renderSessionRow(session state.ChatSessionSummary, col int, se
 
 func (t *chatTab) viewDetail(width, height int) string {
 	session := t.detail.Session
+	col := maxInt(width-4, 20)
+	contentWidth := maxInt(width-8, 20)
+	messagesByTurn := chatMessagesByTurn(t.detail.Messages)
 
 	// Build all lines then apply scroll window.
 	var lines []string
@@ -255,7 +269,7 @@ func (t *chatTab) viewDetail(width, height int) string {
 
 	if len(t.detail.Turns) > 0 {
 		lines = append(lines, "")
-		lines = append(lines, "  "+horizontalRule(width-4))
+		lines = append(lines, "  "+horizontalRule(col))
 		lines = append(lines, "")
 
 		for _, turn := range t.detail.Turns {
@@ -266,25 +280,27 @@ func (t *chatTab) viewDetail(width, height int) string {
 				styleMuted.Render(formatTokens(turn.TotalTokens)))
 			lines = append(lines, header)
 
-			lines = append(lines, "  "+styleSuccess.Render("You: ")+styleBase.Render(truncate(turn.UserInput, width-12)))
+			meta := chatTurnMeta(turn)
+			if meta != "" {
+				lines = append(lines, "  "+styleMuted.Render(meta))
+			}
+
+			appendWrappedBlock(&lines, "  ", "You:", turn.UserInput, contentWidth, styleSuccess, styleBase)
 
 			if output := strings.TrimSpace(turn.FinalOutput); output != "" {
-				outLines := strings.Split(output, "\n")
-				maxShow := minInt(len(outLines), 4)
-				for j, line := range outLines[:maxShow] {
-					prefix := "    "
-					if j == 0 {
-						prefix = "  " + styleSectionTitle.Render("AI: ")
-					}
-					lines = append(lines, prefix+styleMuted.Render(truncate(line, width-12)))
-				}
-				if len(outLines) > maxShow {
-					lines = append(lines, fmt.Sprintf("      %s", styleSubtle.Render(fmt.Sprintf("… %d more lines", len(outLines)-maxShow))))
-				}
+				appendWrappedBlock(&lines, "  ", "AI:", output, contentWidth, styleSectionTitle, styleMuted)
 			}
 
 			if turn.ErrorMessage != "" {
-				lines = append(lines, "  "+styleError.Render("Error: "+truncate(turn.ErrorMessage, width-14)))
+				appendWrappedBlock(&lines, "  ", "Error:", turn.ErrorMessage, contentWidth, styleError, styleError)
+			}
+
+			appendVerificationLines(&lines, turn, contentWidth)
+			appendToolOutcomeLines(&lines, t.detail.ToolsByTurnID[turn.ID], contentWidth)
+			appendTranscriptToolLines(&lines, messagesByTurn[turn.ID], contentWidth)
+
+			if turn.FinalOutput == "" && turn.ErrorMessage == "" && turn.VerificationStatus == "" && len(t.detail.ToolsByTurnID[turn.ID]) == 0 && len(chatToolMessages(messagesByTurn[turn.ID])) == 0 {
+				lines = append(lines, "  "+styleSubtle.Render("No assistant output, verification, or tool detail was persisted for this turn."))
 			}
 			lines = append(lines, "")
 		}
@@ -307,4 +323,134 @@ func (t *chatTab) viewDetail(width, height int) string {
 	}
 
 	return b.String()
+}
+
+func chatTurnMeta(turn state.ChatTurn) string {
+	var parts []string
+	if turn.TaskClass != "" {
+		parts = append(parts, fmt.Sprintf("task=%s", turn.TaskClass))
+	}
+	if turn.RequestedModel != "" {
+		model := turn.RequestedModel
+		if turn.ActualModel != "" && turn.ActualModel != turn.RequestedModel {
+			model += " -> " + turn.ActualModel
+		}
+		parts = append(parts, "model="+model)
+	}
+	if turn.PromptTokens > 0 || turn.CompletionTokens > 0 {
+		parts = append(parts, fmt.Sprintf("prompt=%s completion=%s", formatTokens(turn.PromptTokens), formatTokens(turn.CompletionTokens)))
+	}
+	return strings.Join(parts, "  ")
+}
+
+func appendVerificationLines(lines *[]string, turn state.ChatTurn, width int) {
+	if turn.VerificationStatus == "" && turn.VerificationReason == "" && turn.VerificationMissingActions == "" && !turn.VerificationRepairTriggered {
+		return
+	}
+	status := turn.VerificationStatus
+	if status == "" {
+		status = "unknown"
+	}
+	if turn.VerificationRepairTriggered {
+		status += " repair-triggered"
+	}
+	*lines = append(*lines, "  "+styleMuted.Render("Verification: ")+styleBase.Render(status))
+	appendWrappedBlock(lines, "    ", "Reason:", turn.VerificationReason, width-2, styleMuted, styleBase)
+	appendWrappedBlock(lines, "    ", "Missing:", turn.VerificationMissingActions, width-2, styleWarning, styleBase)
+}
+
+func appendToolOutcomeLines(lines *[]string, tools []state.ToolOutcome, width int) {
+	if len(tools) == 0 {
+		return
+	}
+	*lines = append(*lines, "  "+styleMuted.Render(fmt.Sprintf("Tools: %d persisted outcome(s)", len(tools))))
+	for i, tool := range tools {
+		status := "ok"
+		style := styleSuccess
+		if tool.PolicyDenied {
+			status = "denied"
+			style = styleWarning
+		} else if !tool.Success {
+			status = "failed"
+			style = styleError
+		}
+		title := fmt.Sprintf("%d. %s %s  %s", i+1, tool.ToolName, style.Render(status), fmtDurationMs(tool.DurationMs))
+		*lines = append(*lines, "    "+title)
+		appendWrappedBlock(lines, "      ", "Command:", firstNonEmptyText(tool.Command, tool.Arguments), width-6, styleMuted, styleBase)
+		appendWrappedBlock(lines, "      ", "Args:", tool.Arguments, width-6, styleMuted, styleBase)
+		appendWrappedBlock(lines, "      ", "Error:", tool.ErrorMessage, width-6, styleError, styleError)
+		if tool.DenialClass != "" {
+			*lines = append(*lines, "      "+styleWarning.Render("Denial: ")+styleBase.Render(tool.DenialClass))
+		}
+	}
+}
+
+func appendTranscriptToolLines(lines *[]string, messages []state.ChatMessage, width int) {
+	toolMessages := chatToolMessages(messages)
+	if len(toolMessages) == 0 {
+		return
+	}
+	*lines = append(*lines, "  "+styleMuted.Render("Transcript tool evidence:"))
+	for _, message := range toolMessages {
+		if message.ToolName != "" {
+			appendWrappedBlock(lines, "    ", "Tool call:", message.ToolName+" "+message.ToolArguments, width-4, styleMuted, styleBase)
+		}
+		if message.ToolCallsJSON != "" {
+			appendWrappedBlock(lines, "    ", "Tool calls:", message.ToolCallsJSON, width-4, styleMuted, styleBase)
+		}
+		if message.Role == "tool" && message.Content != "" {
+			appendWrappedBlock(lines, "    ", "Tool result:", message.Content, width-4, styleMuted, styleBase)
+		}
+	}
+}
+
+func chatMessagesByTurn(messages []state.ChatMessage) map[int64][]state.ChatMessage {
+	out := make(map[int64][]state.ChatMessage)
+	for _, message := range messages {
+		out[message.TurnID] = append(out[message.TurnID], message)
+	}
+	return out
+}
+
+func chatToolMessages(messages []state.ChatMessage) []state.ChatMessage {
+	var out []state.ChatMessage
+	for _, message := range messages {
+		if message.Role == "tool" || message.ToolName != "" || message.ToolArguments != "" || message.ToolCallsJSON != "" {
+			out = append(out, message)
+		}
+	}
+	return out
+}
+
+func appendWrappedBlock(lines *[]string, indent, label, text string, width int, labelStyle, bodyStyle lipgloss.Style) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	labelWidth := len(label) + 1
+	bodyWidth := maxInt(width-labelWidth, 12)
+	first := true
+	for _, raw := range strings.Split(text, "\n") {
+		wrapped := wrapText(raw, bodyWidth)
+		if len(wrapped) == 0 {
+			wrapped = []string{""}
+		}
+		for _, line := range wrapped {
+			if first {
+				*lines = append(*lines, indent+labelStyle.Render(label+" ")+bodyStyle.Render(line))
+				first = false
+				continue
+			}
+			*lines = append(*lines, indent+strings.Repeat(" ", labelWidth)+bodyStyle.Render(line))
+		}
+	}
+}
+
+func firstNonEmptyText(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

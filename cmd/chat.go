@@ -429,7 +429,7 @@ func persistChatTurn(ctx context.Context, store *state.Store, sessionID int64, u
 		CreatedAt:                   time.Now().UTC(),
 	}
 	messages := agent.TranscriptToStateMessages(sessionID, 0, 0, turn.CreatedAt, result.Transcript)
-	if _, err := store.AppendChatTurn(ctx, sessionID, turn, messages); err != nil {
+	if _, err := store.AppendChatTurn(ctx, sessionID, turn, messages, result.Tools); err != nil {
 		log.FromContext(ctx).Warn("failed to persist chat turn", "error", err)
 	}
 }

@@ -358,7 +358,7 @@ func fetchCodexModels(now time.Time) modelsResult {
 	path := codexModelsCachePath()
 	if strings.TrimSpace(path) == "" {
 		return modelsResult{
-			items:     codexModels,
+			items:     codexUnavailableModels,
 			timestamp: now,
 			source:    "fallback",
 			message:   "Codex models cache path could not be resolved",
@@ -368,7 +368,7 @@ func fetchCodexModels(now time.Time) modelsResult {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return modelsResult{
-			items:     codexModels,
+			items:     codexUnavailableModels,
 			timestamp: now,
 			source:    "fallback",
 			message:   fmt.Sprintf("Codex models cache unavailable at %s", path),
@@ -378,7 +378,7 @@ func fetchCodexModels(now time.Time) modelsResult {
 	var cache codexModelsCache
 	if err := json.Unmarshal(data, &cache); err != nil {
 		return modelsResult{
-			items:     codexModels,
+			items:     codexUnavailableModels,
 			timestamp: now,
 			source:    "fallback",
 			message:   fmt.Sprintf("Could not parse Codex models cache at %s", path),
@@ -388,21 +388,30 @@ func fetchCodexModels(now time.Time) modelsResult {
 	items := codexCacheItems(cache.Models)
 	if len(items) == 0 {
 		return modelsResult{
-			items:     codexModels,
+			items:     codexUnavailableModels,
 			timestamp: cache.FetchedAt,
 			source:    "fallback",
 			message:   "Codex models cache did not contain listable models",
 		}
 	}
 
-	items = append(items, [2]string{"[ custom model ]", "Enter your own model ID →"})
 	age := now.Sub(cache.FetchedAt)
 	if age < 0 {
 		age = 0
 	}
+	if cache.FetchedAt.IsZero() || age > codexModelsFreshDuration {
+		return modelsResult{
+			items:     codexUnavailableModels,
+			timestamp: cache.FetchedAt,
+			source:    "codex-cache-stale",
+			message:   "Codex models cache is stale; run Codex once to refresh account-scoped models",
+		}
+	}
+
+	items = append(items, [2]string{"[ custom model ]", "Enter your own model ID →"})
 	return modelsResult{
 		items:     items,
-		isLive:    !cache.FetchedAt.IsZero() && age <= codexModelsFreshDuration,
+		isLive:    true,
 		timestamp: cache.FetchedAt,
 		source:    "codex-cache",
 		message:   cache.ClientVersion,
@@ -604,7 +613,13 @@ func renderCodexModelStatus(r modelsResult, now time.Time) {
 		return
 	}
 
-	fmt.Printf("  %s⊙ offline fallback%s  ·  %s%s\n\n",
+	if r.source == "codex-cache-stale" && !r.timestamp.IsZero() {
+		fmt.Printf("  %s⊙ stale cache%s  ·  Codex model cache last refreshed %s; refresh Codex before choosing%s\n\n",
+			fgYellow+ansiDim, ansiReset+fgMuted, r.timestamp.Format(time.RFC1123), ansiReset)
+		return
+	}
+
+	fmt.Printf("  %s⊙ account models unavailable%s  ·  %s%s\n\n",
 		fgYellow+ansiDim, ansiReset+fgMuted, fallbackMessage(r.message), ansiReset)
 }
 
@@ -749,15 +764,8 @@ var openAIModels = [][2]string{
 	{"[ custom model ]", "Enter your own model ID →"},
 }
 
-var codexModels = [][2]string{
-	{"gpt-5.1-codex-max", "GPT-5.1 Codex Max  ·  default subscription coding model  ★"},
-	{"gpt-5.1-codex", "GPT-5.1 Codex  ·  agentic coding"},
-	{"gpt-5.1-codex-mini", "GPT-5.1 Codex Mini  ·  smaller coding model"},
-	{"gpt-5.2-codex", "GPT-5.2 Codex  ·  coding model if enabled for your account"},
-	{"gpt-5.2", "GPT-5.2  ·  general coding and agentic tasks"},
-	{"gpt-5.1", "GPT-5.1  ·  coding and agentic tasks"},
-	{"gpt-5-codex", "GPT-5 Codex  ·  legacy coding model"},
-	{"[ custom model ]", "Enter your own model ID →"},
+var codexUnavailableModels = [][2]string{
+	{"[ custom model ]", "Enter a Codex model ID manually →"},
 }
 
 var lmStudioModels = [][2]string{
@@ -801,13 +809,6 @@ var safetyModelOptions = [][2]string{
 	{"[ custom model ]", "Enter your own model ID →"},
 }
 
-var codexSafetyModelOptions = [][2]string{
-	{"gpt-5.1-codex-mini", "GPT-5.1 Codex Mini  ·  fast judge  ★"},
-	{"gpt-5.1-codex", "GPT-5.1 Codex  ·  stronger judge"},
-	{"gpt-5.1-codex-max", "GPT-5.1 Codex Max  ·  most capable"},
-	{"[ custom model ]", "Enter your own Codex model ID →"},
-}
-
 var openAISafetyModelOptions = [][2]string{
 	{"gpt-5-nano", "GPT-5 Nano  ·  fast & cheap  ★"},
 	{"gpt-5-mini", "GPT-5 Mini  ·  balanced"},
@@ -823,7 +824,7 @@ var safetyModeOptions = [][2]string{
 func safetyModelsForProvider(cfg *config.Config) [][2]string {
 	switch cfg.Provider {
 	case "codex":
-		return codexSafetyModelOptions
+		return fetchCodexModels(time.Now()).items
 	case "openai":
 		return openAISafetyModelOptions
 	default:
@@ -1182,7 +1183,7 @@ func wizardModel(cfg *config.Config, result modelsResult) bool {
 func modelExample(cfg *config.Config) string {
 	example := "anthropic/claude-sonnet-4.6"
 	if cfg.Provider == "codex" {
-		example = "gpt-5.1-codex-max"
+		example = "gpt-5.2-codex"
 	}
 	if cfg.Provider == "openai" {
 		example = "gpt-5.2-codex"
@@ -1229,7 +1230,15 @@ func wizardSafetyModel(cfg *config.Config) bool {
 		fmt.Printf("  %sThe safety model reviews shell commands before execution.%s\n", fgGray, ansiReset)
 		fmt.Printf("  %sIt should be a capable, instruction-following model from your provider.%s\n\n", fgMuted+ansiDim, ansiReset)
 
-		options := safetyModelsForProvider(cfg)
+		var options [][2]string
+		if cfg.Provider == "codex" {
+			now := time.Now()
+			res := fetchCodexModels(now)
+			options = res.items
+			renderCodexModelStatus(res, now)
+		} else {
+			options = safetyModelsForProvider(cfg)
+		}
 		idx := selectList(options, optionIndexByValue(options, cfg.SafetyModel), true)
 		if idx == goBack {
 			continue

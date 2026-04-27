@@ -79,6 +79,7 @@ func (a *Agent) StartChat(ctx context.Context) (*ChatConversation, core.RoutingS
 	if err != nil {
 		return nil, core.RoutingSelection{}, err
 	}
+	emitMemoryInjection(ctx, core.PhaseChat, retrieved)
 
 	return &ChatConversation{
 		agent:     a,
@@ -155,6 +156,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 	if err != nil {
 		return state.PhaseRecord{}, state.PhaseRecord{}, CompletionVerification{}, nil, nil, targetResolution, nil, "", err
 	}
+	emitMemoryInjection(ctx, core.PhaseChat, retrieved)
 
 	execProvider, err := c.agent.resolveProvider(c.selection.Requested.Provider)
 	if err != nil {
@@ -324,6 +326,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 						},
 					})
 					if refreshErr == nil {
+						emitMemoryInjection(ctx, core.PhaseChat, refresh)
 						if refreshedText := retrievedBrief(refresh); strings.TrimSpace(refreshedText) != "" {
 							turnChat.AddSystem("Refreshed learned context after tool trouble:\n" + refreshedText)
 						}

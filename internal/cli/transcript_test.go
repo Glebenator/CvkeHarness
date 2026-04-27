@@ -112,3 +112,20 @@ func TestTranscriptRendererFormatsLogsSeparately(t *testing.T) {
 		t.Fatalf("expected log lane prefix, got %q", got)
 	}
 }
+
+func TestTranscriptRendererShowsMemoryInjection(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+	renderer := NewTranscriptRenderer(&out, "plain")
+
+	renderer.Observe(tools.Event{
+		Type:   tools.EventMemoryInjected,
+		Output: "execution memory injected: operator.md: 120 chars; soul.md: 48 chars",
+	})
+
+	got := out.String()
+	if !strings.Contains(got, "[memory] execution memory injected: operator.md: 120 chars; soul.md: 48 chars") {
+		t.Fatalf("expected memory injection event to be visible, got %q", got)
+	}
+}

@@ -46,6 +46,10 @@ func (r *TranscriptRenderer) Observe(event tools.Event) {
 	defer r.mu.Unlock()
 
 	switch event.Type {
+	case tools.EventMemoryInjected:
+		if strings.TrimSpace(event.Output) != "" {
+			fmt.Fprintln(r.out, r.label("memory", event.Output))
+		}
 	case tools.EventToolCallStarted:
 		if event.ToolName == "shell_execute" {
 			return

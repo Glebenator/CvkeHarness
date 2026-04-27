@@ -177,7 +177,11 @@ func (s *Store) GetChatSessionDetail(ctx context.Context, id int64) (ChatSession
 	if err != nil {
 		return ChatSessionDetail{}, err
 	}
-	return ChatSessionDetail{Session: session, Turns: turns, Messages: messages}, nil
+	tools, err := s.listChatTools(ctx, id)
+	if err != nil {
+		return ChatSessionDetail{}, err
+	}
+	return ChatSessionDetail{Session: session, Turns: turns, Messages: messages, ToolsByTurnID: tools}, nil
 }
 
 type chatSessionScanner interface {
@@ -261,6 +265,39 @@ func (s *Store) listChatMessages(ctx context.Context, sessionID int64) ([]ChatMe
 			return nil, err
 		}
 		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) listChatTools(ctx context.Context, sessionID int64) (map[int64][]ToolOutcome, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT turn_id, phase, provider, model, tool_name, toolset, arguments, command,
+			success, policy_denied, denial_class, error_message, duration_ms
+		FROM chat_tool_outcomes
+		WHERE session_id = ?
+		ORDER BY id ASC`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[int64][]ToolOutcome)
+	for rows.Next() {
+		var turnID int64
+		var item ToolOutcome
+		var phase string
+		var success, denied int
+		if err := rows.Scan(
+			&turnID, &phase, &item.Provider, &item.Model, &item.ToolName, &item.Toolset,
+			&item.Arguments, &item.Command, &success, &denied, &item.DenialClass,
+			&item.ErrorMessage, &item.DurationMs,
+		); err != nil {
+			return nil, err
+		}
+		item.Phase = core.Phase(phase)
+		item.Success = success == 1
+		item.PolicyDenied = denied == 1
+		out[turnID] = append(out[turnID], item)
 	}
 	return out, rows.Err()
 }

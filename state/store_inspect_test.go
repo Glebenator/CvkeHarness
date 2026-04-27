@@ -69,7 +69,7 @@ func TestInspectionQueriesReturnRunsChatsAndCronAudits(t *testing.T) {
 	}, []ChatMessage{
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi"},
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("AppendChatTurn returned error: %v", err)
 	}
 
