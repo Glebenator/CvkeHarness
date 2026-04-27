@@ -293,6 +293,8 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				Model:      actualModel,
 				ToolName:   call.Function.Name,
 				Toolset:    core.ToolsetKey(c.toolNames),
+				Arguments:  call.Function.Arguments,
+				Command:    command,
 				Success:    toolErr == nil,
 				DurationMs: durationMs,
 			}

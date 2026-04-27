@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -316,12 +317,12 @@ func (t *runsTab) viewDetail(width, height int) string {
 			if tool.PolicyDenied {
 				denied = styleWarning.Render(" denied")
 				if tool.DenialClass != "" {
-					denied += styleMuted.Render(" ("+tool.DenialClass+")")
+					denied += styleMuted.Render(" (" + tool.DenialClass + ")")
 				}
 			}
 			phaseBadge := ""
 			if tool.Phase != "" {
-				phaseBadge = styleSubtle.Render("["+string(tool.Phase)+"] ")
+				phaseBadge = styleSubtle.Render("[" + string(tool.Phase) + "] ")
 			}
 			lines = append(lines, fmt.Sprintf("  %s  %s%s  %s%s",
 				icon,
@@ -332,6 +333,11 @@ func (t *runsTab) viewDetail(width, height int) string {
 			))
 			if tool.ErrorMessage != "" {
 				lines = append(lines, fmt.Sprintf("     %s", styleError.Render(truncate(tool.ErrorMessage, width-10))))
+			}
+			if tool.Command != "" {
+				lines = append(lines, fmt.Sprintf("     %s %s", styleSubtle.Render("command"), styleBase.Render(truncate(tool.Command, width-18))))
+			} else if args := formatToolArguments(tool.Arguments); args != "" {
+				lines = append(lines, fmt.Sprintf("     %s %s", styleSubtle.Render("args"), styleBase.Render(truncate(args, width-15))))
 			}
 		}
 	}
@@ -366,4 +372,20 @@ func (t *runsTab) viewDetail(width, height int) string {
 	}
 
 	return b.String()
+}
+
+func formatToolArguments(arguments string) string {
+	arguments = strings.TrimSpace(arguments)
+	if arguments == "" {
+		return ""
+	}
+	var compacted any
+	if err := json.Unmarshal([]byte(arguments), &compacted); err != nil {
+		return arguments
+	}
+	b, err := json.Marshal(compacted)
+	if err != nil {
+		return arguments
+	}
+	return string(b)
 }

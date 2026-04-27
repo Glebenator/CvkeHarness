@@ -152,14 +152,17 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 	for _, tool := range record.Tools {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tool_outcomes (
-				run_id, phase, provider, model, tool_name, toolset, success, policy_denied, denial_class, error_message, duration_ms, task_class
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				run_id, phase, provider, model, tool_name, toolset, arguments, command, success,
+				policy_denied, denial_class, error_message, duration_ms, task_class
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			runID,
 			string(tool.Phase),
 			tool.Provider,
 			tool.Model,
 			tool.ToolName,
 			tool.Toolset,
+			tool.Arguments,
+			tool.Command,
 			boolToInt(tool.Success),
 			boolToInt(tool.PolicyDenied),
 			tool.DenialClass,
@@ -431,6 +434,8 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			model TEXT NOT NULL,
 			tool_name TEXT NOT NULL,
 			toolset TEXT NOT NULL DEFAULT '',
+			arguments TEXT NOT NULL DEFAULT '',
+			command TEXT NOT NULL DEFAULT '',
 			success INTEGER NOT NULL,
 			policy_denied INTEGER NOT NULL DEFAULT 0,
 			denial_class TEXT NOT NULL DEFAULT '',
@@ -702,6 +707,8 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`ALTER TABLE chat_turns ADD COLUMN verification_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE chat_turns ADD COLUMN verification_missing_actions TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE chat_turns ADD COLUMN verification_repair_triggered INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE tool_outcomes ADD COLUMN arguments TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tool_outcomes ADD COLUMN command TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE scheduled_jobs ADD COLUMN claimed_by TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE scheduled_jobs ADD COLUMN claim_expires_at DATETIME`,
 		`ALTER TABLE scheduled_jobs ADD COLUMN claim_heartbeat_at DATETIME`,

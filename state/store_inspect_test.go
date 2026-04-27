@@ -37,12 +37,14 @@ func TestInspectionQueriesReturnRunsChatsAndCronAudits(t *testing.T) {
 			Success:        true,
 		}},
 		Tools: []ToolOutcome{{
-			Phase:    core.PhaseExecution,
-			Provider: "openrouter",
-			Model:    "model-a",
-			ToolName: "shell_execute",
-			Toolset:  "shell_execute",
-			Success:  true,
+			Phase:     core.PhaseExecution,
+			Provider:  "openrouter",
+			Model:     "model-a",
+			ToolName:  "shell_execute",
+			Toolset:   "shell_execute",
+			Arguments: `{"command":"systemctl status demo"}`,
+			Command:   "systemctl status demo",
+			Success:   true,
 		}},
 	}); err != nil {
 		t.Fatalf("RecordRun returned error: %v", err)
@@ -88,6 +90,9 @@ func TestInspectionQueriesReturnRunsChatsAndCronAudits(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].Task != "inspect service" || len(runs[0].Phases) != 1 || len(runs[0].Tools) != 1 {
 		t.Fatalf("unexpected run inspection result: %#v", runs)
+	}
+	if runs[0].Tools[0].Command != "systemctl status demo" {
+		t.Fatalf("expected tool command to round-trip, got %#v", runs[0].Tools[0])
 	}
 
 	chats, err := store.ListRecentChatSessions(ctx, 5)
