@@ -183,7 +183,7 @@ codex login
 
 Choose `Sign in with ChatGPT`. CvkeHarness reuses the official `~/.codex/auth.json` login cache and sends Codex model requests to the ChatGPT Codex backend, so usage follows your ChatGPT/Codex plan rather than a manually pasted OpenAI API key. If you previously used API-key mode in Codex CLI, run `codex logout` and then `codex login` to switch to subscription-backed access.
 
-The setup wizard also reads the official Codex `~/.codex/models_cache.json` model cache. When that cache was refreshed recently, the model picker shows a `LIVE` status and lists the same current Codex models exposed to your Codex client; otherwise it falls back to a small built-in Codex shortlist.
+The setup wizard also reads the official Codex `~/.codex/models_cache.json` model cache. When that cache was refreshed recently, the model picker and LLM judge picker show a `LIVE` status and list the same current Codex models exposed to your signed-in Codex account. If the cache is missing, stale, or empty, CvkeHarness does not guess at Codex model names; it offers only manual entry until Codex refreshes the account-scoped cache.
 
 ### Build
 

@@ -52,8 +52,8 @@ func (s *Store) FinishChatSession(ctx context.Context, sessionID int64, finished
 	return err
 }
 
-// AppendChatTurn persists a chat turn and its transcript messages.
-func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTurn, messages []ChatMessage) (int64, error) {
+// AppendChatTurn persists a chat turn, transcript messages, and tool outcomes.
+func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTurn, messages []ChatMessage, tools []ToolOutcome) (int64, error) {
 	if !s.Available() {
 		return 0, s.Err()
 	}
@@ -147,6 +147,34 @@ func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTu
 			return 0, err
 		}
 		messageIndex++
+	}
+
+	for _, tool := range tools {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO chat_tool_outcomes (
+				session_id, turn_id, phase, provider, model, tool_name, toolset, arguments,
+				command, success, policy_denied, denial_class, error_message, duration_ms,
+				task_class, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			sessionID,
+			turnID,
+			string(tool.Phase),
+			tool.Provider,
+			tool.Model,
+			tool.ToolName,
+			tool.Toolset,
+			tool.Arguments,
+			tool.Command,
+			boolToInt(tool.Success),
+			boolToInt(tool.PolicyDenied),
+			tool.DenialClass,
+			tool.ErrorMessage,
+			tool.DurationMs,
+			string(turn.TaskClass),
+			turn.CreatedAt.UTC(),
+		); err != nil {
+			return 0, err
+		}
 	}
 
 	return turnID, tx.Commit()

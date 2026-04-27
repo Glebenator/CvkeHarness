@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,10 +199,24 @@ func TestSettingsMenuEntriesReflectCodexProvider(t *testing.T) {
 }
 
 func TestSafetyModelsFollowProvider(t *testing.T) {
-	t.Parallel()
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	writeCodexModelsCache(t, home, fmt.Sprintf(`{
+		"fetched_at": %q,
+		"models": [
+			{
+				"slug": "gpt-5.5",
+				"display_name": "GPT-5.5",
+				"description": "Strong model",
+				"visibility": "list",
+				"supported_in_api": true,
+				"priority": 0
+			}
+		]
+	}`, time.Now().UTC().Format(time.RFC3339Nano)))
 
 	codexOptions := safetyModelsForProvider(&config.Config{Provider: "codex"})
-	if codexOptions[0][0] != "gpt-5.1-codex-mini" {
+	if codexOptions[0][0] != "gpt-5.5" {
 		t.Fatalf("expected Codex safety model options, got %#v", codexOptions)
 	}
 
@@ -287,11 +302,11 @@ func TestFetchCodexModelsMarksStaleCacheNotLive(t *testing.T) {
 	if result.isLive {
 		t.Fatalf("expected stale cache to be non-live, got %#v", result)
 	}
-	if result.source != "codex-cache" {
-		t.Fatalf("expected stale codex cache to still be used, got %q", result.source)
+	if result.source != "codex-cache-stale" {
+		t.Fatalf("expected stale codex cache marker, got %q", result.source)
 	}
-	if result.items[0][0] != "gpt-5.4" {
-		t.Fatalf("expected stale cache models to be listed, got %#v", result.items)
+	if result.items[0][0] != "[ custom model ]" {
+		t.Fatalf("expected stale cache models not to be listed, got %#v", result.items)
 	}
 }
 
@@ -307,8 +322,8 @@ func TestFetchCodexModelsFallsBackWhenCacheMissing(t *testing.T) {
 	if result.source != "fallback" {
 		t.Fatalf("expected fallback source, got %q", result.source)
 	}
-	if len(result.items) == 0 || result.items[0][0] != "gpt-5.1-codex-max" {
-		t.Fatalf("expected built-in Codex fallback models, got %#v", result.items)
+	if len(result.items) == 0 || result.items[0][0] != "[ custom model ]" {
+		t.Fatalf("expected manual-only Codex fallback, got %#v", result.items)
 	}
 }
 

@@ -90,7 +90,48 @@ func (m *Manager) RetrievePlan(ctx context.Context, input core.RetrievalContext)
 	if strength < 3 {
 		result.FallbackBrief = renderFindingBrief(mem, finding)
 	}
+	result.Sources = retrievalSources(result)
 	return result, nil
+}
+
+func retrievalSources(result RetrievalResult) []InjectionSource {
+	sections := []struct {
+		name   string
+		origin string
+		text   string
+	}{
+		{name: "built-in rules", origin: "harness", text: result.BuiltInRules},
+		{name: OperatorFile, origin: "memory file", text: result.Operator},
+		{name: SoulFile, origin: "memory file", text: result.Soul},
+		{name: HostFile, origin: "runtime host summary", text: result.RuntimeHostSummary},
+		{name: TargetsFile, origin: "target summary", text: result.TargetSummary},
+		{name: PlaybooksFile, origin: "playbook match", text: result.PlaybookBrief},
+		{name: CautionsFile, origin: "caution match", text: result.CautionBrief},
+		{name: FindingsFile, origin: "fallback finding", text: result.FallbackBrief},
+	}
+	sources := make([]InjectionSource, 0, len(sections))
+	for _, section := range sections {
+		text := strings.TrimSpace(section.text)
+		if text == "" {
+			continue
+		}
+		sources = append(sources, InjectionSource{
+			Name:    section.name,
+			Origin:  section.origin,
+			Chars:   len([]rune(text)),
+			Preview: previewText(text, 160),
+		})
+	}
+	return sources
+}
+
+func previewText(text string, limit int) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if limit <= 0 || len([]rune(text)) <= limit {
+		return text
+	}
+	runes := []rune(text)
+	return strings.TrimSpace(string(runes[:limit-1])) + "…"
 }
 
 // LoadRuntimeHostProfile returns the runtime host target row plus verified facts.
