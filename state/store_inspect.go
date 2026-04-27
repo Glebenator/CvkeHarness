@@ -90,7 +90,7 @@ func (s *Store) listRunPhases(ctx context.Context, runID int64) ([]PhaseRecord, 
 
 func (s *Store) listRunTools(ctx context.Context, runID int64) ([]ToolOutcome, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT phase, provider, model, tool_name, toolset, success, policy_denied,
+		SELECT phase, provider, model, tool_name, toolset, arguments, command, success, policy_denied,
 			denial_class, error_message, duration_ms
 		FROM tool_outcomes
 		WHERE run_id = ?
@@ -107,7 +107,7 @@ func (s *Store) listRunTools(ctx context.Context, runID int64) ([]ToolOutcome, e
 		var success, denied int
 		if err := rows.Scan(
 			&phase, &item.Provider, &item.Model, &item.ToolName, &item.Toolset,
-			&success, &denied, &item.DenialClass, &item.ErrorMessage, &item.DurationMs,
+			&item.Arguments, &item.Command, &success, &denied, &item.DenialClass, &item.ErrorMessage, &item.DurationMs,
 		); err != nil {
 			return nil, err
 		}

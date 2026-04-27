@@ -50,6 +50,8 @@ type ToolOutcome struct {
 	Model        string
 	ToolName     string
 	Toolset      string
+	Arguments    string
+	Command      string
 	Success      bool
 	PolicyDenied bool
 	DenialClass  string

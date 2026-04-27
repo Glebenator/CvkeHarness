@@ -366,6 +366,8 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				Model:      actualModel,
 				ToolName:   call.Function.Name,
 				Toolset:    core.ToolsetKey(toolNames),
+				Arguments:  call.Function.Arguments,
+				Command:    command,
 				Success:    toolErr == nil,
 				DurationMs: durationMs,
 			}

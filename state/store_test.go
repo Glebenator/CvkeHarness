@@ -222,6 +222,54 @@ func TestRecordRunTracksModelAliases(t *testing.T) {
 	}
 }
 
+func TestRecordRunPersistsToolInvocationDetails(t *testing.T) {
+	t.Parallel()
+
+	store := Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+
+	err := store.RecordRun(context.Background(), RunRecord{
+		StartedAt:  timeNowForTest(),
+		FinishedAt: timeNowForTest(),
+		Provider:   "openrouter",
+		Task:       "check docker",
+		TaskClass:  core.TaskClassGeneral,
+		Success:    true,
+		Phases: []PhaseRecord{{
+			Phase:          core.PhaseExecution,
+			Provider:       "openrouter",
+			RequestedModel: "model-a",
+			ActualModel:    "model-a",
+			Success:        true,
+		}},
+		Tools: []ToolOutcome{{
+			Phase:     core.PhaseExecution,
+			Provider:  "openrouter",
+			Model:     "model-a",
+			ToolName:  "shell_execute",
+			Toolset:   "shell_execute",
+			Arguments: `{"command":"docker info"}`,
+			Command:   "docker info",
+			Success:   true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RecordRun returned error: %v", err)
+	}
+
+	runs, err := store.ListRecentRuns(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("ListRecentRuns returned error: %v", err)
+	}
+	if len(runs) != 1 || len(runs[0].Tools) != 1 {
+		t.Fatalf("expected one run with one tool, got %#v", runs)
+	}
+	tool := runs[0].Tools[0]
+	if tool.Arguments != `{"command":"docker info"}` || tool.Command != "docker info" {
+		t.Fatalf("expected persisted invocation details, got %#v", tool)
+	}
+}
+
 func TestRecordRunPersistsVerificationSummary(t *testing.T) {
 	t.Parallel()
 
