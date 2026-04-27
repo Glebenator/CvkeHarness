@@ -653,6 +653,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			last_run_at DATETIME,
 			last_run_status TEXT NOT NULL DEFAULT '',
 			consecutive_failures INTEGER NOT NULL DEFAULT 0,
+			claimed_by TEXT NOT NULL DEFAULT '',
+			claim_expires_at DATETIME,
+			claim_heartbeat_at DATETIME,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL
 		);`,
@@ -699,6 +702,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`ALTER TABLE chat_turns ADD COLUMN verification_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE chat_turns ADD COLUMN verification_missing_actions TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE chat_turns ADD COLUMN verification_repair_triggered INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE scheduled_jobs ADD COLUMN claimed_by TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE scheduled_jobs ADD COLUMN claim_expires_at DATETIME`,
+		`ALTER TABLE scheduled_jobs ADD COLUMN claim_heartbeat_at DATETIME`,
 	}
 	for _, stmt := range optionalColumns {
 		if _, err := db.ExecContext(ctx, stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {

@@ -104,3 +104,67 @@ func TestRunDueRecordsSuccessAndFailure(t *testing.T) {
 		t.Fatalf("expected two run records, got %d", len(history))
 	}
 }
+
+func TestRunDueClearsClaimAndAdvancesSchedule(t *testing.T) {
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	if !store.Available() {
+		t.Fatalf("store unavailable: %v", store.Err())
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 27, 10, 0, 0, 0, time.UTC)
+	svc := New(store)
+	svc.SetClaimOwner("owner-a")
+	svc.now = func() time.Time { return now }
+	job, err := svc.Create(context.Background(), "health", KindEvery, "5m", "check health")
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	job.NextRunAt = now.Add(-time.Minute)
+	if err := store.SaveScheduledJob(context.Background(), job); err != nil {
+		t.Fatalf("SaveScheduledJob returned error: %v", err)
+	}
+
+	runs, err := svc.RunDue(context.Background(), fakeRunner{})
+	if err != nil {
+		t.Fatalf("RunDue returned error: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected one run, got %#v", runs)
+	}
+	got, err := store.GetScheduledJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("GetScheduledJob returned error: %v", err)
+	}
+	if got.ClaimedBy != "" || !got.ClaimExpiresAt.IsZero() || !got.ClaimHeartbeatAt.IsZero() {
+		t.Fatalf("expected completed job claim to be cleared, got %#v", got)
+	}
+	if !got.NextRunAt.Equal(now.Add(5 * time.Minute)) {
+		t.Fatalf("expected next run to advance, got %s", got.NextRunAt)
+	}
+}
+
+func TestManualRunRefusesActivelyClaimedJob(t *testing.T) {
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	if !store.Available() {
+		t.Fatalf("store unavailable: %v", store.Err())
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 27, 10, 0, 0, 0, time.UTC)
+	svc := New(store)
+	svc.SetClaimOwner("manual-owner")
+	svc.now = func() time.Time { return now }
+	job, err := svc.Create(context.Background(), "health", KindEvery, "5m", "check health")
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if _, err := store.ClaimScheduledJob(context.Background(), job.ID, "daemon-owner", now, 5*time.Minute); err != nil {
+		t.Fatalf("ClaimScheduledJob returned error: %v", err)
+	}
+
+	_, err = svc.RunNow(context.Background(), fakeRunner{}, job.ID, true)
+	if err == nil {
+		t.Fatal("expected manual run to refuse an actively claimed job")
+	}
+}
