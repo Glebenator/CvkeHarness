@@ -99,13 +99,23 @@ func (s *chatSessionStats) recordTurn(result agent.ChatTurnResult) {
 	s.promptTokens += result.Phase.PromptTokens
 	s.completionTokens += result.Phase.CompletionTokens
 	s.totalTokens += result.Phase.TotalTokens
+	s.promptTokens += result.VerificationPhase.PromptTokens
+	s.completionTokens += result.VerificationPhase.CompletionTokens
+	s.totalTokens += result.VerificationPhase.TotalTokens
 	if result.Phase.CachedTokensKnown {
 		s.cachedKnown = true
 		s.cachedTokens += result.Phase.CachedTokens
 	}
+	if result.VerificationPhase.CachedTokensKnown {
+		s.cachedKnown = true
+		s.cachedTokens += result.VerificationPhase.CachedTokens
+	}
 
 	model := chatModelLabel(result.Phase)
 	if model != "" {
+		s.modelCounts[model]++
+	}
+	if model := chatModelLabel(result.VerificationPhase); model != "" {
 		s.modelCounts[model]++
 	}
 
@@ -338,6 +348,11 @@ func recordChatTurn(ctx context.Context, store *state.Store, current *chatSessio
 			logger.Warn("failed to record chat stats", "error", err)
 		}
 	}
+	if store != nil && store.Available() && result.VerificationPhase.Provider != "" {
+		if err := store.RecordChatPhaseStats(ctx, result.TaskClass, result.VerificationPhase, nil); err != nil {
+			logger.Warn("failed to record chat verification stats", "error", err)
+		}
+	}
 }
 
 func waitForChatTurn(signals <-chan os.Signal, ui *cli.ChatSurface, cancelTurn context.CancelFunc, outcomeCh <-chan chatTurnOutcome) (chatTurnOutcome, string, bool) {
@@ -395,18 +410,23 @@ func persistChatTurn(ctx context.Context, store *state.Store, sessionID int64, u
 	}
 
 	turn := state.ChatTurn{
-		SessionID:        sessionID,
-		UserInput:        userInput,
-		TaskClass:        result.TaskClass,
-		RequestedModel:   result.Phase.RequestedModel,
-		ActualModel:      result.Phase.ActualModel,
-		Success:          result.Phase.Success,
-		ErrorMessage:     errorString(result.ExecutionErr),
-		LatencyMs:        result.Phase.LatencyMs,
-		PromptTokens:     result.Phase.PromptTokens,
-		CompletionTokens: result.Phase.CompletionTokens,
-		TotalTokens:      result.Phase.TotalTokens,
-		CreatedAt:        time.Now().UTC(),
+		SessionID:                   sessionID,
+		UserInput:                   userInput,
+		TaskClass:                   result.TaskClass,
+		RequestedModel:              result.Phase.RequestedModel,
+		ActualModel:                 result.Phase.ActualModel,
+		Success:                     result.Phase.Success,
+		ErrorMessage:                errorString(result.ExecutionErr),
+		LatencyMs:                   result.Phase.LatencyMs,
+		PromptTokens:                result.Phase.PromptTokens,
+		CompletionTokens:            result.Phase.CompletionTokens,
+		TotalTokens:                 result.Phase.TotalTokens,
+		FinalOutput:                 result.Output,
+		VerificationStatus:          result.Verification.Status,
+		VerificationReason:          result.Verification.Reason,
+		VerificationMissingActions:  strings.Join(result.Verification.MissingActions, "\n"),
+		VerificationRepairTriggered: result.Verification.RepairTriggered,
+		CreatedAt:                   time.Now().UTC(),
 	}
 	messages := agent.TranscriptToStateMessages(sessionID, 0, 0, turn.CreatedAt, result.Transcript)
 	if _, err := store.AppendChatTurn(ctx, sessionID, turn, messages); err != nil {

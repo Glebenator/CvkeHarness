@@ -80,12 +80,13 @@ func TestRun_RejectsUnsafeShellToolCall(t *testing.T) {
 	provider := &fakeProvider{}
 	registry.Register(tools.NewShellTool([]string{"ps"}, provider, "safety", "primary"))
 	agent := New(Options{
-		Provider:      provider,
-		ProviderName:  "openrouter",
-		ToolRegistry:  registry,
-		DefaultModel:  "test-model",
-		MaxIterations: 3,
-		MaxTokens:     512,
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  registry,
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
 	})
 
 	result, err := agent.Run(context.Background(), "inspect process list")

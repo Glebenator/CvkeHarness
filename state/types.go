@@ -8,17 +8,22 @@ import (
 
 // RunRecord stores the structured outcome of a harness run.
 type RunRecord struct {
-	ID             int64
-	StartedAt      time.Time
-	FinishedAt     time.Time
-	Provider       string
-	Task           string
-	TaskClass      core.TaskClass
-	Success        bool
-	ErrorMessage   string
-	RoutingEnabled bool
-	Phases         []PhaseRecord
-	Tools          []ToolOutcome
+	ID                          int64
+	StartedAt                   time.Time
+	FinishedAt                  time.Time
+	Provider                    string
+	Task                        string
+	TaskClass                   core.TaskClass
+	Success                     bool
+	ErrorMessage                string
+	FinalOutput                 string
+	VerificationStatus          string
+	VerificationReason          string
+	VerificationMissingActions  string
+	VerificationRepairTriggered bool
+	RoutingEnabled              bool
+	Phases                      []PhaseRecord
+	Tools                       []ToolOutcome
 }
 
 // PhaseRecord captures one routed phase invocation.
@@ -247,6 +252,47 @@ type CommandApproval struct {
 	ApprovedAt time.Time
 }
 
+// ScheduledJob stores a durable CvkeHarness-owned background task.
+type ScheduledJob struct {
+	ID              string
+	Name            string
+	ScheduleKind    string
+	ScheduleSpec    string
+	Prompt          string
+	Enabled         bool
+	NextRunAt       time.Time
+	LastRunAt       time.Time
+	LastRunStatus   string
+	ConsecutiveFail int
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// ScheduledJobRun stores one scheduler execution attempt.
+type ScheduledJobRun struct {
+	ID         int64
+	JobID      string
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Status     string
+	Output     string
+	Error      string
+	RunID      int64
+}
+
+// SystemCronAudit records user-crontab inspection and mutation attempts.
+type SystemCronAudit struct {
+	ID             int64
+	Action         string
+	Target         string
+	OldSnippet     string
+	NewSnippet     string
+	Success        bool
+	ErrorMessage   string
+	InitiatingTool string
+	CreatedAt      time.Time
+}
+
 // ChatSession stores one interactive chat lifecycle.
 type ChatSession struct {
 	ID             int64
@@ -260,20 +306,25 @@ type ChatSession struct {
 
 // ChatTurn stores one user-driven turn inside a chat session.
 type ChatTurn struct {
-	ID               int64
-	SessionID        int64
-	TurnIndex        int
-	UserInput        string
-	TaskClass        core.TaskClass
-	RequestedModel   string
-	ActualModel      string
-	Success          bool
-	ErrorMessage     string
-	LatencyMs        int64
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-	CreatedAt        time.Time
+	ID                          int64
+	SessionID                   int64
+	TurnIndex                   int
+	UserInput                   string
+	TaskClass                   core.TaskClass
+	RequestedModel              string
+	ActualModel                 string
+	Success                     bool
+	ErrorMessage                string
+	LatencyMs                   int64
+	PromptTokens                int
+	CompletionTokens            int
+	TotalTokens                 int
+	FinalOutput                 string
+	VerificationStatus          string
+	VerificationReason          string
+	VerificationMissingActions  string
+	VerificationRepairTriggered bool
+	CreatedAt                   time.Time
 }
 
 // ChatMessage stores one persisted transcript message in session order.

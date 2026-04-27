@@ -45,6 +45,10 @@ func NewDefaultRegistryWithStoreAndMemory(allowedCommands []string, store *state
 	if mem != nil {
 		registry.Register(NewMemoryRecordFindingTool(mem))
 	}
+	if store != nil && store.Available() {
+		registry.Register(NewScheduleManageTool(store))
+		registry.Register(NewSystemCronManageTool(store))
+	}
 	registry.Register(NewShellToolWithApprovals(allowedCommands, approvedCommands, approver, primaryModel, store))
 	return registry
 }

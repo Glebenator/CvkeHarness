@@ -64,6 +64,9 @@ type Options struct {
 	MemoryRetriever  MemoryRetriever
 	MemoryCurator    MemoryCurator
 	RunRecorder      RunRecorder
+	// DisableCompletionVerification is intended for focused tests and special
+	// harnesses that already evaluate completion externally.
+	DisableCompletionVerification bool
 }
 
 // Agent orchestrates routed model execution and tool use.
@@ -73,9 +76,10 @@ type Agent struct {
 
 // RunResult contains the user-facing output plus structured execution details.
 type RunResult struct {
-	Output  string
-	Run     state.RunRecord
-	Routing []core.RoutingSelection
+	Output       string
+	Run          state.RunRecord
+	Routing      []core.RoutingSelection
+	Verification CompletionVerification
 }
 
 // New creates a new Agent.
@@ -146,11 +150,25 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 	}
 	routingSelections = append(routingSelections, execSelection)
 
-	output, phaseRecord, toolOutcomes, observedCalls, targetResolution, execErr := a.runExecutionPhase(ctx, prompt, taskClass, toolNames, planningNotes, execSelection)
+	output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, execErr := a.runExecutionPhase(ctx, prompt, taskClass, toolNames, planningNotes, execSelection)
 	runRecord.Phases = append(runRecord.Phases, phaseRecord)
+	if verificationRecord.Provider != "" {
+		runRecord.Phases = append(runRecord.Phases, verificationRecord)
+		routingSelections = append(routingSelections, core.RoutingSelection{
+			Phase:     core.PhaseVerification,
+			Requested: execSelection.Requested,
+			Reason:    "completion verification uses the same model as execution",
+		})
+	}
 	runRecord.Tools = append(runRecord.Tools, toolOutcomes...)
+	runRecord.FinalOutput = output
+	runRecord.VerificationStatus = verification.Status
+	runRecord.VerificationReason = verification.Reason
+	runRecord.VerificationMissingActions = verification.missingActionsText()
+	runRecord.VerificationRepairTriggered = verification.RepairTriggered
 	result.Output = output
 	result.Routing = routingSelections
+	result.Verification = verification
 	if execErr != nil {
 		err = execErr
 	}
@@ -205,7 +223,7 @@ func (a *Agent) runPlanningPhase(ctx context.Context, prompt string, taskClass c
 	return selection, record, strings.TrimSpace(content), nil
 }
 
-func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass core.TaskClass, toolNames []string, planningNotes string, selection core.RoutingSelection) (string, state.PhaseRecord, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, error) {
+func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass core.TaskClass, toolNames []string, planningNotes string, selection core.RoutingSelection) (string, state.PhaseRecord, state.PhaseRecord, CompletionVerification, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, error) {
 	logger := log.FromContext(ctx)
 	targetResolution := a.resolveTarget(ctx, memory.TargetResolutionInput{Task: prompt})
 	execCtx := core.RetrievalContext{
@@ -220,7 +238,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	}
 	retrieved, err := a.retrieveMemory(ctx, execCtx)
 	if err != nil {
-		return "", state.PhaseRecord{}, nil, nil, targetResolution, err
+		return "", state.PhaseRecord{}, state.PhaseRecord{}, CompletionVerification{}, nil, nil, targetResolution, err
 	}
 
 	systemMessages := initialSystemMessages(retrieved, planningNotes)
@@ -237,7 +255,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 
 	execProvider, err := a.resolveProvider(selection.Requested.Provider)
 	if err != nil {
-		return "", phaseRecord, nil, nil, targetResolution, err
+		return "", phaseRecord, state.PhaseRecord{}, CompletionVerification{}, nil, nil, targetResolution, err
 	}
 
 	var toolOutcomes []state.ToolOutcome
@@ -245,9 +263,15 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	var output string
 	var actualModel = selection.Requested.Model
 	var refreshed bool
+	var repairUsed bool
+	var latestVerification CompletionVerification
+	var latestVerificationRecord state.PhaseRecord
 	failuresByTool := make(map[string]int)
 
-	for iter := 1; iter <= a.opts.MaxIterations; iter++ {
+	for iter := 1; iter <= a.opts.MaxIterations+1; iter++ {
+		if iter > a.opts.MaxIterations && !repairUsed {
+			break
+		}
 		iterCtx := log.WithIteration(ctx, iter)
 		req := &provider.ChatRequest{
 			Model:       selection.Requested.Model,
@@ -279,7 +303,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				DurationMs:   duration.Milliseconds(),
 				ErrorMessage: err.Error(),
 			})
-			return "", phaseRecord, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
+			return "", phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
 		}
 
 		if resp.Model != "" {
@@ -289,9 +313,34 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 
 		chat.Add(resp.Message)
 		if len(resp.Message.ToolCalls) == 0 {
-			logger.Info("agent finished task")
-			phaseRecord.Success = true
-			return resp.Message.Content, phaseRecord, toolOutcomes, observedCalls, targetResolution, nil
+			output = resp.Message.Content
+			if a.opts.DisableCompletionVerification {
+				logger.Info("agent finished task")
+				phaseRecord.Success = true
+				return output, phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, nil
+			}
+			verification, verificationRecord, err := a.verifyCompletion(iterCtx, selection, taskClass, prompt, output, observedCalls, nil)
+			latestVerification = verification
+			latestVerificationRecord = verificationRecord
+			if err != nil {
+				return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("completion verification failed: %w", err)
+			}
+			verification.RepairTriggered = repairUsed
+			latestVerification = verification
+			if verification.satisfied() {
+				logger.Info("agent finished task after verification")
+				phaseRecord.Success = true
+				return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, nil
+			}
+			if !repairUsed {
+				repairUsed = true
+				verification.RepairTriggered = true
+				latestVerification = verification
+				chat.AddSystem(verification.repairPrompt())
+				continue
+			}
+			phaseRecord.Success = false
+			return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, incompleteTaskError{verification: verification}
 		}
 
 		for _, call := range resp.Message.ToolCalls {
@@ -373,7 +422,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 		}
 	}
 
-	return output, phaseRecord, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("agent exceeded max iterations (%d) without completing the task", a.opts.MaxIterations)
+	return output, phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("agent exceeded max iterations (%d) without completing the task", a.opts.MaxIterations)
 }
 
 func (a *Agent) runCurationPhase(ctx context.Context, prompt string, taskClass core.TaskClass, output string, tools []state.ToolOutcome, execErr error) (core.RoutingSelection, state.PhaseRecord, []memory.Lesson, error) {

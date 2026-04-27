@@ -91,8 +91,10 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO runs (
-			started_at, finished_at, provider, task, task_class, success, error_message, routing_enabled
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			started_at, finished_at, provider, task, task_class, success, error_message,
+			final_output, verification_status, verification_reason, verification_missing_actions,
+			verification_repair_triggered, routing_enabled
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.StartedAt.UTC(),
 		record.FinishedAt.UTC(),
 		record.Provider,
@@ -100,6 +102,11 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 		string(record.TaskClass),
 		boolToInt(record.Success),
 		record.ErrorMessage,
+		record.FinalOutput,
+		record.VerificationStatus,
+		record.VerificationReason,
+		record.VerificationMissingActions,
+		boolToInt(record.VerificationRepairTriggered),
 		boolToInt(record.RoutingEnabled),
 	)
 	if err != nil {
@@ -392,6 +399,11 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			task_class TEXT NOT NULL,
 			success INTEGER NOT NULL,
 			error_message TEXT NOT NULL DEFAULT '',
+			final_output TEXT NOT NULL DEFAULT '',
+			verification_status TEXT NOT NULL DEFAULT '',
+			verification_reason TEXT NOT NULL DEFAULT '',
+			verification_missing_actions TEXT NOT NULL DEFAULT '',
+			verification_repair_triggered INTEGER NOT NULL DEFAULT 0,
 			routing_enabled INTEGER NOT NULL DEFAULT 0
 		);`,
 		`CREATE TABLE IF NOT EXISTS phase_records (
@@ -600,6 +612,11 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			prompt_tokens INTEGER NOT NULL DEFAULT 0,
 			completion_tokens INTEGER NOT NULL DEFAULT 0,
 			total_tokens INTEGER NOT NULL DEFAULT 0,
+			final_output TEXT NOT NULL DEFAULT '',
+			verification_status TEXT NOT NULL DEFAULT '',
+			verification_reason TEXT NOT NULL DEFAULT '',
+			verification_missing_actions TEXT NOT NULL DEFAULT '',
+			verification_repair_triggered INTEGER NOT NULL DEFAULT 0,
 			created_at DATETIME NOT NULL,
 			FOREIGN KEY(session_id) REFERENCES chat_sessions(id)
 		);`,
@@ -625,6 +642,42 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			reason TEXT NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS scheduled_jobs (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			schedule_kind TEXT NOT NULL,
+			schedule_spec TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			next_run_at DATETIME,
+			last_run_at DATETIME,
+			last_run_status TEXT NOT NULL DEFAULT '',
+			consecutive_failures INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			job_id TEXT NOT NULL,
+			started_at DATETIME NOT NULL,
+			finished_at DATETIME NOT NULL,
+			status TEXT NOT NULL,
+			output TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			run_id INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS system_cron_audit (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			action TEXT NOT NULL,
+			target TEXT NOT NULL DEFAULT '',
+			old_snippet TEXT NOT NULL DEFAULT '',
+			new_snippet TEXT NOT NULL DEFAULT '',
+			success INTEGER NOT NULL DEFAULT 0,
+			error_message TEXT NOT NULL DEFAULT '',
+			initiating_tool TEXT NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL
+		);`,
 	}
 
 	for _, stmt := range statements {
@@ -634,6 +687,23 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}
 	if _, err := db.ExecContext(ctx, `ALTER TABLE memory_entries ADD COLUMN seen_count INTEGER NOT NULL DEFAULT 1`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 		return err
+	}
+	optionalColumns := []string{
+		`ALTER TABLE runs ADD COLUMN final_output TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE runs ADD COLUMN verification_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE runs ADD COLUMN verification_reason TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE runs ADD COLUMN verification_missing_actions TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE runs ADD COLUMN verification_repair_triggered INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE chat_turns ADD COLUMN final_output TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE chat_turns ADD COLUMN verification_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE chat_turns ADD COLUMN verification_reason TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE chat_turns ADD COLUMN verification_missing_actions TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE chat_turns ADD COLUMN verification_repair_triggered INTEGER NOT NULL DEFAULT 0`,
+	}
+	for _, stmt := range optionalColumns {
+		if _, err := db.ExecContext(ctx, stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return err
+		}
 	}
 	return nil
 }

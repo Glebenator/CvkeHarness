@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -146,6 +147,17 @@ func assistantToolCall(id, name, args string) *provider.ChatResponse {
 			}},
 		},
 	}
+}
+
+func verifierJSON(status, reason string, missing []string, repair string) *provider.ChatResponse {
+	payload := map[string]any{
+		"status":             status,
+		"reason":             reason,
+		"missing_actions":    missing,
+		"repair_instruction": repair,
+	}
+	data, _ := json.Marshal(payload)
+	return assistantText(string(data))
 }
 
 func cloneChatRequest(req *provider.ChatRequest) *provider.ChatRequest {

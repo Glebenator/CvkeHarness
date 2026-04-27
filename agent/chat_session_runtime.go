@@ -27,17 +27,19 @@ type ChatConversation struct {
 
 // ChatTurnResult contains one assistant turn plus transcript and stats.
 type ChatTurnResult struct {
-	Output        string
-	TaskClass     core.TaskClass
-	Phase         state.PhaseRecord
-	Tools         []state.ToolOutcome
-	Observed      []memory.ObservedToolCall
-	Target        memory.TargetResolution
-	Transcript    []provider.Message
-	Routing       core.RoutingSelection
-	Curation      []memory.Lesson
-	ExecutionErr  error
-	CurationError error
+	Output            string
+	TaskClass         core.TaskClass
+	Phase             state.PhaseRecord
+	VerificationPhase state.PhaseRecord
+	Tools             []state.ToolOutcome
+	Observed          []memory.ObservedToolCall
+	Target            memory.TargetResolution
+	Transcript        []provider.Message
+	Routing           core.RoutingSelection
+	Verification      CompletionVerification
+	Curation          []memory.Lesson
+	ExecutionErr      error
+	CurationError     error
 }
 
 // StartChat creates a new interactive chat session with a pinned model.
@@ -93,17 +95,19 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 	ctx = tools.WithEventObserver(ctx, c.agent.opts.EventObserver)
 
 	taskClass := core.ClassifyTask(prompt)
-	phaseRecord, toolOutcomes, observedCalls, targetResolution, transcript, output, execErr := c.runChatTurn(ctx, prompt, taskClass)
+	phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, execErr := c.runChatTurn(ctx, prompt, taskClass)
 	result := ChatTurnResult{
-		Output:       output,
-		TaskClass:    taskClass,
-		Phase:        phaseRecord,
-		Tools:        toolOutcomes,
-		Observed:     observedCalls,
-		Target:       targetResolution,
-		Transcript:   transcript,
-		Routing:      c.selection,
-		ExecutionErr: execErr,
+		Output:            output,
+		TaskClass:         taskClass,
+		Phase:             phaseRecord,
+		VerificationPhase: verificationRecord,
+		Tools:             toolOutcomes,
+		Observed:          observedCalls,
+		Target:            targetResolution,
+		Transcript:        transcript,
+		Routing:           c.selection,
+		Verification:      verification,
+		ExecutionErr:      execErr,
 	}
 
 	if c.agent.opts.MemoryCurator != nil {
@@ -135,7 +139,7 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 	return result, execErr
 }
 
-func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskClass core.TaskClass) (state.PhaseRecord, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, []provider.Message, string, error) {
+func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskClass core.TaskClass) (state.PhaseRecord, state.PhaseRecord, CompletionVerification, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, []provider.Message, string, error) {
 	logger := log.FromContext(ctx)
 	targetResolution := c.agent.resolveTarget(ctx, memory.TargetResolutionInput{Task: prompt})
 	retrieved, err := c.agent.retrieveMemory(ctx, core.RetrievalContext{
@@ -149,12 +153,12 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		ToolNames:     c.toolNames,
 	})
 	if err != nil {
-		return state.PhaseRecord{}, nil, nil, targetResolution, nil, "", err
+		return state.PhaseRecord{}, state.PhaseRecord{}, CompletionVerification{}, nil, nil, targetResolution, nil, "", err
 	}
 
 	execProvider, err := c.agent.resolveProvider(c.selection.Requested.Provider)
 	if err != nil {
-		return state.PhaseRecord{}, nil, nil, targetResolution, nil, "", err
+		return state.PhaseRecord{}, state.PhaseRecord{}, CompletionVerification{}, nil, nil, targetResolution, nil, "", err
 	}
 
 	userMessage := provider.Message{Role: "user", Content: prompt}
@@ -182,11 +186,17 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 
 	var actualModel = c.selection.Requested.Model
 	var refreshed bool
+	var repairUsed bool
+	var latestVerification CompletionVerification
+	var latestVerificationRecord state.PhaseRecord
 	failuresByTool := make(map[string]int)
 	var toolOutcomes []state.ToolOutcome
 	var observedCalls []memory.ObservedToolCall
 
-	for iter := 1; iter <= c.agent.opts.MaxIterations; iter++ {
+	for iter := 1; iter <= c.agent.opts.MaxIterations+1; iter++ {
+		if iter > c.agent.opts.MaxIterations && !repairUsed {
+			break
+		}
 		iterCtx := log.WithIteration(ctx, iter)
 		req := &provider.ChatRequest{
 			Model:       c.selection.Requested.Model,
@@ -218,7 +228,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				DurationMs:   duration.Milliseconds(),
 				ErrorMessage: err.Error(),
 			})
-			return phaseRecord, toolOutcomes, observedCalls, targetResolution, transcript, "", fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
+			return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
 		}
 
 		if resp.Model != "" {
@@ -231,9 +241,33 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		transcript = append(transcript, resp.Message)
 
 		if len(resp.Message.ToolCalls) == 0 {
-			logger.Info("chat turn finished")
-			phaseRecord.Success = true
-			return phaseRecord, toolOutcomes, observedCalls, targetResolution, transcript, resp.Message.Content, nil
+			output := resp.Message.Content
+			if c.agent.opts.DisableCompletionVerification {
+				logger.Info("chat turn finished")
+				phaseRecord.Success = true
+				return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, output, nil
+			}
+			verification, verificationRecord, err := c.agent.verifyCompletion(iterCtx, c.selection, taskClass, prompt, output, observedCalls, nil)
+			verification.RepairTriggered = repairUsed
+			latestVerification = verification
+			latestVerificationRecord = verificationRecord
+			if err != nil {
+				return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, fmt.Errorf("completion verification failed: %w", err)
+			}
+			if verification.satisfied() {
+				logger.Info("chat turn finished after verification")
+				phaseRecord.Success = true
+				return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, nil
+			}
+			if !repairUsed {
+				repairUsed = true
+				verification.RepairTriggered = true
+				latestVerification = verification
+				turnChat.AddSystem(verification.repairPrompt())
+				continue
+			}
+			phaseRecord.Success = false
+			return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, incompleteTaskError{verification: verification}
 		}
 
 		for _, call := range resp.Message.ToolCalls {
@@ -323,7 +357,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		}
 	}
 
-	return phaseRecord, toolOutcomes, observedCalls, targetResolution, transcript, "", fmt.Errorf("agent exceeded max iterations (%d) without completing the task", c.agent.opts.MaxIterations)
+	return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", fmt.Errorf("agent exceeded max iterations (%d) without completing the task", c.agent.opts.MaxIterations)
 }
 
 // Selection returns the pinned routing decision for the active chat session.

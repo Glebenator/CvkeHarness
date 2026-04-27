@@ -59,14 +59,15 @@ func TestRunScenarioNormalToolCallThenFinalAnswer(t *testing.T) {
 	registry.Register(echoTool{})
 
 	agent := New(Options{
-		Provider:        provider,
-		ProviderName:    "openrouter",
-		ToolRegistry:    registry,
-		DefaultModel:    "test-model",
-		MaxIterations:   3,
-		MaxTokens:       512,
-		MemoryRetriever: &memoryStub{},
-		RunRecorder:     recorder,
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  registry,
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		MemoryRetriever:               &memoryStub{},
+		RunRecorder:                   recorder,
 	})
 
 	result, err := agent.Run(context.Background(), "use a tool")
@@ -89,6 +90,147 @@ func TestRunScenarioNormalToolCallThenFinalAnswer(t *testing.T) {
 	}
 }
 
+func TestRunScenarioVerificationSatisfied(t *testing.T) {
+	t.Parallel()
+
+	provider := newScriptedProvider(t,
+		scriptedProviderStep{
+			name: "final answer",
+			resp: assistantText("done"),
+		},
+		scriptedProviderStep{
+			name:   "verification satisfied",
+			expect: allRequestPredicates(expectModel("test-model"), expectLastMessage("user", "assistant_final_output")),
+			resp:   verifierJSON(verificationSatisfied, "The final answer satisfies the request.", nil, ""),
+		},
+	)
+
+	result, err := New(Options{
+		Provider:        provider,
+		ProviderName:    "openrouter",
+		ToolRegistry:    tools.NewRegistry(),
+		DefaultModel:    "test-model",
+		MaxIterations:   3,
+		MaxTokens:       512,
+		MemoryRetriever: &memoryStub{},
+	}).Run(context.Background(), "finish cleanly")
+	if err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+	provider.AssertComplete(t)
+	if result.Output != "done" || result.Verification.Status != verificationSatisfied {
+		t.Fatalf("expected satisfied verification, got output=%q verification=%#v", result.Output, result.Verification)
+	}
+	if len(result.Run.Phases) != 2 || result.Run.Phases[1].Phase != core.PhaseVerification || !result.Run.Phases[1].Success {
+		t.Fatalf("expected successful verification phase, got %#v", result.Run.Phases)
+	}
+}
+
+func TestRunScenarioVerificationRepairsIncompleteConditionalTask(t *testing.T) {
+	t.Parallel()
+
+	provider := newScriptedProvider(t,
+		scriptedProviderStep{
+			name: "premature final answer",
+			resp: assistantText("Docker is not running. I can start it for you."),
+		},
+		scriptedProviderStep{
+			name: "verification unsatisfied",
+			resp: verifierJSON(verificationUnsatisfied, "The assistant checked Docker but did not start it.", []string{"Start Docker because it is not running."}, "Start Docker now, then report the result."),
+		},
+		scriptedProviderStep{
+			name:   "repair sees verifier instruction",
+			expect: expectLastMessage("system", "Start Docker now"),
+			resp:   assistantToolCall("call-1", "echo_tool", `{"text":"Docker started"}`),
+		},
+		scriptedProviderStep{
+			name:   "final after repair",
+			expect: expectLastMessage("tool", "Docker started"),
+			resp:   assistantText("Docker was not running, so I started it."),
+		},
+		scriptedProviderStep{
+			name: "verification satisfied",
+			resp: verifierJSON(verificationSatisfied, "The conditional action was completed.", nil, ""),
+		},
+	)
+	registry := tools.NewRegistry()
+	registry.Register(echoTool{})
+
+	result, err := New(Options{
+		Provider:        provider,
+		ProviderName:    "openrouter",
+		ToolRegistry:    registry,
+		DefaultModel:    "test-model",
+		MaxIterations:   3,
+		MaxTokens:       512,
+		MemoryRetriever: &memoryStub{},
+	}).Run(context.Background(), "check if docker is running, and if not, start it")
+	if err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+	provider.AssertComplete(t)
+	if !result.Verification.RepairTriggered || result.Verification.Status != verificationSatisfied {
+		t.Fatalf("expected repair-triggered satisfied verification, got %#v", result.Verification)
+	}
+	if len(result.Run.Tools) != 1 || !result.Run.Tools[0].Success {
+		t.Fatalf("expected repair tool call to be recorded, got %#v", result.Run.Tools)
+	}
+}
+
+func TestRunScenarioVerificationRepairExhaustion(t *testing.T) {
+	t.Parallel()
+
+	provider := newScriptedProvider(t,
+		scriptedProviderStep{name: "premature final", resp: assistantText("Docker is not running. I can start it for you.")},
+		scriptedProviderStep{name: "unsatisfied", resp: verifierJSON(verificationUnsatisfied, "Not started.", []string{"Start Docker."}, "Start Docker.")},
+		scriptedProviderStep{name: "still incomplete", resp: assistantText("Docker is still not running.")},
+		scriptedProviderStep{name: "unsatisfied again", resp: verifierJSON(verificationUnsatisfied, "Still not started.", []string{"Start Docker."}, "Start Docker.")},
+	)
+
+	result, err := New(Options{
+		Provider:        provider,
+		ProviderName:    "openrouter",
+		ToolRegistry:    tools.NewRegistry(),
+		DefaultModel:    "test-model",
+		MaxIterations:   3,
+		MaxTokens:       512,
+		MemoryRetriever: &memoryStub{},
+	}).Run(context.Background(), "check if docker is running, and if not, start it")
+	if err == nil || !strings.Contains(err.Error(), "task incomplete after verification repair") {
+		t.Fatalf("expected incomplete-task error, got %v", err)
+	}
+	if result.Run.Success || result.Verification.Status != verificationUnsatisfied {
+		t.Fatalf("expected failed run with unsatisfied verification, got run=%#v verification=%#v", result.Run, result.Verification)
+	}
+}
+
+func TestRunScenarioMalformedVerificationJSONFailsAfterRepair(t *testing.T) {
+	t.Parallel()
+
+	provider := newScriptedProvider(t,
+		scriptedProviderStep{name: "final", resp: assistantText("possibly done")},
+		scriptedProviderStep{name: "malformed verifier", resp: assistantText("not json")},
+		scriptedProviderStep{name: "repair final", resp: assistantText("possibly done after repair")},
+		scriptedProviderStep{name: "malformed verifier again", resp: assistantText("not json")},
+	)
+
+	result, err := New(Options{
+		Provider:        provider,
+		ProviderName:    "openrouter",
+		ToolRegistry:    tools.NewRegistry(),
+		DefaultModel:    "test-model",
+		MaxIterations:   3,
+		MaxTokens:       512,
+		MemoryRetriever: &memoryStub{},
+	}).Run(context.Background(), "do a task")
+	if err == nil || !strings.Contains(err.Error(), "task incomplete after verification repair") {
+		t.Fatalf("expected incomplete-task error, got %v", err)
+	}
+	if !result.Verification.MalformedVerifierJSON || result.Verification.Status != verificationUncertain {
+		t.Fatalf("expected malformed verifier JSON to be recorded as uncertain, got %#v", result.Verification)
+	}
+}
+
 func TestRunScenarioMalformedToolCallJSON(t *testing.T) {
 	t.Parallel()
 
@@ -107,13 +249,14 @@ func TestRunScenarioMalformedToolCallJSON(t *testing.T) {
 	registry.Register(echoTool{})
 
 	result, err := New(Options{
-		Provider:        provider,
-		ProviderName:    "openrouter",
-		ToolRegistry:    registry,
-		DefaultModel:    "test-model",
-		MaxIterations:   3,
-		MaxTokens:       512,
-		MemoryRetriever: &memoryStub{},
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  registry,
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		MemoryRetriever:               &memoryStub{},
 	}).Run(context.Background(), "call malformed tool")
 	if err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
@@ -139,13 +282,14 @@ func TestRunScenarioUnknownTool(t *testing.T) {
 	)
 
 	result, err := New(Options{
-		Provider:        provider,
-		ProviderName:    "openrouter",
-		ToolRegistry:    tools.NewRegistry(),
-		DefaultModel:    "test-model",
-		MaxIterations:   3,
-		MaxTokens:       512,
-		MemoryRetriever: &memoryStub{},
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  tools.NewRegistry(),
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		MemoryRetriever:               &memoryStub{},
 	}).Run(context.Background(), "call unknown tool")
 	if err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
@@ -166,13 +310,14 @@ func TestRunScenarioProviderErrorOnFirstIteration(t *testing.T) {
 	)
 
 	result, err := New(Options{
-		Provider:        provider,
-		ProviderName:    "openrouter",
-		ToolRegistry:    tools.NewRegistry(),
-		DefaultModel:    "test-model",
-		MaxIterations:   3,
-		MaxTokens:       512,
-		MemoryRetriever: &memoryStub{},
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  tools.NewRegistry(),
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		MemoryRetriever:               &memoryStub{},
 	}).Run(context.Background(), "fail early")
 	if err == nil || !strings.Contains(err.Error(), "LLM API error on iteration 1") {
 		t.Fatalf("expected first-iteration provider error, got %v", err)
@@ -193,13 +338,14 @@ func TestRunScenarioMaxIterationExhaustion(t *testing.T) {
 	registry.Register(echoTool{})
 
 	result, err := New(Options{
-		Provider:        provider,
-		ProviderName:    "openrouter",
-		ToolRegistry:    registry,
-		DefaultModel:    "test-model",
-		MaxIterations:   2,
-		MaxTokens:       512,
-		MemoryRetriever: &memoryStub{},
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  registry,
+		DefaultModel:                  "test-model",
+		MaxIterations:                 2,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		MemoryRetriever:               &memoryStub{},
 	}).Run(context.Background(), "never finish")
 	if err == nil || !strings.Contains(err.Error(), "agent exceeded max iterations") {
 		t.Fatalf("expected max-iteration exhaustion, got %v", err)
@@ -244,13 +390,14 @@ func TestRunScenarioActualModelAliasing(t *testing.T) {
 	registry.Register(echoTool{})
 
 	result, err := New(Options{
-		Provider:        provider,
-		ProviderName:    "openrouter",
-		ToolRegistry:    registry,
-		DefaultModel:    "requested-model",
-		MaxIterations:   3,
-		MaxTokens:       512,
-		MemoryRetriever: &memoryStub{},
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  registry,
+		DefaultModel:                  "requested-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		MemoryRetriever:               &memoryStub{},
 	}).Run(context.Background(), "observe actual model")
 	if err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
@@ -294,15 +441,16 @@ func TestRunScenarioRoutingThroughPlanningAndExecutionModels(t *testing.T) {
 	}
 
 	result, err := New(Options{
-		Provider:        provider,
-		ProviderName:    "openrouter",
-		ToolRegistry:    tools.NewRegistry(),
-		DefaultModel:    "default-model",
-		MaxIterations:   3,
-		MaxTokens:       512,
-		RoutingConfig:   core.RoutingConfig{Enabled: true},
-		Router:          router,
-		MemoryRetriever: &memoryStub{},
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  tools.NewRegistry(),
+		DefaultModel:                  "default-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		RoutingConfig:                 core.RoutingConfig{Enabled: true},
+		Router:                        router,
+		MemoryRetriever:               &memoryStub{},
 	}).Run(context.Background(), "route models")
 	if err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
@@ -408,14 +556,15 @@ func TestCurationScenarioEmptyLessons(t *testing.T) {
 
 func curationTestAgent(provider provider.Provider) *Agent {
 	return New(Options{
-		Provider:        provider,
-		ProviderName:    "openrouter",
-		ToolRegistry:    tools.NewRegistry(),
-		DefaultModel:    "default-model",
-		MaxIterations:   3,
-		MaxTokens:       512,
-		Router:          &phaseRouterStub{selections: map[core.Phase]core.RoutingSelection{core.PhaseCuration: {Phase: core.PhaseCuration, Requested: core.NewModelRef("openrouter", "curation-model")}}},
-		MemoryRetriever: &memoryStub{},
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  tools.NewRegistry(),
+		DefaultModel:                  "default-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		Router:                        &phaseRouterStub{selections: map[core.Phase]core.RoutingSelection{core.PhaseCuration: {Phase: core.PhaseCuration, Requested: core.NewModelRef("openrouter", "curation-model")}}},
+		MemoryRetriever:               &memoryStub{},
 	})
 }
 

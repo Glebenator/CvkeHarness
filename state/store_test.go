@@ -88,14 +88,19 @@ func TestChatPersistenceUsesDedicatedTables(t *testing.T) {
 	}
 
 	_, err = store.AppendChatTurn(context.Background(), sessionID, ChatTurn{
-		UserInput:      "hello",
-		TaskClass:      core.TaskClassGeneral,
-		RequestedModel: "chat-model",
-		ActualModel:    "chat-model",
-		Success:        true,
-		LatencyMs:      25,
-		PromptTokens:   10,
-		TotalTokens:    20,
+		UserInput:                   "hello",
+		TaskClass:                   core.TaskClassGeneral,
+		RequestedModel:              "chat-model",
+		ActualModel:                 "chat-model",
+		Success:                     true,
+		LatencyMs:                   25,
+		PromptTokens:                10,
+		TotalTokens:                 20,
+		FinalOutput:                 "hi there",
+		VerificationStatus:          "satisfied",
+		VerificationReason:          "answered greeting",
+		VerificationMissingActions:  "",
+		VerificationRepairTriggered: false,
 	}, []ChatMessage{
 		{Role: "user", Content: "hello"},
 		{Role: "assistant", Content: "hi there"},
@@ -127,6 +132,14 @@ func TestChatPersistenceUsesDedicatedTables(t *testing.T) {
 	}
 	if sessions != 1 || turns != 1 || messages != 2 {
 		t.Fatalf("expected dedicated chat tables to be populated, got sessions=%d turns=%d messages=%d", sessions, turns, messages)
+	}
+
+	var finalOutput, verificationStatus string
+	if err := store.db.QueryRowContext(context.Background(), `SELECT final_output, verification_status FROM chat_turns WHERE id = 1`).Scan(&finalOutput, &verificationStatus); err != nil {
+		t.Fatalf("read chat verification metadata returned error: %v", err)
+	}
+	if finalOutput != "hi there" || verificationStatus != "satisfied" {
+		t.Fatalf("expected chat verification metadata, got final=%q status=%q", finalOutput, verificationStatus)
 	}
 }
 
@@ -206,6 +219,48 @@ func TestRecordRunTracksModelAliases(t *testing.T) {
 	}
 	if aliases[0].RequestedModel != "shadow-model" || aliases[0].ActualModel != "vendor/revealed-model" {
 		t.Fatalf("expected persisted alias mapping, got %#v", aliases[0])
+	}
+}
+
+func TestRecordRunPersistsVerificationSummary(t *testing.T) {
+	t.Parallel()
+
+	store := Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+
+	err := store.RecordRun(context.Background(), RunRecord{
+		StartedAt:                   timeNowForTest(),
+		FinishedAt:                  timeNowForTest(),
+		Provider:                    "openrouter",
+		Task:                        "do something",
+		TaskClass:                   core.TaskClassGeneral,
+		Success:                     true,
+		FinalOutput:                 "done",
+		VerificationStatus:          "satisfied",
+		VerificationReason:          "all requested work completed",
+		VerificationMissingActions:  "",
+		VerificationRepairTriggered: true,
+		Phases: []PhaseRecord{{
+			Phase:          core.PhaseVerification,
+			Provider:       "openrouter",
+			RequestedModel: "test-model",
+			ActualModel:    "test-model",
+			Success:        true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RecordRun returned error: %v", err)
+	}
+
+	var finalOutput, status, reason string
+	var repair int
+	if err := store.db.QueryRowContext(context.Background(), `
+		SELECT final_output, verification_status, verification_reason, verification_repair_triggered
+		FROM runs WHERE id = 1`).Scan(&finalOutput, &status, &reason, &repair); err != nil {
+		t.Fatalf("read run verification metadata returned error: %v", err)
+	}
+	if finalOutput != "done" || status != "satisfied" || reason != "all requested work completed" || repair != 1 {
+		t.Fatalf("unexpected run verification metadata: final=%q status=%q reason=%q repair=%d", finalOutput, status, reason, repair)
 	}
 }
 
