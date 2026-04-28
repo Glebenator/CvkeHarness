@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/promptdump"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/state"
@@ -95,9 +96,17 @@ func (a *Agent) verifyCompletion(ctx context.Context, selection core.RoutingSele
 		Temperature: 0,
 		MaxTokens:   minInt(a.opts.MaxTokens, 1024),
 	}
+	dump := a.dumpPrompt(ctx, promptdump.Metadata{
+		Phase:     core.PhaseVerification,
+		Provider:  selection.Requested.Provider,
+		Model:     selection.Requested.Model,
+		TaskClass: taskClass,
+		Label:     "completion-verification",
+	}, req)
 
 	start := time.Now()
 	resp, err := p.ChatCompletion(ctx, req)
+	a.finishPromptDump(dump, resp, err)
 	record.LatencyMs = time.Since(start).Milliseconds()
 	if resp != nil {
 		record.PromptTokens = resp.Usage.PromptTokens

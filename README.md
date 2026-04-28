@@ -299,6 +299,10 @@ Important fields:
 - `favorite_models`
 - `memory_dir`
 - `state_db_path`
+- `debug_prompt_dumps`
+  When true, every model call writes a full prompt dump as Markdown and HTML for debugging.
+- `prompt_dump_dir`
+  Directory for prompt dump artifacts, grouped by date and run. Each run folder includes an `index.html` master page linking the individual Markdown and HTML dumps. The index starts with estimated prompt tokens and is updated with actual prompt, completion, total, and cached token counts when providers return usage. Defaults to `~/.cvkeharness/prompt_dumps`.
 - `memory_max_snippets`
   Retained for compatibility; structured retrieval now uses fixed brief caps in code
 - `routing_min_confidence`

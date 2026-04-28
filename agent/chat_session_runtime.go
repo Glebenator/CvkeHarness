@@ -9,6 +9,7 @@ import (
 
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/log"
+	"github.com/coolcake/cvkeharness/internal/promptdump"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
@@ -207,9 +208,18 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 			Temperature: 0.2,
 			MaxTokens:   c.agent.opts.MaxTokens,
 		}
+		dump := c.agent.dumpPrompt(iterCtx, promptdump.Metadata{
+			Phase:     core.PhaseChat,
+			Provider:  c.selection.Requested.Provider,
+			Model:     c.selection.Requested.Model,
+			TaskClass: taskClass,
+			Iteration: iter,
+			Label:     "chat-turn",
+		}, req)
 
 		start := time.Now()
 		resp, err := execProvider.ChatCompletion(iterCtx, req)
+		c.agent.finishPromptDump(dump, resp, err)
 		duration := time.Since(start)
 		phaseRecord.LatencyMs += duration.Milliseconds()
 		if resp != nil {
