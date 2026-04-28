@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	SafetyModeLLMJudge    = "llm_judge"
-	SafetyModeUserConfirm = "user_confirm"
+	SafetyModeLLMJudge       = "llm_judge"
+	SafetyModeUserConfirm    = "user_confirm"
+	SafetyModeUserConfirmAll = "user_confirm_all"
+	SafetyModeUnrestricted   = "unrestricted"
 )
 
 // ShellApprovalRequest describes a command that needs secondary approval.
