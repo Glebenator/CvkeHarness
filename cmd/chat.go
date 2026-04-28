@@ -17,6 +17,7 @@ import (
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/cli"
 	"github.com/coolcake/cvkeharness/internal/log"
+	"github.com/coolcake/cvkeharness/internal/promptdump"
 	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/router"
@@ -200,7 +201,8 @@ func runChat() {
 		logger.Warn("failed to reindex memory metadata", "error", err)
 	}
 
-	registry := tools.NewDefaultRegistryWithStoreAndMemory(cfg.AllowedCommands, store, mem, p, cfg.SafetyMode, cfg.SafetyModel, cfg.PrimaryModel())
+	promptDumper := promptdump.New(cfg.DebugPromptDumps, cfg.PromptDumpDir)
+	registry := tools.NewDefaultRegistryWithStoreMemoryAndPromptDumper(cfg.AllowedCommands, store, mem, p, cfg.SafetyMode, cfg.SafetyModel, cfg.PrimaryModel(), promptDumper)
 	routingCfg := routingConfigFromConfig(cfg, store)
 	r := router.New(routingCfg, store, func(ctx context.Context, selection core.RoutingSelection) (bool, error) {
 		if selection.Recommendation == nil {
@@ -223,6 +225,7 @@ func runChat() {
 		MemoryRetriever:  mem,
 		MemoryCurator:    mem,
 		RunRecorder:      store,
+		PromptDumper:     promptDumper,
 	})
 
 	signals := make(chan os.Signal, 2)

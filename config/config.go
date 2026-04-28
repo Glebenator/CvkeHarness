@@ -34,6 +34,8 @@ type Config struct {
 	FavoriteModels       []string          `yaml:"favorite_models,omitempty"`
 	MemoryDir            string            `yaml:"memory_dir,omitempty"`
 	StateDBPath          string            `yaml:"state_db_path,omitempty"`
+	DebugPromptDumps     bool              `yaml:"debug_prompt_dumps,omitempty"`
+	PromptDumpDir        string            `yaml:"prompt_dump_dir,omitempty"`
 	MemoryMaxSnippets    int               `yaml:"memory_max_snippets,omitempty"`
 	RoutingMinConfidence float64           `yaml:"routing_min_confidence,omitempty"`
 }
@@ -119,6 +121,9 @@ func (c *Config) Normalize() {
 	}
 	if c.StateDBPath == "" {
 		c.StateDBPath = defaultHarnessPath("state.db")
+	}
+	if c.PromptDumpDir == "" {
+		c.PromptDumpDir = defaultHarnessPath("prompt_dumps")
 	}
 	if len(c.ApprovedModels) == 0 && c.DefaultModel != "" && c.Provider != "" {
 		c.ApprovedModels = []string{c.Provider + "/" + c.DefaultModel}
@@ -208,6 +213,7 @@ func DefaultConfig() *Config {
 		RoutingMode:          "auto_within_policy",
 		MemoryDir:            defaultHarnessPath(""),
 		StateDBPath:          defaultHarnessPath("state.db"),
+		PromptDumpDir:        defaultHarnessPath("prompt_dumps"),
 		MemoryMaxSnippets:    3,
 		RoutingMinConfidence: 0.55,
 		ApprovedModels:       []string{"openrouter/anthropic/claude-sonnet-4.6"},

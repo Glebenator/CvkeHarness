@@ -399,6 +399,20 @@ func configFields() []configField {
 			Set:         func(c *config.Config, v string) { c.LogLevel = v },
 		},
 		{
+			Label:       "Prompt Dumps",
+			Description: "Debug: save full model prompts as Markdown and HTML",
+			Kind:        configFieldToggle,
+			Get:         func(c *config.Config) string { return strconv.FormatBool(c.DebugPromptDumps) },
+			Set:         func(c *config.Config, v string) { c.DebugPromptDumps = strings.EqualFold(v, "true") },
+		},
+		{
+			Label:       "Prompt Dump Dir",
+			Description: "Directory for full prompt dump artifacts",
+			Kind:        configFieldText,
+			Get:         func(c *config.Config) string { return c.PromptDumpDir },
+			Set:         func(c *config.Config, v string) { c.PromptDumpDir = v },
+		},
+		{
 			Label:       "Memory Dir",
 			Description: "Directory for soul, host, target, and playbook memory",
 			Kind:        configFieldText,

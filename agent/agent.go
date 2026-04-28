@@ -9,6 +9,7 @@ import (
 
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/log"
+	"github.com/coolcake/cvkeharness/internal/promptdump"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
@@ -64,6 +65,7 @@ type Options struct {
 	MemoryRetriever  MemoryRetriever
 	MemoryCurator    MemoryCurator
 	RunRecorder      RunRecorder
+	PromptDumper     *promptdump.Dumper
 	// DisableCompletionVerification is intended for focused tests and special
 	// harnesses that already evaluate completion externally.
 	DisableCompletionVerification bool
@@ -281,9 +283,18 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 			Temperature: 0.2,
 			MaxTokens:   a.opts.MaxTokens,
 		}
+		dump := a.dumpPrompt(iterCtx, promptdump.Metadata{
+			Phase:     core.PhaseExecution,
+			Provider:  selection.Requested.Provider,
+			Model:     selection.Requested.Model,
+			TaskClass: taskClass,
+			Iteration: iter,
+			Label:     "execution-loop",
+		}, req)
 
 		start := time.Now()
 		resp, err := execProvider.ChatCompletion(iterCtx, req)
+		a.finishPromptDump(dump, resp, err)
 		duration := time.Since(start)
 		phaseRecord.LatencyMs += duration.Milliseconds()
 		if resp != nil {
@@ -512,6 +523,13 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 		Temperature: 0.1,
 		MaxTokens:   minInt(a.opts.MaxTokens, 1024),
 	}
+	dump := a.dumpPrompt(ctx, promptdump.Metadata{
+		Phase:     phase,
+		Provider:  selection.Requested.Provider,
+		Model:     selection.Requested.Model,
+		TaskClass: taskClass,
+		Label:     "single-model-call",
+	}, req)
 
 	record := state.PhaseRecord{
 		Phase:          phase,
@@ -523,6 +541,7 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 
 	start := time.Now()
 	resp, err := p.ChatCompletion(ctx, req)
+	a.finishPromptDump(dump, resp, err)
 	record.LatencyMs = time.Since(start).Milliseconds()
 	if err != nil {
 		return "", record, "", err
@@ -537,6 +556,32 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 		record.CachedTokensKnown = true
 	}
 	return resp.Message.Content, record, resp.Model, nil
+}
+
+func (a *Agent) dumpPrompt(ctx context.Context, meta promptdump.Metadata, req *provider.ChatRequest) *promptdump.Handle {
+	if a == nil || a.opts.PromptDumper == nil || !a.opts.PromptDumper.Enabled() {
+		return nil
+	}
+	if meta.Model == "" && req != nil {
+		meta.Model = req.Model
+	}
+	handle, err := a.opts.PromptDumper.Begin(ctx, meta, req)
+	if err != nil {
+		log.FromContext(ctx).Warn("failed to dump prompt", "error", err, "phase", meta.Phase)
+	}
+	return handle
+}
+
+func (a *Agent) finishPromptDump(handle *promptdump.Handle, resp *provider.ChatResponse, callErr error) {
+	if a == nil || a.opts.PromptDumper == nil || handle == nil {
+		return
+	}
+	result := promptdump.Result{Err: callErr}
+	if resp != nil {
+		result.ActualModel = resp.Model
+		result.Usage = resp.Usage
+	}
+	_ = a.opts.PromptDumper.Finish(handle, result)
 }
 
 func (a *Agent) retrieveMemory(ctx context.Context, input core.RetrievalContext) (memory.RetrievalResult, error) {
