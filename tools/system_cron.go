@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/systemcron"
 )
@@ -158,11 +158,21 @@ func (t *SystemCronManageTool) audit(ctx context.Context, mutation systemcron.Mu
 }
 
 func confirm(in io.Reader, out io.Writer, prompt string) bool {
-	fmt.Fprintf(out, "%s [y/N] ", prompt)
-	scanner := bufio.NewScanner(in)
-	if !scanner.Scan() {
+	idx, err := termui.Select(termui.SelectOptions{
+		Title: prompt,
+		Details: []string{
+			"Review the diff above before applying the change.",
+		},
+		Choices: []termui.Choice{
+			{Label: "Cancel", Description: "Leave the current crontab unchanged"},
+			{Label: "Apply change", Description: "Write the reviewed crontab update"},
+		},
+		InitialIndex: 0,
+		In:           in,
+		Out:          out,
+	})
+	if err != nil {
 		return false
 	}
-	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
-	return answer == "y" || answer == "yes"
+	return idx == 1
 }

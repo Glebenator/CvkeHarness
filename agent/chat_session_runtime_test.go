@@ -257,6 +257,62 @@ func TestChatConversationVerificationRepair(t *testing.T) {
 	}
 }
 
+func TestChatConversationVerificationRepairRetriesWithinIterationBudget(t *testing.T) {
+	t.Parallel()
+
+	provider := &sequenceProvider{
+		fn: func(call int, req *provider.ChatRequest) (*provider.ChatResponse, error) {
+			switch call {
+			case 1:
+				return &provider.ChatResponse{Model: "pinned-model", Message: provider.Message{Role: "assistant", Content: "I can do that next."}}, nil
+			case 2:
+				return verifierJSON(verificationUnsatisfied, "The answer only promises future work.", []string{"Complete the requested work."}, "Complete the requested work now."), nil
+			case 3:
+				last := req.Messages[len(req.Messages)-1]
+				if last.Role != "system" || !strings.Contains(last.Content, "Complete the requested work now") {
+					return nil, fmt.Errorf("expected first verifier repair prompt, got role=%q content=%q", last.Role, last.Content)
+				}
+				return &provider.ChatResponse{Model: "pinned-model", Message: provider.Message{Role: "assistant", Content: "I am still about to do it."}}, nil
+			case 4:
+				return verifierJSON(verificationUnsatisfied, "The repair still only promised future work.", []string{"Complete the requested work."}, "Stop promising; complete the work now."), nil
+			case 5:
+				last := req.Messages[len(req.Messages)-1]
+				if last.Role != "system" || !strings.Contains(last.Content, "Stop promising; complete the work now") {
+					return nil, fmt.Errorf("expected second verifier repair prompt, got role=%q content=%q", last.Role, last.Content)
+				}
+				return &provider.ChatResponse{Model: "pinned-model", Message: provider.Message{Role: "assistant", Content: "done now"}}, nil
+			case 6:
+				return verifierJSON(verificationSatisfied, "The second repair completed the work.", nil, ""), nil
+			default:
+				return nil, fmt.Errorf("unexpected call %d", call)
+			}
+		},
+	}
+
+	a := New(Options{
+		Provider:        provider,
+		ProviderName:    "openrouter",
+		ToolRegistry:    tools.NewRegistry(),
+		DefaultModel:    "default-model",
+		MaxIterations:   3,
+		MaxTokens:       512,
+		Router:          &chatRouterStub{selection: core.RoutingSelection{Phase: core.PhaseChat, Requested: core.NewModelRef("openrouter", "pinned-model")}},
+		MemoryRetriever: &memoryStub{},
+	})
+
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatalf("StartChat returned unexpected error: %v", err)
+	}
+	result, err := session.Turn(context.Background(), "finish")
+	if err != nil {
+		t.Fatalf("Turn returned unexpected error: %v", err)
+	}
+	if !result.Verification.RepairTriggered || result.Output != "done now" || result.Verification.Status != verificationSatisfied {
+		t.Fatalf("expected retry repair to satisfy the turn, got output=%q verification=%#v", result.Output, result.Verification)
+	}
+}
+
 func TestChatConversationRunsToolCallsWithApprovalPath(t *testing.T) {
 	t.Parallel()
 

@@ -224,17 +224,17 @@ func (t *configTab) viewSettings(width, height int) string {
 		col = 40
 	}
 
-	b.WriteString("\n  ")
-	b.WriteString(styleSectionTitle.Render("Settings & Setup"))
+	b.WriteString(renderPageHeader("Settings", "provider, safety, memory, and runtime behavior", width))
 	b.WriteString("  ")
+	b.WriteString(styleMuted.Render("State "))
 	if t.dirty {
-		b.WriteString(styleWarning.Render("unsaved"))
+		b.WriteString(renderStatusBadge("unsaved", false))
 	} else {
-		b.WriteString(styleSuccess.Render("saved"))
+		b.WriteString(renderStatusBadge("saved", true))
 	}
 	b.WriteString("\n")
 	b.WriteString("  ")
-	b.WriteString(styleMuted.Render("Use this screen for first setup and ongoing configuration. Press s to write ~/.cvkeharness/config.yaml."))
+	b.WriteString(styleMuted.Render("Press s to write ~/.cvkeharness/config.yaml. Select fields cycle values or open an editor."))
 	b.WriteString("\n\n")
 
 	if t.message != "" {
@@ -249,11 +249,7 @@ func (t *configTab) viewSettings(width, height int) string {
 	}
 
 	header := padRight("", 3) + padRight("Setting", 20) + "  " + padRight("Value", 34) + "  " + "Notes"
-	b.WriteString("  ")
-	b.WriteString(styleMuted.Render(truncate(header, col)))
-	b.WriteString("\n  ")
-	b.WriteString(horizontalRule(col))
-	b.WriteString("\n")
+	b.WriteString(renderTableHeader(width, header))
 
 	listHeight := height - 9
 	if listHeight < 4 {
@@ -283,7 +279,7 @@ func (t *configTab) renderFieldRow(idx, col int, selected bool) string {
 	}
 	row := padRight(field.Label, 20) + "  " + padRight(truncate(value, 34), 34) + "  " + truncate(field.Description, maxInt(col-60, 12))
 	if selected {
-		return styleAccent.Render("▸ ") + styleSelectedRow.Render(row)
+		return renderSelectableRow(row, true)
 	}
 	return "  " + styleBase.Render(row)
 }
@@ -291,9 +287,7 @@ func (t *configTab) renderFieldRow(idx, col int, selected bool) string {
 func (t *configTab) viewEditor(width int) string {
 	field := t.fields[t.editIdx]
 	var b strings.Builder
-	b.WriteString("\n  ")
-	b.WriteString(styleSectionTitle.Render(field.Label))
-	b.WriteString("\n\n")
+	b.WriteString(renderPageHeader(field.Label, "edit setting", width))
 	b.WriteString("  ")
 	b.WriteString(styleMuted.Render(field.Description))
 	b.WriteString("\n\n  ")

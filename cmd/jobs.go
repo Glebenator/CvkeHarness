@@ -1,11 +1,9 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/coolcake/cvkeharness/agent"
@@ -13,6 +11,7 @@ import (
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/log"
 	"github.com/coolcake/cvkeharness/internal/promptdump"
+	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/router"
 	"github.com/coolcake/cvkeharness/scheduler"
@@ -289,13 +288,23 @@ func openState() (*state.Store, func(), error) {
 }
 
 func confirmCLI(prompt string) bool {
-	fmt.Printf("%s [y/N] ", prompt)
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
+	idx, err := termui.Select(termui.SelectOptions{
+		Title: prompt,
+		Details: []string{
+			"Review the diff above before applying the change.",
+		},
+		Choices: []termui.Choice{
+			{Label: "Cancel", Description: "Leave the current crontab unchanged"},
+			{Label: "Apply change", Description: "Write the reviewed crontab update"},
+		},
+		InitialIndex: 0,
+		In:           os.Stdin,
+		Out:          os.Stdout,
+	})
+	if err != nil {
 		return false
 	}
-	answer := strings.ToLower(strings.TrimSpace(scanner.Text()))
-	return answer == "y" || answer == "yes"
+	return idx == 1
 }
 
 func init() {

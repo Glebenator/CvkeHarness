@@ -39,7 +39,7 @@ const (
 	hSep        = termui.HeaderSeparator
 )
 
-// goBack is returned by selectList when the user presses Backspace.
+// goBack is returned by selectList when the user navigates back.
 const goBack = termui.GoBack
 
 // ─── UI components ────────────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ func renderStep(step, total int, title string) {
 }
 
 // selectList renders an arrow-key navigable list and returns the chosen index,
-// or goBack (-1) when the user presses Backspace and canGoBack is true.
+// or goBack (-1) when the user navigates back and canGoBack is true.
 func selectList(items [][2]string, initial int, canGoBack bool) int {
 	listItems := make([]termui.ListItem, 0, len(items))
 	for _, item := range items {
@@ -945,7 +945,7 @@ func wizardOpenRouterKey(cfg *config.Config) bool {
 
 			retry := [][2]string{
 				{"Try a different key", "paste or type another key"},
-				{"← Return to provider selection", ""},
+				{"Return to provider selection", ""},
 			}
 			if selectList(retry, 0, false) == 1 {
 				return false
@@ -988,7 +988,7 @@ func wizardCodexCLIAuth(cfg *config.Config) bool {
 			choices := [][2]string{
 				{"Use this Codex login", "ChatGPT subscription limits apply"},
 				{"I changed accounts; check again", "re-read the Codex CLI auth cache"},
-				{"← Return to provider selection", ""},
+				{"Return to provider selection", ""},
 			}
 			switch selectList(choices, 0, true) {
 			case goBack, 2:
@@ -1010,7 +1010,7 @@ func wizardCodexCLIAuth(cfg *config.Config) bool {
 
 		choices := [][2]string{
 			{"Check again", "I completed `codex login`"},
-			{"← Return to provider selection", ""},
+			{"Return to provider selection", ""},
 		}
 		if selectList(choices, 0, true) != 0 {
 			return false
@@ -1071,7 +1071,7 @@ func wizardOpenAIKey(cfg *config.Config) bool {
 
 			retry := [][2]string{
 				{"Try a different key", "paste or type another API key"},
-				{"← Return to provider selection", ""},
+				{"Return to provider selection", ""},
 			}
 			if selectList(retry, 0, false) == 1 {
 				return false
@@ -1887,7 +1887,7 @@ func runSetupWizard(mode string) {
 	selectedSoulProfile := defaultSoulProfile()
 	var selectedHostNotes []string
 
-	// ── Step loop with Backspace back-navigation ──────────────────────
+	// ── Step loop with backward navigation ─────────────────────────────
 	step := 1
 	for step >= 1 && step <= totalSteps {
 		var advanced bool

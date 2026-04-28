@@ -59,23 +59,8 @@ func (t *overviewTab) View(width, height int) string {
 	var b strings.Builder
 	col := width - 4
 
-	// ── Config summary ──────────────────────────────────────────
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(styleSectionTitle.Render("Configuration"))
-	b.WriteString("\n\n")
-
-	// This will be populated from the service config in the real view.
-	// For now, show a placeholder that the app.go will fill via service.
+	b.WriteString(renderPageHeader("Overview", "configuration, activity, and next work", width))
 	b.WriteString(t.configBlock(col))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(horizontalRule(col))
-	b.WriteString("\n\n")
-
-	// ── Quick stats ─────────────────────────────────────────────
-	b.WriteString("  ")
-	b.WriteString(styleSectionTitle.Render("Activity"))
 	b.WriteString("\n\n")
 	b.WriteString(t.statsBlock(col))
 	b.WriteString("\n")
@@ -88,9 +73,7 @@ func (t *overviewTab) View(width, height int) string {
 	b.WriteString(styleSectionTitle.Render("Recent Runs"))
 	b.WriteString("\n\n")
 	if len(t.runs) == 0 {
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("No runs recorded yet"))
-		b.WriteString("\n")
+		b.WriteString(renderEmptyState("No runs recorded yet", "Run an agent task to populate this feed.", "", ""))
 	}
 	for _, run := range t.runs {
 		b.WriteString("  ")
@@ -104,9 +87,7 @@ func (t *overviewTab) View(width, height int) string {
 	b.WriteString(styleSectionTitle.Render("Scheduled Jobs"))
 	b.WriteString("\n\n")
 	if len(t.jobs) == 0 {
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("No jobs configured"))
-		b.WriteString("\n")
+		b.WriteString(renderEmptyState("No jobs configured", "Create a job from the Jobs tab when you want recurring work.", "", ""))
 	}
 	shown := minInt(len(t.jobs), 5)
 	for _, job := range t.jobs[:shown] {

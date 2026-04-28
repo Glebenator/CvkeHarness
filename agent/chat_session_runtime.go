@@ -189,17 +189,14 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 
 	var actualModel = c.selection.Requested.Model
 	var refreshed bool
-	var repairUsed bool
+	var repairAttempts int
 	var latestVerification CompletionVerification
 	var latestVerificationRecord state.PhaseRecord
 	failuresByTool := make(map[string]int)
 	var toolOutcomes []state.ToolOutcome
 	var observedCalls []memory.ObservedToolCall
 
-	for iter := 1; iter <= c.agent.opts.MaxIterations+1; iter++ {
-		if iter > c.agent.opts.MaxIterations && !repairUsed {
-			break
-		}
+	for iter := 1; iter <= c.agent.opts.MaxIterations; iter++ {
 		iterCtx := log.WithIteration(ctx, iter)
 		req := &provider.ChatRequest{
 			Model:       c.selection.Requested.Model,
@@ -260,7 +257,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, output, nil
 			}
 			verification, verificationRecord, err := c.agent.verifyCompletion(iterCtx, c.selection, taskClass, prompt, output, observedCalls, nil)
-			verification.RepairTriggered = repairUsed
+			verification.RepairTriggered = repairAttempts > 0
 			latestVerification = verification
 			latestVerificationRecord = verificationRecord
 			if err != nil {
@@ -271,8 +268,8 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				phaseRecord.Success = true
 				return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, nil
 			}
-			if !repairUsed {
-				repairUsed = true
+			if iter < c.agent.opts.MaxIterations {
+				repairAttempts++
 				verification.RepairTriggered = true
 				latestVerification = verification
 				turnChat.AddSystem(verification.repairPrompt())

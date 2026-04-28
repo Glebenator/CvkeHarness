@@ -266,15 +266,12 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	var output string
 	var actualModel = selection.Requested.Model
 	var refreshed bool
-	var repairUsed bool
+	var repairAttempts int
 	var latestVerification CompletionVerification
 	var latestVerificationRecord state.PhaseRecord
 	failuresByTool := make(map[string]int)
 
-	for iter := 1; iter <= a.opts.MaxIterations+1; iter++ {
-		if iter > a.opts.MaxIterations && !repairUsed {
-			break
-		}
+	for iter := 1; iter <= a.opts.MaxIterations; iter++ {
 		iterCtx := log.WithIteration(ctx, iter)
 		req := &provider.ChatRequest{
 			Model:       selection.Requested.Model,
@@ -337,15 +334,15 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 			if err != nil {
 				return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("completion verification failed: %w", err)
 			}
-			verification.RepairTriggered = repairUsed
+			verification.RepairTriggered = repairAttempts > 0
 			latestVerification = verification
 			if verification.satisfied() {
 				logger.Info("agent finished task after verification")
 				phaseRecord.Success = true
 				return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, nil
 			}
-			if !repairUsed {
-				repairUsed = true
+			if iter < a.opts.MaxIterations {
+				repairAttempts++
 				verification.RepairTriggered = true
 				latestVerification = verification
 				chat.AddSystem(verification.repairPrompt())

@@ -192,7 +192,7 @@ func TestRunScenarioVerificationRepairExhaustion(t *testing.T) {
 		ProviderName:    "openrouter",
 		ToolRegistry:    tools.NewRegistry(),
 		DefaultModel:    "test-model",
-		MaxIterations:   3,
+		MaxIterations:   2,
 		MaxTokens:       512,
 		MemoryRetriever: &memoryStub{},
 	}).Run(context.Background(), "check if docker is running, and if not, start it")
@@ -201,6 +201,44 @@ func TestRunScenarioVerificationRepairExhaustion(t *testing.T) {
 	}
 	if result.Run.Success || result.Verification.Status != verificationUnsatisfied {
 		t.Fatalf("expected failed run with unsatisfied verification, got run=%#v verification=%#v", result.Run, result.Verification)
+	}
+}
+
+func TestRunScenarioVerificationRepairRetriesWithinIterationBudget(t *testing.T) {
+	t.Parallel()
+
+	provider := newScriptedProvider(t,
+		scriptedProviderStep{name: "premature final", resp: assistantText("Docker is not running. I can start it for you.")},
+		scriptedProviderStep{name: "unsatisfied", resp: verifierJSON(verificationUnsatisfied, "Not started.", []string{"Start Docker."}, "Start Docker now.")},
+		scriptedProviderStep{
+			name:   "first repair still incomplete",
+			expect: expectLastMessage("system", "Start Docker now"),
+			resp:   assistantText("I will start Docker next."),
+		},
+		scriptedProviderStep{name: "unsatisfied again", resp: verifierJSON(verificationUnsatisfied, "Still not started.", []string{"Start Docker."}, "Stop promising and start Docker now.")},
+		scriptedProviderStep{
+			name:   "second repair completes",
+			expect: expectLastMessage("system", "Stop promising and start Docker now"),
+			resp:   assistantText("Docker was not running, so I started it."),
+		},
+		scriptedProviderStep{name: "verification satisfied", resp: verifierJSON(verificationSatisfied, "The second repair completed the action.", nil, "")},
+	)
+
+	result, err := New(Options{
+		Provider:        provider,
+		ProviderName:    "openrouter",
+		ToolRegistry:    tools.NewRegistry(),
+		DefaultModel:    "test-model",
+		MaxIterations:   3,
+		MaxTokens:       512,
+		MemoryRetriever: &memoryStub{},
+	}).Run(context.Background(), "check if docker is running, and if not, start it")
+	if err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+	provider.AssertComplete(t)
+	if !result.Verification.RepairTriggered || result.Verification.Status != verificationSatisfied {
+		t.Fatalf("expected retry repair to satisfy run, got verification=%#v", result.Verification)
 	}
 }
 
@@ -219,7 +257,7 @@ func TestRunScenarioMalformedVerificationJSONFailsAfterRepair(t *testing.T) {
 		ProviderName:    "openrouter",
 		ToolRegistry:    tools.NewRegistry(),
 		DefaultModel:    "test-model",
-		MaxIterations:   3,
+		MaxIterations:   2,
 		MaxTokens:       512,
 		MemoryRetriever: &memoryStub{},
 	}).Run(context.Background(), "do a task")
