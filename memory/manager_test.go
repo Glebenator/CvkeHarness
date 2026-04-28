@@ -355,6 +355,107 @@ func TestSeedRuntimeHostNotesRoundTripsThroughStoreAndRetrieval(t *testing.T) {
 	}
 }
 
+func TestClassifyIntentTreatsSpeedTestAsNetworkDebug(t *testing.T) {
+	t.Parallel()
+
+	if got := classifyIntent("run a speed test and record ping"); got != IntentNetworkDebug {
+		t.Fatalf("expected speed test to classify as network debug, got %q", got)
+	}
+}
+
+func TestSelectCautionSkipsUnrelatedHighFailureCaution(t *testing.T) {
+	t.Parallel()
+
+	mem := fileState{
+		Cautions: []state.Caution{
+			{
+				ID:           "docker",
+				TargetID:     "runtime",
+				Intent:       IntentDockerRecovery,
+				ToolName:     "shell_execute",
+				Status:       "active",
+				Body:         "Docker command was denied.",
+				Confidence:   0.95,
+				FailureCount: 99,
+			},
+			{
+				ID:           "network",
+				TargetID:     "runtime",
+				Intent:       IntentNetworkDebug,
+				ToolName:     "shell_execute",
+				Status:       "active",
+				Body:         "Avoid blocked one-off speedtest download pipes.",
+				Confidence:   0.8,
+				FailureCount: 1,
+			},
+		},
+	}
+
+	got := selectCaution(mem, "runtime", IntentNetworkDebug, "schedule_manage")
+	if got == nil || got.ID != "network" {
+		t.Fatalf("expected matching network caution, got %#v", got)
+	}
+}
+
+func TestSelectPlaybookDoesNotMatchGenericShellToolOnly(t *testing.T) {
+	t.Parallel()
+
+	mem := fileState{
+		Playbooks: []state.Playbook{
+			{
+				ID:           "health",
+				TargetID:     "runtime",
+				Intent:       IntentGeneral,
+				ToolName:     "shell_execute",
+				Status:       "active",
+				Title:        "General health check",
+				Confidence:   0.95,
+				SuccessCount: 10,
+			},
+		},
+	}
+
+	got, strength := selectPlaybook(mem, "runtime", IntentNetworkDebug, "shell_execute")
+	if got != nil || strength != 0 {
+		t.Fatalf("expected no shell-only playbook match, got playbook=%#v strength=%d", got, strength)
+	}
+}
+
+func TestSelectFindingSkipsNoisyRunOutcome(t *testing.T) {
+	t.Parallel()
+
+	mem := fileState{
+		Findings: []state.Finding{
+			{
+				ID:         "noise",
+				TargetID:   "runtime",
+				Intent:     IntentNetworkDebug,
+				Status:     "active",
+				Origin:     "run_outcome",
+				Body:       "I’ll do that next.",
+				Confidence: 0.65,
+				SeenCount:  20,
+			},
+			{
+				ID:         "useful",
+				TargetID:   "runtime",
+				Intent:     IntentNetworkDebug,
+				ToolName:   "shell_execute",
+				Status:     "active",
+				Origin:     "ad_hoc",
+				Body:       "Use the installed speedtest CLI instead of downloading one-off scripts.",
+				Confidence: 0.9,
+				SeenCount:  1,
+			},
+		},
+	}
+
+	got := selectFinding(mem, "runtime", IntentNetworkDebug, "shell_execute")
+	if got == nil || got.ID != "useful" {
+		t.Fatalf("expected useful ad hoc finding, got %#v", got)
+	}
+}
+
 func TestRollbackRestoresFindingsAndReindexes(t *testing.T) {
 	t.Parallel()
 

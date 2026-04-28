@@ -13,6 +13,7 @@ import (
 // - Typing ":back" always goes back.
 // - Pressing Enter with an empty field and no default goes back.
 // - Pressing Enter with an empty field that has a default uses the default.
+// Raw escape-key navigation is reserved for full-screen prompts.
 func PromptText(label, defaultVal string, canGoBack bool) (string, bool, error) {
 	RenderSectionTitle(label)
 	if defaultVal != "" {
@@ -22,7 +23,7 @@ func PromptText(label, defaultVal string, canGoBack bool) (string, bool, error) 
 			fmt.Printf("  %s│%s %stype :back to return to the previous step%s\n", FGMuted, ANSIReset, FGMuted+ANSIDim, ANSIReset)
 		}
 	} else if canGoBack {
-		fmt.Printf("  %s│%s %sleave blank to go back%s\n", FGMuted, ANSIReset, FGMuted+ANSIDim, ANSIReset)
+		fmt.Printf("  %s│%s %sleave blank or type :back to return to the previous step%s\n", FGMuted, ANSIReset, FGMuted+ANSIDim, ANSIReset)
 	}
 
 	fmt.Printf("\n  %s%s▸%s  ", FGAccent, ANSIBold, ANSIReset)

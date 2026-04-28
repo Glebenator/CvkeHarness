@@ -43,11 +43,11 @@ const (
 type createStep int
 
 const (
-	createStepName     createStep = iota
-	createStepKind                // schedule kind selection
-	createStepSpec                // schedule spec input
-	createStepPrompt              // agent prompt input
-	createStepConfirm             // review and confirm
+	createStepName    createStep = iota
+	createStepKind               // schedule kind selection
+	createStepSpec               // schedule spec input
+	createStepPrompt             // agent prompt input
+	createStepConfirm            // review and confirm
 	createStepCount
 )
 
@@ -427,7 +427,7 @@ func (t *jobsTab) viewList(width, height int) string {
 	var b strings.Builder
 	col := width - 4
 
-	b.WriteString("\n")
+	b.WriteString(renderPageHeader("Jobs", "scheduled agent work and run history", width))
 
 	if t.message != "" {
 		b.WriteString("  ")
@@ -436,28 +436,19 @@ func (t *jobsTab) viewList(width, height int) string {
 	}
 
 	if len(t.jobs) == 0 {
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("No scheduled jobs. Press "))
-		b.WriteString(styleKeyHelpKey.Render("n"))
-		b.WriteString(styleMuted.Render(" to create one."))
-		b.WriteString("\n")
+		b.WriteString(renderEmptyState("No scheduled jobs", "Create recurring or one-time agent work from here.", "n", "new job"))
 		return b.String()
 	}
 
 	// Column headers
 	nameCol := maxInt(col-65, 15)
-	b.WriteString("  ")
-	b.WriteString(styleMuted.Render(
-		padRight("", 3) +
-			padRight("Name", nameCol) + "  " +
-			padRight("Schedule", 22) + "  " +
-			padRight("Status", 10) + "  " +
-			padRight("Next Run", 16) + "  " +
+	b.WriteString(renderTableHeader(width,
+		padRight("", 3)+
+			padRight("Name", nameCol)+"  "+
+			padRight("Schedule", 22)+"  "+
+			padRight("Status", 10)+"  "+
+			padRight("Next Run", 16)+"  "+
 			padRight("Last", 10)))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(horizontalRule(col))
-	b.WriteString("\n")
 
 	// Windowed rendering
 	headerLines := 4 // top padding + message + headers + rule
@@ -509,10 +500,7 @@ func (t *jobsTab) renderJobRow(job state.ScheduledJob, col, nameCol int, selecte
 
 	row := fmt.Sprintf("%s  %s  %s  %s  %s  %s", icon, name, sched, status, next, last)
 
-	if selected {
-		return styleAccent.Render("▸ ") + styleSelectedRow.Render(row)
-	}
-	return "  " + row
+	return renderSelectableRow(row, selected)
 }
 
 func (t *jobsTab) viewDetail(width, height int) string {
@@ -754,5 +742,3 @@ func (t *jobsTab) viewDelete(width, height int) string {
 
 	return b.String()
 }
-
-var styleAccent = styleSectionTitle // Reuse the amber accent for consistency

@@ -29,6 +29,7 @@ const (
 	listKeyDown
 	listKeyEnter
 	listKeyCtrlC
+	listKeyEsc
 	listKeyBackspace
 )
 
@@ -89,6 +90,11 @@ func SelectList(items []ListItem, initial int, canGoBack bool) (int, error) {
 			}
 		case listKeyEnter:
 			return selected, nil
+		case listKeyEsc:
+			if canGoBack {
+				return GoBack, nil
+			}
+			return 0, ErrInterrupted
 		case listKeyBackspace:
 			if canGoBack {
 				return GoBack, nil
@@ -288,9 +294,9 @@ func numberedFallback(items []ListItem, initial int, canGoBack bool) (int, error
 }
 
 func buildListHint(canGoBack bool) string {
-	parts := []string{"↑↓ navigate", "Return select", "^C quit"}
+	parts := []string{"↑↓ move", "Enter select", "Ctrl+C quit"}
 	if canGoBack {
-		parts = append([]string{"← Backspace: back"}, parts...)
+		parts = append([]string{"Esc back"}, parts...)
 	}
 	return strings.Join(parts, "   ")
 }
@@ -304,6 +310,8 @@ func nextListKey() listKeyKind {
 	switch {
 	case n == 1 && (buf[0] == 3 || buf[0] == 4):
 		return listKeyCtrlC
+	case n == 1 && buf[0] == 27:
+		return listKeyEsc
 	case n == 1 && (buf[0] == 13 || buf[0] == 10):
 		return listKeyEnter
 	case n == 1 && (buf[0] == 127 || buf[0] == 8):

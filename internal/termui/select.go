@@ -41,6 +41,7 @@ const (
 	keyUp
 	keyDown
 	keyEnter
+	keyEsc
 	keyCtrlC
 )
 
@@ -123,14 +124,14 @@ func selectFallback(in io.Reader, out io.Writer, opts SelectOptions) (int, error
 	case "y", "yes":
 		for i, choice := range opts.Choices {
 			label := strings.ToLower(choice.Label)
-			if strings.Contains(label, "approve") {
+			if strings.Contains(label, "approve") || strings.Contains(label, "apply") || strings.Contains(label, "allow") {
 				return i, nil
 			}
 		}
 	case "n", "no":
 		for i, choice := range opts.Choices {
 			label := strings.ToLower(choice.Label)
-			if strings.Contains(label, "reject") || strings.Contains(label, "deny") || strings.Contains(label, "stay") {
+			if strings.Contains(label, "reject") || strings.Contains(label, "deny") || strings.Contains(label, "stay") || strings.Contains(label, "cancel") {
 				return i, nil
 			}
 		}
@@ -181,7 +182,7 @@ func selectRaw(in *os.File, out io.Writer, opts SelectOptions) (int, error) {
 				return 0, err
 			}
 			return selected, nil
-		case keyCtrlC:
+		case keyEsc, keyCtrlC:
 			return 0, ErrInterrupted
 		default:
 			continue
@@ -315,7 +316,7 @@ func renderInteractiveChoices(out io.Writer, opts SelectOptions, selected, boxWi
 	}
 	lineCount++
 
-	hint := colorize(ansiDim+fgMuted, "Use ←/→ to switch, Enter to confirm, Ctrl+C to cancel.")
+	hint := colorize(ansiDim+fgMuted, "Use ↑↓ or ←→ to choose, Enter to confirm, Esc/Ctrl+C to cancel.")
 	if _, err := fmt.Fprintln(out, clearLine(hint)); err != nil {
 		return 0, err
 	}
@@ -374,9 +375,9 @@ func maxChoiceBodyLines(choices []Choice, width int) int {
 func choiceTone(choice Choice) string {
 	label := strings.ToLower(choice.Label)
 	switch {
-	case strings.Contains(label, "reject"), strings.Contains(label, "deny"), strings.Contains(label, "stay"):
+	case strings.Contains(label, "reject"), strings.Contains(label, "deny"), strings.Contains(label, "stay"), strings.Contains(label, "cancel"):
 		return fgCoral
-	case strings.Contains(label, "approve"), strings.Contains(label, "allow"):
+	case strings.Contains(label, "approve"), strings.Contains(label, "apply"), strings.Contains(label, "allow"):
 		return fgGreen
 	default:
 		return fgCyan
@@ -510,6 +511,8 @@ func nextKey(in *os.File) (keyKind, error) {
 	switch {
 	case n == 1 && (buf[0] == 3 || buf[0] == 4):
 		return keyCtrlC, nil
+	case n == 1 && buf[0] == 27:
+		return keyEsc, nil
 	case n == 1 && (buf[0] == 13 || buf[0] == 10):
 		return keyEnter, nil
 	case n >= 3 && buf[0] == 27 && buf[1] == '[' && buf[2] == 'C':

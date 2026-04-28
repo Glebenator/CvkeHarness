@@ -260,7 +260,7 @@ func selectPlaybook(mem fileState, targetID, intent, toolName string) (*state.Pl
 			strength = 4
 		case playbook.Intent == intent && playbook.Intent != "":
 			strength = 3
-		case playbook.ToolName != "" && playbook.ToolName == toolName && toolName != "":
+		case playbook.ToolName != "" && playbook.ToolName == toolName && toolName != "" && toolName != "shell_execute":
 			strength = 2
 		default:
 			continue
@@ -295,16 +295,19 @@ func selectCaution(mem fileState, targetID, intent, toolName string) *state.Caut
 		if caution.TargetID != targetID || caution.Status == "inactive" {
 			continue
 		}
+		intentMatches := caution.Intent == intent && caution.Intent != ""
+		toolMatches := caution.ToolName == toolName && caution.ToolName != "" && toolName != ""
+		if !intentMatches && !toolMatches {
+			continue
+		}
 		score := caution.Confidence + float64(caution.FailureCount)
 		switch {
-		case caution.Intent == intent && caution.ToolName == toolName && toolName != "":
+		case intentMatches && toolMatches:
 			score += 4
-		case caution.Intent == intent && caution.Intent != "":
+		case intentMatches:
 			score += 3
-		case caution.ToolName == toolName && caution.ToolName != "" && toolName != "":
+		case toolMatches:
 			score += 2
-		default:
-			score += 1
 		}
 		candidates = append(candidates, cautionCandidate{Caution: caution, Score: score})
 	}
@@ -325,6 +328,14 @@ func selectFinding(mem fileState, targetID, intent, toolName string) *state.Find
 		if finding.Status == "inactive" {
 			continue
 		}
+		if !retrievableFinding(finding) {
+			continue
+		}
+		intentMatches := finding.Intent == intent && finding.Intent != ""
+		toolMatches := finding.ToolName != "" && finding.ToolName == toolName && toolName != ""
+		if !intentMatches && !toolMatches {
+			continue
+		}
 		score := finding.Confidence + float64(finding.SeenCount)
 		if finding.TargetID == targetID {
 			score += 4
@@ -333,10 +344,10 @@ func selectFinding(mem fileState, targetID, intent, toolName string) *state.Find
 		} else {
 			continue
 		}
-		if finding.Intent == intent && finding.Intent != "" {
+		if intentMatches {
 			score += 2
 		}
-		if finding.ToolName != "" && finding.ToolName == toolName && toolName != "" {
+		if toolMatches {
 			score += 1.5
 		}
 		candidates = append(candidates, findingCandidate{Finding: finding, Score: score})
@@ -346,6 +357,25 @@ func selectFinding(mem fileState, targetID, intent, toolName string) *state.Find
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].Score > candidates[j].Score })
 	return &candidates[0].Finding
+}
+
+func retrievableFinding(finding state.Finding) bool {
+	body := strings.TrimSpace(finding.Body)
+	if len([]rune(body)) < 20 {
+		return false
+	}
+	lower := strings.ToLower(body)
+	if lower == "got it." || lower == "done." || strings.HasPrefix(lower, "i need ") || strings.HasPrefix(lower, "i'll ") {
+		return false
+	}
+	switch finding.Origin {
+	case "ad_hoc", "legacy_memory":
+		return true
+	case "run_outcome":
+		return finding.Confidence >= 0.85 && finding.SeenCount >= 2
+	default:
+		return finding.Confidence >= 0.85
+	}
 }
 
 func builtInRules() string {
@@ -731,6 +761,8 @@ func classifyIntent(task string) string {
 		return IntentInstallDependency
 	case strings.Contains(lower, "docker"):
 		return IntentDockerRecovery
+	case strings.Contains(lower, "speedtest") || strings.Contains(lower, "speed test") || strings.Contains(lower, "bandwidth") || strings.Contains(lower, "ping"):
+		return IntentNetworkDebug
 	case strings.Contains(lower, "port") && (strings.Contains(lower, "conflict") || strings.Contains(lower, "in use")):
 		return IntentPortConflict
 	case strings.Contains(lower, "network") || strings.Contains(lower, "dns"):

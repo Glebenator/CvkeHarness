@@ -63,3 +63,15 @@ func TestListVisibleRowsReservesRoomForWizardChrome(t *testing.T) {
 		t.Fatalf("listVisibleRows(3, 24) = %d, want 3", got)
 	}
 }
+
+func TestBuildListHintUsesSharedNavigationLanguage(t *testing.T) {
+	hint := buildListHint(true)
+	for _, want := range []string{"Esc back", "↑↓ move", "Enter select", "Ctrl+C quit"} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("buildListHint(true) = %q, missing %q", hint, want)
+		}
+	}
+	if strings.Contains(hint, "Backspace") {
+		t.Fatalf("buildListHint(true) should not present Backspace as primary navigation: %q", hint)
+	}
+}

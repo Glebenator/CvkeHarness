@@ -152,12 +152,7 @@ func (t *chatTab) viewList(width, height int) string {
 	var b strings.Builder
 	col := width - 4
 
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(styleSectionTitle.Render("Chat"))
-	b.WriteString("  ")
-	b.WriteString(styleMuted.Render("history and live entry point"))
-	b.WriteString("\n\n")
+	b.WriteString(renderPageHeader("Chat", "history and live entry point", width))
 
 	if t.message != "" {
 		b.WriteString("  ")
@@ -166,27 +161,18 @@ func (t *chatTab) viewList(width, height int) string {
 	}
 
 	if len(t.sessions) == 0 {
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("No chat sessions recorded yet"))
-		b.WriteString("\n\n  ")
-		b.WriteString(styleAccent.Render("Press n to start a chat session."))
-		b.WriteString("\n")
+		b.WriteString(renderEmptyState("No chat sessions recorded yet", "Start a conversation when you want an interactive agent loop.", "n", "new chat"))
 		return b.String()
 	}
 
 	// Column headers
-	b.WriteString("  ")
-	b.WriteString(styleMuted.Render(
-		padRight("", 3) +
-			padRight("Date", 14) + "  " +
-			padRight("Model", 30) + "  " +
-			padRight("Turns", 7) + "  " +
-			padRight("Duration", 10) + "  " +
+	b.WriteString(renderTableHeader(width,
+		padRight("", 3)+
+			padRight("Date", 14)+"  "+
+			padRight("Model", 30)+"  "+
+			padRight("Turns", 7)+"  "+
+			padRight("Duration", 10)+"  "+
 			padRight("Exit", 15)))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(horizontalRule(col))
-	b.WriteString("\n")
 
 	// Windowed rendering
 	listHeight := height - 5
@@ -240,10 +226,7 @@ func (t *chatTab) renderSessionRow(session state.ChatSessionSummary, col int, se
 	exit := padRight(truncate(session.ExitReason, 15), 15)
 
 	row := fmt.Sprintf("%s  %s  %s  %s  %s  %s", icon, date, model, turns, dur, exit)
-	if selected {
-		return styleAccent.Render("▸ ") + styleSelectedRow.Render(row)
-	}
-	return "  " + row
+	return renderSelectableRow(row, selected)
 }
 
 func (t *chatTab) viewDetail(width, height int) string {

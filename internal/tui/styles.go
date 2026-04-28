@@ -39,6 +39,8 @@ var (
 				Foreground(colorAccent).
 				Bold(true)
 
+	styleAccent = styleSectionTitle
+
 	// Text variants
 	styleBase = lipgloss.NewStyle().
 			Foreground(colorBase)
@@ -66,9 +68,9 @@ var (
 	colorHighlight = lipgloss.Color("#3a3533") // clearly raised surface for selection
 
 	styleSelectedRow = lipgloss.NewStyle().
-			Background(colorHighlight).
-			Foreground(colorBrightText).
-			Bold(true)
+				Background(colorHighlight).
+				Foreground(colorBrightText).
+				Bold(true)
 
 	// Status bar at bottom
 	styleStatusBar = lipgloss.NewStyle().
@@ -92,16 +94,16 @@ var (
 			Bold(true)
 
 	styleInputPrompt = lipgloss.NewStyle().
-			Foreground(colorMuted)
+				Foreground(colorMuted)
 
 	styleInputActive = lipgloss.NewStyle().
-			Foreground(colorBrightText)
+				Foreground(colorBrightText)
 
 	// Detail pane label/value
 	styleDetailLabel = lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Width(16)
+				Foreground(colorMuted).
+				Width(16)
 
 	styleDetailValue = lipgloss.NewStyle().
-			Foreground(colorBase)
+				Foreground(colorBase)
 )

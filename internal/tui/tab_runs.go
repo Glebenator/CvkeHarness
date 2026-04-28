@@ -115,30 +115,23 @@ func (t *runsTab) viewList(width, height int) string {
 	var b strings.Builder
 	col := width - 4
 
-	b.WriteString("\n")
+	b.WriteString(renderPageHeader("Runs", "agent executions and tool traces", width))
 
 	if len(t.runs) == 0 {
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("No agent runs recorded yet"))
-		b.WriteString("\n")
+		b.WriteString(renderEmptyState("No agent runs recorded yet", "Run a task from the CLI or chat to see execution history here.", "", ""))
 		return b.String()
 	}
 
 	// Column headers
 	nameCol := maxInt(col-70, 15)
-	b.WriteString("  ")
-	b.WriteString(styleMuted.Render(
-		padRight("", 3) +
-			padRight("Task", nameCol) + "  " +
-			padRight("Model", 25) + "  " +
-			padRight("Duration", 10) + "  " +
-			padRight("Tokens", 8) + "  " +
-			padRight("Tools", 7) + "  " +
+	b.WriteString(renderTableHeader(width,
+		padRight("", 3)+
+			padRight("Task", nameCol)+"  "+
+			padRight("Model", 25)+"  "+
+			padRight("Duration", 10)+"  "+
+			padRight("Tokens", 8)+"  "+
+			padRight("Tools", 7)+"  "+
 			padRight("When", 10)))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(horizontalRule(col))
-	b.WriteString("\n")
 
 	// Windowed rendering: cursor stays visible
 	listHeight := height - 5
@@ -201,10 +194,7 @@ func (t *runsTab) renderRunRow(run state.RunSummary, col, nameCol int, selected 
 	when := padRight(timeAgo(run.StartedAt), 10)
 
 	row := fmt.Sprintf("%s  %s  %s  %s  %s  %s  %s", icon, task, model, dur, tokens, toolCount, when)
-	if selected {
-		return styleAccent.Render("▸ ") + styleSelectedRow.Render(row)
-	}
-	return "  " + row
+	return renderSelectableRow(row, selected)
 }
 
 func (t *runsTab) viewDetail(width, height int) string {
