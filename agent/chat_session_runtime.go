@@ -169,12 +169,6 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 	transcript := []provider.Message{userMessage}
 
 	systemMessages := append([]provider.Message(nil), c.seed...)
-	if text := retrievedBrief(retrieved); strings.TrimSpace(text) != "" {
-		systemMessages = append(systemMessages, provider.Message{
-			Role:    "system",
-			Content: "Turn context:\n" + text,
-		})
-	}
 
 	turnChat := NewChatState(append(systemMessages, c.history.Messages()...)...)
 	toolDefs := c.agent.opts.ToolRegistry.Definitions()
