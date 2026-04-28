@@ -666,23 +666,26 @@ func compactMemoryPreview(text string) string {
 }
 
 func initialSystemMessages(retrieved memory.RetrievalResult, planningNotes string) []provider.Message {
-	var messages []provider.Message
+	var parts []string
 	if strings.TrimSpace(retrieved.BuiltInRules) != "" {
-		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.BuiltInRules)})
+		parts = append(parts, strings.TrimSpace(retrieved.BuiltInRules))
 	}
 	if strings.TrimSpace(retrieved.Operator) != "" {
-		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.Operator)})
+		parts = append(parts, strings.TrimSpace(retrieved.Operator))
 	}
 	if strings.TrimSpace(retrieved.Soul) != "" {
-		messages = append(messages, provider.Message{Role: "system", Content: strings.TrimSpace(retrieved.Soul)})
+		parts = append(parts, strings.TrimSpace(retrieved.Soul))
 	}
 	if text := retrievedBrief(retrieved); strings.TrimSpace(text) != "" {
-		messages = append(messages, provider.Message{Role: "system", Content: text})
+		parts = append(parts, text)
 	}
 	if strings.TrimSpace(planningNotes) != "" {
-		messages = append(messages, provider.Message{Role: "system", Content: "Planning notes:\n" + strings.TrimSpace(planningNotes)})
+		parts = append(parts, "Planning notes:\n"+strings.TrimSpace(planningNotes))
 	}
-	return messages
+	if len(parts) == 0 {
+		return nil
+	}
+	return []provider.Message{{Role: "system", Content: strings.Join(parts, "\n\n")}}
 }
 
 func (a *Agent) resolveProvider(providerName string) (provider.Provider, error) {
