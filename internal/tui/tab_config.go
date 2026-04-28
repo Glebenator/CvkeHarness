@@ -343,7 +343,7 @@ func configFields() []configField {
 			Label:       "Safety Mode",
 			Description: "Command approval gate for non-allowlisted shell commands",
 			Kind:        configFieldSelect,
-			Options:     []string{tools.SafetyModeLLMJudge, tools.SafetyModeUserConfirm},
+			Options:     []string{tools.SafetyModeLLMJudge, tools.SafetyModeUserConfirmAll, tools.SafetyModeUserConfirm, tools.SafetyModeUnrestricted},
 			Get:         func(c *config.Config) string { return c.SafetyMode },
 			Set:         func(c *config.Config, v string) { c.SafetyMode = v },
 		},

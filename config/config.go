@@ -38,6 +38,17 @@ type Config struct {
 	PromptDumpDir        string            `yaml:"prompt_dump_dir,omitempty"`
 	MemoryMaxSnippets    int               `yaml:"memory_max_snippets,omitempty"`
 	RoutingMinConfidence float64           `yaml:"routing_min_confidence,omitempty"`
+	SetupAgentMode       string            `yaml:"setup_agent_mode,omitempty"`
+	CapabilityPolicy     CapabilityPolicy  `yaml:"capability_policy,omitempty"`
+}
+
+// CapabilityPolicy captures durable user preferences collected during setup.
+type CapabilityPolicy struct {
+	PythonScripts         string `yaml:"python_scripts,omitempty"`
+	ScriptWriteDir        string `yaml:"script_write_dir,omitempty"`
+	AutonomousDiagnostics string `yaml:"autonomous_diagnostics,omitempty"`
+	NetworkProbes         string `yaml:"network_probes,omitempty"`
+	InstallMissingTools   string `yaml:"install_missing_tools,omitempty"`
 }
 
 // GetAPIKey returns the stored credential for the given provider, or "" if none.
@@ -116,6 +127,9 @@ func (c *Config) Normalize() {
 	if c.RoutingMinConfidence <= 0 {
 		c.RoutingMinConfidence = 0.55
 	}
+	if c.SetupAgentMode == "" {
+		c.SetupAgentMode = "guided"
+	}
 	if c.MemoryDir == "" {
 		c.MemoryDir = defaultHarnessPath("memory")
 	}
@@ -124,6 +138,21 @@ func (c *Config) Normalize() {
 	}
 	if c.PromptDumpDir == "" {
 		c.PromptDumpDir = defaultHarnessPath("prompt_dumps")
+	}
+	if c.CapabilityPolicy.PythonScripts == "" {
+		c.CapabilityPolicy.PythonScripts = "ask"
+	}
+	if c.CapabilityPolicy.ScriptWriteDir == "" {
+		c.CapabilityPolicy.ScriptWriteDir = defaultHarnessPath("scripts")
+	}
+	if c.CapabilityPolicy.AutonomousDiagnostics == "" {
+		c.CapabilityPolicy.AutonomousDiagnostics = "ask"
+	}
+	if c.CapabilityPolicy.NetworkProbes == "" {
+		c.CapabilityPolicy.NetworkProbes = "ask"
+	}
+	if c.CapabilityPolicy.InstallMissingTools == "" {
+		c.CapabilityPolicy.InstallMissingTools = "ask"
 	}
 	if len(c.ApprovedModels) == 0 && c.DefaultModel != "" && c.Provider != "" {
 		c.ApprovedModels = []string{c.Provider + "/" + c.DefaultModel}
@@ -216,7 +245,15 @@ func DefaultConfig() *Config {
 		PromptDumpDir:        defaultHarnessPath("prompt_dumps"),
 		MemoryMaxSnippets:    3,
 		RoutingMinConfidence: 0.55,
-		ApprovedModels:       []string{"openrouter/anthropic/claude-sonnet-4.6"},
+		SetupAgentMode:       "guided",
+		CapabilityPolicy: CapabilityPolicy{
+			PythonScripts:         "ask",
+			ScriptWriteDir:        defaultHarnessPath("scripts"),
+			AutonomousDiagnostics: "ask",
+			NetworkProbes:         "ask",
+			InstallMissingTools:   "ask",
+		},
+		ApprovedModels: []string{"openrouter/anthropic/claude-sonnet-4.6"},
 		AllowedCommands: []string{
 			"df", "echo", "free", "uptime", "ps", "netstat", "systemctl", "journalctl",
 		},

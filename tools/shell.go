@@ -24,6 +24,8 @@ type ShellTool struct {
 	approver         ShellApprover
 	primaryModel     string
 	approvalStore    *state.Store
+	approvalRequired bool
+	unrestricted     bool
 }
 
 // ShellArgs represents the LLM-provided arguments for the shell tool.
@@ -514,16 +516,27 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		return "", fmt.Errorf("security violation: %w", err)
 	}
 
-	_, err = validateAllowedShellCommand(cmdStr, s.allowedCommands, s.approvedCommands)
-	if err != nil {
+	if s.unrestricted {
+		approvalMode = SafetyModeUnrestricted
+	} else {
+		_, err = validateAllowedShellCommand(cmdStr, s.allowedCommands, s.approvedCommands)
+	}
+	if !s.unrestricted && (err != nil || s.approvalRequired) {
+		validationMessage := "safety mode requires user approval before every command"
+		if err != nil {
+			validationMessage = err.Error()
+		}
 		logger.Warn("command not in auto-approved command list, asking approval gate", "command", cmdStr)
 		if s.approver == nil {
-			return "", fmt.Errorf("security violation: %w (and no approval path is configured)", err)
+			if err != nil {
+				return "", fmt.Errorf("security violation: %w (and no approval path is configured)", err)
+			}
+			return "", fmt.Errorf("security violation: %s (and no approval path is configured)", validationMessage)
 		}
 
 		decision, approvalErr := s.approver.Approve(ctx, ShellApprovalRequest{
 			Command:         cmdStr,
-			ValidationError: err.Error(),
+			ValidationError: validationMessage,
 		})
 		if approvalErr != nil {
 			return "", approvalErr
@@ -531,9 +544,9 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		approvalMode = decision.Mode
 		historyNote = strings.TrimSpace(decision.HistoryNote)
 		approvedByJudge = decision.Mode == SafetyModeLLMJudge
-		approvedByUser = decision.Mode == SafetyModeUserConfirm
+		approvedByUser = decision.Mode == SafetyModeUserConfirm || decision.Mode == SafetyModeUserConfirmAll
 		logger.Info("command approved by secondary gate", "command", cmdStr, "mode", decision.Mode, "remember", decision.Remember)
-		if decision.Remember {
+		if decision.Remember && !s.approvalRequired {
 			s.rememberApprovedSegments(ctx, parsedCommand, decision)
 		}
 	}

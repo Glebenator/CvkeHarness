@@ -20,6 +20,60 @@ func TestDefaultConfigIncludesEchoInAllowedCommands(t *testing.T) {
 	t.Fatalf("expected default allowed commands to include echo, got %#v", cfg.AllowedCommands)
 }
 
+func TestDefaultConfigIncludesGuidedCapabilityPolicy(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.Normalize()
+
+	if cfg.SetupAgentMode != "guided" {
+		t.Fatalf("expected guided setup agent mode, got %q", cfg.SetupAgentMode)
+	}
+	if cfg.CapabilityPolicy.PythonScripts != "ask" {
+		t.Fatalf("expected python script policy to default to ask, got %#v", cfg.CapabilityPolicy)
+	}
+	if cfg.CapabilityPolicy.ScriptWriteDir == "" {
+		t.Fatalf("expected script write directory default, got %#v", cfg.CapabilityPolicy)
+	}
+	if cfg.CapabilityPolicy.InstallMissingTools != "ask" {
+		t.Fatalf("expected missing tool installs to default to ask, got %#v", cfg.CapabilityPolicy)
+	}
+}
+
+func TestLoadConfigPreservesCapabilityPolicy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	configDir := filepath.Join(home, ".cvkeharness")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("MkdirAll returned unexpected error: %v", err)
+	}
+
+	data := []byte(`provider: openrouter
+setup_agent_mode: guided
+capability_policy:
+  python_scripts: allow
+  script_write_dir: /tmp/cvkeharness-scripts
+  autonomous_diagnostics: ask
+  network_probes: allow
+  install_missing_tools: deny
+`)
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), data, 0600); err != nil {
+		t.Fatalf("WriteFile returned unexpected error: %v", err)
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig returned unexpected error: %v", err)
+	}
+	if cfg.CapabilityPolicy.PythonScripts != "allow" {
+		t.Fatalf("expected loaded policy, got %#v", cfg.CapabilityPolicy)
+	}
+	if cfg.CapabilityPolicy.InstallMissingTools != "deny" {
+		t.Fatalf("expected install policy to be preserved, got %#v", cfg.CapabilityPolicy)
+	}
+}
+
 func TestLoadConfigAddsEchoToExistingAllowlist(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/internal/setuptui"
 	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/tools"
@@ -181,8 +182,12 @@ func renderReview(cfg *config.Config) {
 		row("Default Model", cfg.PrimaryModel()),
 	}
 	switch cfg.SafetyMode {
+	case tools.SafetyModeUserConfirmAll:
+		lines = append(lines, row("Command Approval", "User approval before every command"))
 	case tools.SafetyModeUserConfirm:
 		lines = append(lines, row("Command Approval", "Manual user confirmation"))
+	case tools.SafetyModeUnrestricted:
+		lines = append(lines, row("Command Approval", "Unrestricted shell execution"))
 	default:
 		lines = append(lines, row("Command Approval", "LLM judge"))
 		lines = append(lines, row("Safety Model", cfg.SafetyModel))
@@ -818,7 +823,8 @@ var openAISafetyModelOptions = [][2]string{
 
 var safetyModeOptions = [][2]string{
 	{tools.SafetyModeLLMJudge, "LLM judge  ·  secondary model reviews commands  ★"},
-	{tools.SafetyModeUserConfirm, "Manual confirm  ·  wait for terminal user approval"},
+	{tools.SafetyModeUserConfirmAll, "User approval  ·  ask before every shell command"},
+	{tools.SafetyModeUnrestricted, "Unrestricted  ·  risky, no command approval gate"},
 }
 
 func safetyModelsForProvider(cfg *config.Config) [][2]string {
@@ -1212,8 +1218,10 @@ func wizardSafetyModel(cfg *config.Config) bool {
 		fmt.Printf("  %sChoose whether that gate is another model or a direct user confirmation prompt.%s\n\n", fgMuted+ansiDim, ansiReset)
 
 		initialMode := 0
-		if cfg.SafetyMode == tools.SafetyModeUserConfirm {
+		if cfg.SafetyMode == tools.SafetyModeUserConfirmAll || cfg.SafetyMode == tools.SafetyModeUserConfirm {
 			initialMode = 1
+		} else if cfg.SafetyMode == tools.SafetyModeUnrestricted {
+			initialMode = 2
 		}
 
 		modeIdx := selectList(safetyModeOptions, initialMode, true)
@@ -1221,7 +1229,7 @@ func wizardSafetyModel(cfg *config.Config) bool {
 			return false
 		}
 		cfg.SafetyMode = safetyModeOptions[modeIdx][0]
-		if cfg.SafetyMode == tools.SafetyModeUserConfirm {
+		if cfg.SafetyMode == tools.SafetyModeUserConfirmAll || cfg.SafetyMode == tools.SafetyModeUserConfirm || cfg.SafetyMode == tools.SafetyModeUnrestricted {
 			return true
 		}
 
@@ -1575,8 +1583,14 @@ func connectionSummary(cfg *config.Config) string {
 }
 
 func approvalSummary(cfg *config.Config) string {
+	if cfg.SafetyMode == tools.SafetyModeUserConfirmAll {
+		return "User approval before every command"
+	}
 	if cfg.SafetyMode == tools.SafetyModeUserConfirm {
 		return "Manual user confirmation"
+	}
+	if cfg.SafetyMode == tools.SafetyModeUnrestricted {
+		return "Unrestricted shell execution"
 	}
 	if strings.TrimSpace(cfg.SafetyModel) == "" {
 		return "LLM judge"
@@ -2035,8 +2049,8 @@ func runSettingsMenu() {
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Interactive onboarding wizard to configure the agent",
-	Run: func(cmd *cobra.Command, args []string) {
-		runSetupWizard("setup")
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return setuptui.Run()
 	},
 }
 

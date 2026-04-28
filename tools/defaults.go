@@ -38,6 +38,8 @@ func NewDefaultRegistryWithStoreMemoryAndPromptDumper(allowedCommands []string, 
 		approver = NewLLMJudgeApproverWithPromptDumper(judge, safetyModel, dumper)
 	case SafetyModeUserConfirm:
 		approver = NewUserPromptApprover(os.Stdin, os.Stdout)
+	case SafetyModeUserConfirmAll:
+		approver = NewUserPromptApprover(os.Stdin, os.Stdout)
 	}
 
 	var approvedCommands []string
@@ -56,6 +58,13 @@ func NewDefaultRegistryWithStoreMemoryAndPromptDumper(allowedCommands []string, 
 		registry.Register(NewScheduleManageTool(store))
 		registry.Register(NewSystemCronManageTool(store))
 	}
-	registry.Register(NewShellToolWithApprovals(allowedCommands, approvedCommands, approver, primaryModel, store))
+	shell := NewShellToolWithApprovals(allowedCommands, approvedCommands, approver, primaryModel, store)
+	switch safetyMode {
+	case SafetyModeUserConfirmAll:
+		shell.approvalRequired = true
+	case SafetyModeUnrestricted:
+		shell.unrestricted = true
+	}
+	registry.Register(shell)
 	return registry
 }

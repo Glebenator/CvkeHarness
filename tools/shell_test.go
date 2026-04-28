@@ -271,6 +271,48 @@ func TestShellTool_UsesManualApprovalPath(t *testing.T) {
 	}
 }
 
+func TestShellTool_UserConfirmAllPromptsForAllowlistedCommand(t *testing.T) {
+	t.Parallel()
+
+	tool := NewShellToolWithApprover([]string{"echo"}, staticApprover{
+		decision: ShellApprovalDecision{
+			Approved:    true,
+			Mode:        SafetyModeUserConfirmAll,
+			HistoryNote: "Command required approval by setup policy.",
+			Remember:    true,
+		},
+	}, "primary")
+	tool.approvalRequired = true
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello"}`))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "setup policy") {
+		t.Fatalf("expected approval note to be preserved, got %q", result)
+	}
+
+	tool.approver = staticApprover{err: fmt.Errorf("approval requested again")}
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello"}`)); err == nil {
+		t.Fatal("expected approvalRequired mode to ask again instead of remembering")
+	}
+}
+
+func TestShellTool_UnrestrictedBypassesAllowlist(t *testing.T) {
+	t.Parallel()
+
+	tool := NewShellToolWithApprover([]string{"ps"}, nil, "primary")
+	tool.unrestricted = true
+
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo unrestricted"}`))
+	if err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "unrestricted") {
+		t.Fatalf("expected command output, got %q", result)
+	}
+}
+
 func TestShellTool_ReturnsUserDenial(t *testing.T) {
 	t.Parallel()
 
