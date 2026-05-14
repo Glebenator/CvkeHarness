@@ -545,12 +545,15 @@ func (t *jobsTab) viewDetail(width, height int) string {
 		lines = append(lines, line)
 	}
 
+	header := renderPageHeader("Jobs", "scheduled agent work and run history", width)
+	detailHeight := maxInt(height-4, 1)
+
 	// Apply scroll window
-	maxScroll := maxInt(len(lines)-height+2, 0)
+	maxScroll := maxInt(len(lines)-detailHeight+2, 0)
 	t.detailScroll = clamp(t.detailScroll, 0, maxScroll)
 
 	var b strings.Builder
-	end := minInt(t.detailScroll+height-1, len(lines))
+	end := minInt(t.detailScroll+detailHeight-1, len(lines))
 	for i := t.detailScroll; i < end; i++ {
 		b.WriteString(lines[i])
 		b.WriteString("\n")
@@ -560,7 +563,7 @@ func (t *jobsTab) viewDetail(width, height int) string {
 		b.WriteString(scrollHints(t.detailScroll, end, len(lines)))
 	}
 
-	return b.String()
+	return header + b.String()
 }
 
 // ── create wizard view ──────────────────────────────────────────────
