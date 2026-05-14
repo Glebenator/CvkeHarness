@@ -173,11 +173,11 @@ func (m model) View() string {
 
 	// Help overlay replaces content when active.
 	if m.showHelp {
-		b.WriteString(m.renderHelp())
+		b.WriteString(clampLines(m.renderHelp(), m.contentHeight()))
 	} else {
 		// Content area
 		content := m.tabs[m.activeTab].View(m.contentWidth(), m.contentHeight())
-		b.WriteString(content)
+		b.WriteString(clampLines(content, m.contentHeight()))
 	}
 
 	// Pad to fill the screen
@@ -208,6 +208,17 @@ func (m model) renderTabBar() string {
 	}
 	bar := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 	return bar
+}
+
+func clampLines(s string, maxLines int) string {
+	if maxLines <= 0 || s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
+		return s
+	}
+	return strings.Join(lines[:maxLines], "\n")
 }
 
 func (m model) renderStatusBar() string {
