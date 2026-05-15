@@ -7,8 +7,11 @@ import (
 
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/promptdump"
+	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/state"
+	"github.com/coolcake/cvkeharness/tools"
 )
 
 type providerResolver struct {
@@ -97,4 +100,27 @@ func routingConfigFromConfig(cfg *config.Config, store *state.Store) core.Routin
 		ApprovedModels: approved,
 		MinConfidence:  cfg.RoutingMinConfidence,
 	}
+}
+
+func defaultRegistryFromConfig(cfg *config.Config, store *state.Store, mem *memory.Manager, judge provider.Provider, promptDumper *promptdump.Dumper) (*tools.Registry, error) {
+	return tools.NewDefaultRegistryFromOptions(tools.DefaultRegistryOptions{
+		AllowedCommands: cfg.AllowedCommands,
+		Store:           store,
+		Memory:          mem,
+		Judge:           judge,
+		SafetyMode:      cfg.SafetyMode,
+		SafetyModel:     cfg.SafetyModel,
+		PrimaryModel:    cfg.PrimaryModel(),
+		PromptDumper:    promptDumper,
+		WebSearch: tools.WebSearchOptions{
+			Enabled:         cfg.WebSearch.Enabled,
+			Provider:        cfg.WebSearch.Provider,
+			APIKey:          cfg.TavilyAPIKey(),
+			MaxResults:      cfg.WebSearch.MaxResults,
+			SearchDepth:     cfg.WebSearch.SearchDepth,
+			MaxFetchedChars: cfg.WebSearch.MaxFetchedChars,
+			AllowedDomains:  cfg.WebSearch.AllowedDomains,
+			BlockedDomains:  cfg.WebSearch.BlockedDomains,
+		},
+	})
 }

@@ -22,7 +22,6 @@ import (
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/router"
 	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -202,7 +201,11 @@ func runChat() {
 	}
 
 	promptDumper := promptdump.New(cfg.DebugPromptDumps, cfg.PromptDumpDir)
-	registry := tools.NewDefaultRegistryWithStoreMemoryAndPromptDumper(cfg.AllowedCommands, store, mem, p, cfg.SafetyMode, cfg.SafetyModel, cfg.PrimaryModel(), promptDumper)
+	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
 	routingCfg := routingConfigFromConfig(cfg, store)
 	r := router.New(routingCfg, store, func(ctx context.Context, selection core.RoutingSelection) (bool, error) {
 		if selection.Recommendation == nil {

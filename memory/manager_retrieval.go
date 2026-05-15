@@ -383,6 +383,7 @@ func builtInRules() string {
 Keep the runtime rules compact and invariant.
 Distinguish the runtime host from the active target system.
 Use target-aware memory conservatively: prefer one verified playbook over many weak hints.
+Use web_search only for public current documentation, release notes, issues, and error research; never send secrets, credentials, private hostnames, or internal URLs.
 If required tooling is missing, confirm the missing dependency, ask before installing or mutating the system, and after approval perform the install instead of only handing the user manual steps.`
 }
 

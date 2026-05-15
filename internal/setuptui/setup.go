@@ -3,6 +3,7 @@ package setuptui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ const (
 	stepDependencies
 	stepDaemon
 	stepCapabilities
+	stepWebSearch
 	stepRecommendations
 	stepSoul
 	stepNotes
@@ -38,6 +40,7 @@ const (
 	inputNone inputMode = iota
 	inputOpenRouterKey
 	inputOpenAIKey
+	inputTavilyKey
 	inputLMStudioURL
 	inputCustomModel
 	inputDaemonUser
@@ -57,6 +60,11 @@ type recommendationsMsg struct {
 type saveMsg struct {
 	result setupflow.FinalizeResult
 	err    error
+}
+
+type webSearchOption struct {
+	action string
+	row    row
 }
 
 type setupModel struct {
@@ -197,6 +205,8 @@ func (m setupModel) canAdvanceWithN() bool {
 		return m.scanComplete
 	case stepRecommendations:
 		return len(m.recommendations) > 0 && !m.recommending
+	case stepWebSearch:
+		return m.cfg == nil || !m.cfg.WebSearch.Enabled || strings.TrimSpace(m.cfg.TavilyAPIKey()) != ""
 	case stepReview:
 		return false
 	default:
@@ -231,6 +241,8 @@ func (m setupModel) stepView() string {
 		return m.viewDaemon()
 	case stepCapabilities:
 		return m.viewCapabilities()
+	case stepWebSearch:
+		return m.viewWebSearch()
 	case stepRecommendations:
 		return m.viewRecommendations()
 	case stepSoul:
@@ -247,7 +259,7 @@ func (m setupModel) stepView() string {
 func (m setupModel) viewWelcome() string {
 	return paragraph(
 		"CvkeHarness is a local-first engineering agent for coding, debugging, systems work, and DevOps workflows. It connects a model provider to guarded shell tools, durable memory, scheduled jobs, and an operations TUI.",
-		"Setup will configure a provider, choose models, scan this machine, pick a safety level, collect capability preferences, and optionally install the scheduler daemon.",
+		"Setup will configure a provider, choose models, scan this machine, pick a safety level, collect capability preferences, optionally enable public web search, and optionally install the scheduler daemon.",
 	) + "\n" + m.renderList([]row{{"Start setup", "Begin guided configuration"}})
 }
 
@@ -262,6 +274,14 @@ func (m setupModel) viewProvider() string {
 func (m setupModel) viewCredentials() string {
 	if m.validating {
 		return line("Validating credential...")
+	}
+	switch m.inputMode {
+	case inputOpenRouterKey:
+		return m.viewInputPrompt("API key input active: OpenRouter", "Paste your OpenRouter API key. Characters are hidden; press enter to validate or esc to cancel.", "OpenRouter API key")
+	case inputOpenAIKey:
+		return m.viewInputPrompt("API key input active: OpenAI", "Paste your OpenAI API key. Characters are hidden; press enter to validate or esc to cancel.", "OpenAI API key")
+	case inputLMStudioURL:
+		return m.viewInputPrompt("Base URL input active", "Enter the local OpenAI-compatible base URL; press enter to save or esc to cancel.", "LM Studio URL")
 	}
 	switch m.cfg.Provider {
 	case "codex":
@@ -299,6 +319,9 @@ func (m setupModel) apiKeyView(providerName, label string) string {
 }
 
 func (m setupModel) viewModel() string {
+	if m.inputMode == inputCustomModel {
+		return m.viewInputPrompt("Custom model input active", "Enter the provider-native model ID; press enter to save or esc to cancel.", "Model ID")
+	}
 	if m.modelsLoading {
 		return line("Fetching models...")
 	}
@@ -350,6 +373,9 @@ func (m setupModel) viewDependencies() string {
 }
 
 func (m setupModel) viewDaemon() string {
+	if m.inputMode == inputDaemonUser {
+		return m.viewInputPrompt("System service user input active", "Enter the Linux user that should own the scheduler service; press enter to continue or esc to cancel.", "System service user")
+	}
 	if !m.daemonPlan.Supported {
 		return paragraph("Scheduler daemon install is unavailable: "+m.daemonPlan.Reason) + "\n" + m.renderList([]row{{"Continue", "Skip daemon setup"}})
 	}
@@ -369,6 +395,23 @@ func (m setupModel) viewCapabilities() string {
 		{"Install missing tools", m.cfg.CapabilityPolicy.InstallMissingTools},
 	}
 	return paragraph("Use left/right or space to change a policy. Press enter to keep the current values and continue. `ask` is the recommended default.") + "\n" + m.renderList(rows)
+}
+
+func (m setupModel) viewWebSearch() string {
+	if m.validating {
+		return line("Validating Tavily credential...")
+	}
+	if m.inputMode == inputTavilyKey {
+		return m.viewInputPrompt("API key input active: Tavily", "Paste your Tavily API key. Characters are hidden; press enter to validate or esc to cancel.", "Tavily API key")
+	}
+	status := "disabled"
+	if m.cfg.WebSearch.Enabled {
+		status = "enabled"
+	}
+	return paragraph(
+		"Web search is optional and read-only. It lets the agent look up public current documentation, release notes, issues, and error messages through Tavily.",
+		"Status: "+status+". Never put secrets, private hostnames, or internal URLs into web search requests.",
+	) + "\n" + m.renderList(webSearchRows(m.webSearchOptions()))
 }
 
 func (m setupModel) viewRecommendations() string {
@@ -398,7 +441,7 @@ func (m setupModel) viewSoul() string {
 
 func (m setupModel) viewNotes() string {
 	if m.inputMode == inputHostNotes {
-		return m.input.View()
+		return m.viewInputPrompt("Machine notes input active", "Add durable local quirks as a short semicolon-separated note; press enter to save or esc to cancel.", "Machine notes")
 	}
 	value := strings.TrimSpace(m.hostNotes)
 	if value == "" {
@@ -417,6 +460,7 @@ func (m setupModel) viewReview() string {
 		"Safety: " + m.cfg.SafetyMode,
 		"Python: " + foundText(m.hostProfile.Python),
 		"Capability policy: scripts=" + m.cfg.CapabilityPolicy.PythonScripts + ", installs=" + m.cfg.CapabilityPolicy.InstallMissingTools,
+		"Web search: " + boolText(m.cfg.WebSearch.Enabled),
 	}
 	if m.installPlan.Selected {
 		lines = append(lines, "Will run: "+setupflow.CommandString(m.installPlan.Command))
@@ -448,6 +492,10 @@ func (m setupModel) viewDone() string {
 	}
 	lines = append(lines, "Press q to exit.")
 	return paragraph(lines...)
+}
+
+func (m setupModel) viewInputPrompt(title, detail, label string) string {
+	return paragraph(title, detail) + "\n" + m.renderInputField(label)
 }
 
 func (m setupModel) activate() (setupModel, tea.Cmd) {
@@ -498,6 +546,8 @@ func (m setupModel) activate() (setupModel, tea.Cmd) {
 		return m.activateDaemon()
 	case stepCapabilities:
 		return m.nextStep()
+	case stepWebSearch:
+		return m.activateWebSearch()
 	case stepRecommendations:
 		if len(m.recommendations) == 0 {
 			m.recommending = true
@@ -567,6 +617,117 @@ func (m setupModel) activateCredentials() (setupModel, tea.Cmd) {
 			return m.nextStep()
 		}
 		return m.beginInput(inputOpenRouterKey, "OpenRouter API key", "", true), nil
+	}
+}
+
+func (m setupModel) activateWebSearch() (setupModel, tea.Cmd) {
+	opts := m.webSearchOptions()
+	if m.cursor < 0 || m.cursor >= len(opts) {
+		m.cursor = 0
+	}
+	switch opts[m.cursor].action {
+	case "enable_existing", "enable_env":
+		enableWebSearchDefaults(m.cfg)
+		return m.nextStep()
+	case "enter_key":
+		return m.beginInput(inputTavilyKey, "Tavily API key", "", true), nil
+	default:
+		m.cfg.WebSearch.Enabled = false
+		return m.nextStep()
+	}
+}
+
+func (m setupModel) webSearchOptions() []webSearchOption {
+	configKey := ""
+	enabled := false
+	if m.cfg != nil {
+		configKey = strings.TrimSpace(m.cfg.GetAPIKey("tavily"))
+		enabled = m.cfg.WebSearch.Enabled
+	}
+	envKey := strings.TrimSpace(os.Getenv("TAVILY_API_KEY"))
+
+	if enabled && configKey == "" && envKey == "" {
+		return []webSearchOption{
+			{action: "enter_key", row: row{"Enter Tavily key", "Required before enabled web search can be saved"}},
+			{action: "disable", row: row{"Disable web search", "Leave external research tools unavailable"}},
+		}
+	}
+
+	var opts []webSearchOption
+	switch {
+	case configKey != "":
+		label := "Enable existing key"
+		if enabled {
+			label = "Keep enabled"
+		}
+		opts = append(opts, webSearchOption{
+			action: "enable_existing",
+			row:    row{label, "Use stored Tavily key " + setupflow.MaskSecret(configKey)},
+		})
+	case envKey != "":
+		label := "Use TAVILY_API_KEY"
+		if enabled {
+			label = "Keep env key"
+		}
+		opts = append(opts, webSearchOption{
+			action: "enable_env",
+			row:    row{label, "Enable web search using the environment credential"},
+		})
+	}
+
+	if len(opts) == 0 && !enabled {
+		opts = append(opts, webSearchOption{
+			action: "disable",
+			row:    row{"Skip", "Leave web_search disabled"},
+		})
+	}
+	opts = append(opts, webSearchOption{
+		action: "enter_key",
+		row:    row{"Enter Tavily key", "Validate and save a Tavily API key"},
+	})
+	if enabled || configKey != "" || envKey != "" {
+		label := "Skip"
+		desc := "Leave web_search disabled"
+		if enabled {
+			label = "Disable web search"
+			desc = "Turn off external research tools"
+		}
+		opts = append(opts, webSearchOption{
+			action: "disable",
+			row:    row{label, desc},
+		})
+	}
+	return opts
+}
+
+func webSearchRows(opts []webSearchOption) []row {
+	rows := make([]row, 0, len(opts))
+	for _, opt := range opts {
+		rows = append(rows, opt.row)
+	}
+	return rows
+}
+
+func enableWebSearchDefaults(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.WebSearch.Enabled = true
+	cfg.WebSearch.Provider = "tavily"
+	if cfg.WebSearch.MaxResults <= 0 {
+		cfg.WebSearch.MaxResults = 5
+	}
+	if cfg.WebSearch.MaxResults > 10 {
+		cfg.WebSearch.MaxResults = 10
+	}
+	if strings.TrimSpace(cfg.WebSearch.SearchDepth) == "" {
+		cfg.WebSearch.SearchDepth = "basic"
+	}
+	if cfg.WebSearch.MaxFetchedChars <= 0 {
+		cfg.WebSearch.MaxFetchedChars = 12000
+	}
+	if cfg.WebSearch.MaxFetchedChars > 30000 {
+		cfg.WebSearch.MaxFetchedChars = 30000
 	}
 }
 
@@ -645,6 +806,11 @@ func (m setupModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cfg.SetAPIKey("openai", value)
 			m.validating = true
 			return m, validateOpenAICmd(value)
+		case inputTavilyKey:
+			m.cfg.SetAPIKey("tavily", value)
+			enableWebSearchDefaults(m.cfg)
+			m.validating = true
+			return m, validateTavilyCmd(value)
 		case inputLMStudioURL:
 			m.cfg.BaseURL = value
 			return m.nextStep()
@@ -743,6 +909,8 @@ func (m setupModel) itemCount() int {
 		return 1
 	case stepCapabilities:
 		return 4
+	case stepWebSearch:
+		return len(m.webSearchOptions())
 	case stepSoul:
 		return len(setupflow.SoulProfiles())
 	case stepNotes:
@@ -806,6 +974,14 @@ func validateOpenAICmd(key string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return credentialMsg{err: setupflow.ValidateOpenAIKey(ctx, key)}
+	}
+}
+
+func validateTavilyCmd(key string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return credentialMsg{label: "Tavily", err: setupflow.ValidateTavilyKey(ctx, key)}
 	}
 }
 

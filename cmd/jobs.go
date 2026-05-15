@@ -16,7 +16,6 @@ import (
 	"github.com/coolcake/cvkeharness/router"
 	"github.com/coolcake/cvkeharness/scheduler"
 	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -224,7 +223,10 @@ func newScheduledAgentRunner(ctx context.Context, store *state.Store) (scheduled
 		log.FromContext(ctx).Warn("failed to reindex memory metadata", "error", err)
 	}
 	promptDumper := promptdump.New(cfg.DebugPromptDumps, cfg.PromptDumpDir)
-	registry := tools.NewDefaultRegistryWithStoreMemoryAndPromptDumper(cfg.AllowedCommands, store, mem, p, cfg.SafetyMode, cfg.SafetyModel, cfg.PrimaryModel(), promptDumper)
+	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper)
+	if err != nil {
+		return scheduledAgentRunner{}, err
+	}
 	routingCfg := routingConfigFromConfig(cfg, store)
 	rt := router.New(routingCfg, store, func(ctx context.Context, selection core.RoutingSelection) (bool, error) {
 		return false, nil

@@ -59,13 +59,82 @@ func TestSetupModelEnterOnCapabilitiesKeepsDefaultsAndAdvances(t *testing.T) {
 	}
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(setupModel)
-	if updated.step != stepRecommendations {
-		t.Fatalf("expected enter to advance to recommendations, got %v", updated.step)
+	if updated.step != stepWebSearch {
+		t.Fatalf("expected enter to advance to web search, got %v", updated.step)
 	}
 	if updated.cfg.CapabilityPolicy.PythonScripts != "ask" ||
 		updated.cfg.CapabilityPolicy.NetworkProbes != "ask" ||
 		updated.cfg.CapabilityPolicy.InstallMissingTools != "ask" {
 		t.Fatalf("expected enter to preserve default ask policies, got %#v", updated.cfg.CapabilityPolicy)
+	}
+}
+
+func TestSetupModelWebSearchCanBeSkipped(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Normalize()
+	m := setupModel{
+		cfg:  cfg,
+		step: stepWebSearch,
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := next.(setupModel)
+	if updated.step != stepRecommendations {
+		t.Fatalf("expected skip to advance to recommendations, got %v", updated.step)
+	}
+	if updated.cfg.WebSearch.Enabled {
+		t.Fatalf("expected web search to remain disabled")
+	}
+}
+
+func TestSetupModelWebSearchEnablesExistingTavilyKey(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Normalize()
+	cfg.SetAPIKey("tavily", "tvly-test")
+	m := setupModel{
+		cfg:  cfg,
+		step: stepWebSearch,
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := next.(setupModel)
+	if updated.step != stepRecommendations {
+		t.Fatalf("expected enabled web search to advance to recommendations, got %v", updated.step)
+	}
+	if !updated.cfg.WebSearch.Enabled {
+		t.Fatalf("expected web search to be enabled")
+	}
+	if updated.cfg.WebSearch.Provider != "tavily" {
+		t.Fatalf("expected tavily provider, got %q", updated.cfg.WebSearch.Provider)
+	}
+}
+
+func TestSetupModelWebSearchPromptsForTavilyKey(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Normalize()
+	m := setupModel{
+		cfg:    cfg,
+		step:   stepWebSearch,
+		cursor: 1,
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("expected no command while opening key input")
+	}
+	updated := next.(setupModel)
+	if updated.inputMode != inputTavilyKey {
+		t.Fatalf("expected Tavily key input mode, got %v", updated.inputMode)
+	}
+	view := updated.stepView()
+	if !strings.Contains(view, "API key input active: Tavily") || !strings.Contains(view, "Tavily API key") {
+		t.Fatalf("expected Tavily key input prompt, got %q", view)
+	}
+	if strings.Contains(view, "Leave web_search disabled") {
+		t.Fatalf("expected active input prompt to replace option list, got %q", view)
 	}
 }
 

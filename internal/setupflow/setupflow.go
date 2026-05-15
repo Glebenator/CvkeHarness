@@ -203,6 +203,9 @@ func LoadWizardConfig() *config.Config {
 	clone.RoutingMinConfidence = existing.RoutingMinConfidence
 	clone.SetupAgentMode = firstNonEmpty(existing.SetupAgentMode, cfg.SetupAgentMode)
 	clone.CapabilityPolicy = existing.CapabilityPolicy
+	clone.WebSearch = existing.WebSearch
+	clone.WebSearch.AllowedDomains = append([]string(nil), existing.WebSearch.AllowedDomains...)
+	clone.WebSearch.BlockedDomains = append([]string(nil), existing.WebSearch.BlockedDomains...)
 	clone.Normalize()
 	return &clone
 }
@@ -281,6 +284,69 @@ func ValidateOpenAIKey(ctx context.Context, key string) error {
 		return fmt.Errorf("unexpected status %d from validation endpoint", resp.StatusCode)
 	}
 	return nil
+}
+
+func ValidateTavilyKey(ctx context.Context, key string) error {
+	client := &http.Client{Timeout: 8 * time.Second}
+	return validateTavilyKeyWithEndpoint(ctx, key, "https://api.tavily.com/search", client)
+}
+
+func validateTavilyKeyWithEndpoint(ctx context.Context, key, endpoint string, client *http.Client) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("Tavily API key is required")
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 8 * time.Second}
+	}
+	body := strings.NewReader(`{"query":"CvkeHarness setup Tavily validation","search_depth":"basic","max_results":1,"include_answer":false,"include_raw_content":false,"include_images":false}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("connection failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
+	var out struct {
+		Error   any    `json:"error"`
+		Message string `json:"message"`
+		Detail  any    `json:"detail"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	msg := firstNonEmpty(out.Message, tavilyErrorText(out.Error), tavilyErrorText(out.Detail), http.StatusText(resp.StatusCode))
+	switch resp.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return fmt.Errorf("invalid Tavily credential: %s", msg)
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("Tavily validation rate limited: %s", msg)
+	default:
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("Tavily validation endpoint returned status %d: %s", resp.StatusCode, msg)
+		}
+		return fmt.Errorf("unexpected status %d from Tavily validation endpoint: %s", resp.StatusCode, msg)
+	}
+}
+
+func tavilyErrorText(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case map[string]any:
+		for _, key := range []string{"message", "error", "detail"} {
+			if s, ok := v[key].(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 func CodexAuthSummary() (string, bool) {

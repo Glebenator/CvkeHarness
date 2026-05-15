@@ -90,6 +90,9 @@ func (m *Manager) CurateRunOutcome(ctx context.Context, outcome RunOutcome) erro
 	changed := false
 
 	for _, call := range outcome.ToolCalls {
+		if isWebResearchTool(call.ToolName) {
+			continue
+		}
 		callTargetID := targetID
 		callResolution, hasSpecificTarget := m.resolveToolCallTarget(ctx, call)
 		if hasSpecificTarget {
@@ -111,7 +114,7 @@ func (m *Manager) CurateRunOutcome(ctx context.Context, outcome RunOutcome) erro
 		changed = applyPlaybook(&mem, targetID, intent, successfulCommands, outcome.Task, now) || changed
 	}
 
-	if len(successfulCommands) == 0 && strings.TrimSpace(outcome.ExecutionError) == "" && targetID != "" {
+	if len(successfulCommands) == 0 && !hasWebResearchTool(outcome.ToolCalls) && strings.TrimSpace(outcome.ExecutionError) == "" && targetID != "" {
 		summary := strings.TrimSpace(outcome.Output)
 		if summary != "" {
 			finding := state.Finding{
@@ -135,6 +138,24 @@ func (m *Manager) CurateRunOutcome(ctx context.Context, outcome RunOutcome) erro
 		return nil
 	}
 	return m.writeAllState(ctx, mem, "curate run outcome")
+}
+
+func hasWebResearchTool(calls []ObservedToolCall) bool {
+	for _, call := range calls {
+		if isWebResearchTool(call.ToolName) {
+			return true
+		}
+	}
+	return false
+}
+
+func isWebResearchTool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "web_search", "web_fetch":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Manager) resolveToolCallTarget(ctx context.Context, call ObservedToolCall) (TargetResolution, bool) {

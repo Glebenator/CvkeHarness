@@ -210,6 +210,7 @@ The setup wizard configures:
 - log level
 - initial `soul.md` profile
 - optional runtime-host machine notes for stable local quirks
+- optional Tavily-backed public web search tools
 - bootstrap of the structured memory files
 
 `setup` creates the readable managed memory files up front in `~/.cvkeharness/`. If they are missing later, `run`, `chat`, and `memory reindex` bootstrap them again automatically before retrieval.
@@ -311,6 +312,8 @@ Important fields:
 - `max_tokens`
 - `max_iterations`
 - `allowed_commands`
+- `web_search`
+  Optional public web research tools. Disabled by default. Set `web_search.enabled: true`, keep `provider: tavily`, and provide `api_keys.tavily` or `TAVILY_API_KEY`. Defaults are `max_results: 5`, `search_depth: basic`, and `max_fetched_chars: 12000`; request/config caps are 10 results and 30000 fetched characters. `allowed_domains` and `blocked_domains` constrain public search/fetch targets.
 
 ### Routing behavior
 
@@ -360,6 +363,17 @@ The memory note tool:
 - is meant for reusable operator notes, environment facts, stable preferences, or tool heuristics discovered mid-run
 - should not be used for raw logs, speculative thoughts, or verbose summaries
 - keeps ad hoc notes provisional rather than executable
+
+### `web_search` and `web_fetch`
+
+The optional Tavily-backed web tools:
+
+- are registered only when `web_search.enabled` is true and a Tavily key is available
+- use direct Go HTTP calls to Tavily, not shell commands or external binaries
+- return bounded structured JSON with URLs, snippets/content, request IDs, usage credits, and truncation flags
+- reject likely secrets before making requests
+- block `web_fetch` for localhost, private/link-local/metadata, bare internal, and configured blocked domains
+- are intended for public documentation, release notes, issue trackers, and error-message research, not target discovery or internal network probing
 
 ## Repository Layout
 

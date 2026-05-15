@@ -446,6 +446,7 @@ The registry currently exposes:
 
 - `shell_execute`
 - `memory_record_finding`
+- optional `web_search` and `web_fetch` when Tavily web search is enabled and credentialed
 
 `shell_execute` is the most security-sensitive path in the codebase. Its architecture is layered:
 
@@ -462,6 +463,8 @@ The registry currently exposes:
 7. record telemetry with approval mode and outcome
 
 The memory note tool is intentionally narrower: it writes reusable ad hoc findings into `findings.md` through the same structured memory manager, but it does not create playbooks or cautions directly.
+
+The optional web tools are read-only public research tools. They call Tavily directly over HTTP, return bounded structured JSON, reject obvious secrets, and prevent `web_fetch` from sending localhost, private, metadata, or internal-looking URLs to the external provider. Successful web-only output is not promoted into target-aware operational memory automatically.
 
 ### 6. Target-aware operational memory
 

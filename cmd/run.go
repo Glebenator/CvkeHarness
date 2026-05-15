@@ -20,7 +20,6 @@ import (
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/router"
 	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -78,7 +77,11 @@ var runCmd = &cobra.Command{
 			logger.Warn("failed to reindex memory metadata", "error", err)
 		}
 		promptDumper := promptdump.New(cfg.DebugPromptDumps, cfg.PromptDumpDir)
-		registry := tools.NewDefaultRegistryWithStoreMemoryAndPromptDumper(cfg.AllowedCommands, store, mem, p, cfg.SafetyMode, cfg.SafetyModel, cfg.PrimaryModel(), promptDumper)
+		registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
 
 		routingCfg := routingConfigFromConfig(cfg, store)
 		r := router.New(routingCfg, store, func(ctx context.Context, selection core.RoutingSelection) (bool, error) {
