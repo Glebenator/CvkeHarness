@@ -449,6 +449,8 @@ func cloneTUIConfig(cfg *config.Config) *config.Config {
 	out.AllowedCommands = append([]string(nil), cfg.AllowedCommands...)
 	out.ApprovedModels = append([]string(nil), cfg.ApprovedModels...)
 	out.FavoriteModels = append([]string(nil), cfg.FavoriteModels...)
+	out.WebSearch.AllowedDomains = append([]string(nil), cfg.WebSearch.AllowedDomains...)
+	out.WebSearch.BlockedDomains = append([]string(nil), cfg.WebSearch.BlockedDomains...)
 	return &out
 }
 

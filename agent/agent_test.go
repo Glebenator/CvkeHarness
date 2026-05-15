@@ -106,3 +106,12 @@ func TestRun_RejectsUnsafeShellToolCall(t *testing.T) {
 		t.Fatalf("expected judge rejection error in final result, got %q", result.Output)
 	}
 }
+
+func TestClassifyPolicyDenialIgnoresWebValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	denied, denialClass := classifyPolicyDenial(fmt.Errorf("url host \"localhost\" is not allowed for web_fetch"))
+	if denied || denialClass != "" {
+		t.Fatalf("expected web validation error to avoid shell policy classification, got denied=%v class=%q", denied, denialClass)
+	}
+}

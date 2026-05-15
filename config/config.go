@@ -40,6 +40,7 @@ type Config struct {
 	RoutingMinConfidence float64           `yaml:"routing_min_confidence,omitempty"`
 	SetupAgentMode       string            `yaml:"setup_agent_mode,omitempty"`
 	CapabilityPolicy     CapabilityPolicy  `yaml:"capability_policy,omitempty"`
+	WebSearch            WebSearchConfig   `yaml:"web_search,omitempty"`
 }
 
 // CapabilityPolicy captures durable user preferences collected during setup.
@@ -49,6 +50,17 @@ type CapabilityPolicy struct {
 	AutonomousDiagnostics string `yaml:"autonomous_diagnostics,omitempty"`
 	NetworkProbes         string `yaml:"network_probes,omitempty"`
 	InstallMissingTools   string `yaml:"install_missing_tools,omitempty"`
+}
+
+// WebSearchConfig controls optional external web research tools.
+type WebSearchConfig struct {
+	Enabled         bool     `yaml:"enabled,omitempty"`
+	Provider        string   `yaml:"provider,omitempty"`
+	MaxResults      int      `yaml:"max_results,omitempty"`
+	SearchDepth     string   `yaml:"search_depth,omitempty"`
+	MaxFetchedChars int      `yaml:"max_fetched_chars,omitempty"`
+	AllowedDomains  []string `yaml:"allowed_domains,omitempty"`
+	BlockedDomains  []string `yaml:"blocked_domains,omitempty"`
 }
 
 // GetAPIKey returns the stored credential for the given provider, or "" if none.
@@ -65,6 +77,14 @@ func (c *Config) SetAPIKey(provider, key string) {
 		c.APIKeys = make(map[string]string)
 	}
 	c.APIKeys[provider] = key
+}
+
+// TavilyAPIKey returns the configured Tavily key, falling back to TAVILY_API_KEY.
+func (c *Config) TavilyAPIKey() string {
+	if key := strings.TrimSpace(c.GetAPIKey("tavily")); key != "" {
+		return key
+	}
+	return strings.TrimSpace(os.Getenv("TAVILY_API_KEY"))
 }
 
 // PrimaryModel returns the configured default model with legacy fallback.
@@ -154,6 +174,7 @@ func (c *Config) Normalize() {
 	if c.CapabilityPolicy.InstallMissingTools == "" {
 		c.CapabilityPolicy.InstallMissingTools = "ask"
 	}
+	c.normalizeWebSearch()
 	if len(c.ApprovedModels) == 0 && c.DefaultModel != "" && c.Provider != "" {
 		c.ApprovedModels = []string{c.Provider + "/" + c.DefaultModel}
 	}
@@ -253,6 +274,13 @@ func DefaultConfig() *Config {
 			NetworkProbes:         "ask",
 			InstallMissingTools:   "ask",
 		},
+		WebSearch: WebSearchConfig{
+			Enabled:         false,
+			Provider:        "tavily",
+			MaxResults:      5,
+			SearchDepth:     "basic",
+			MaxFetchedChars: 12000,
+		},
 		ApprovedModels: []string{"openrouter/anthropic/claude-sonnet-4.6"},
 		AllowedCommands: []string{
 			"df", "echo", "free", "uptime", "ps", "netstat", "systemctl", "journalctl",
@@ -279,6 +307,49 @@ func ensureAllowedCommand(cfg *Config, command string) {
 		}
 	}
 	cfg.AllowedCommands = append(cfg.AllowedCommands, command)
+}
+
+func (c *Config) normalizeWebSearch() {
+	if c.WebSearch.Provider == "" {
+		c.WebSearch.Provider = "tavily"
+	}
+	c.WebSearch.Provider = strings.ToLower(strings.TrimSpace(c.WebSearch.Provider))
+	if c.WebSearch.MaxResults <= 0 {
+		c.WebSearch.MaxResults = 5
+	}
+	if c.WebSearch.MaxResults > 10 {
+		c.WebSearch.MaxResults = 10
+	}
+	if c.WebSearch.SearchDepth == "" {
+		c.WebSearch.SearchDepth = "basic"
+	}
+	c.WebSearch.SearchDepth = strings.ToLower(strings.TrimSpace(c.WebSearch.SearchDepth))
+	if c.WebSearch.MaxFetchedChars <= 0 {
+		c.WebSearch.MaxFetchedChars = 12000
+	}
+	if c.WebSearch.MaxFetchedChars > 30000 {
+		c.WebSearch.MaxFetchedChars = 30000
+	}
+	c.WebSearch.AllowedDomains = normalizeStringList(c.WebSearch.AllowedDomains)
+	c.WebSearch.BlockedDomains = normalizeStringList(c.WebSearch.BlockedDomains)
+}
+
+func normalizeStringList(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	seen := make(map[string]bool, len(items))
+	for _, item := range items {
+		item = strings.ToLower(strings.TrimSpace(item))
+		item = strings.TrimPrefix(item, ".")
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	return out
 }
 
 func normalizeModelRefList(items []string) []string {

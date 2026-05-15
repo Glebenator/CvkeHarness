@@ -5,15 +5,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sync"
 	"time"
+
+	"github.com/coolcake/cvkeharness/internal/secrets"
 )
 
 var (
 	mu sync.Mutex
-	// Matches common API key patterns (sk-..., or generic sk-or-v1- for OpenRouter)
-	secretRegex = regexp.MustCompile(`(sk-[a-zA-Z0-9]{20,})|(sk-or-v1-[a-zA-Z0-9]{40,})`)
 )
 
 type contextKey struct {
@@ -91,8 +90,5 @@ func RecordEvent(event TelemetryEvent) error {
 }
 
 func maskSecrets(s string) string {
-	if s == "" {
-		return s
-	}
-	return secretRegex.ReplaceAllString(s, "[REDACTED]")
+	return secrets.Mask(s)
 }

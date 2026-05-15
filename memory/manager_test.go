@@ -456,6 +456,43 @@ func TestSelectFindingSkipsNoisyRunOutcome(t *testing.T) {
 	}
 }
 
+func TestCurateRunOutcomeSkipsWebOnlyFindings(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := state.Open(filepath.Join(dir, "state.db"))
+	defer store.Close()
+
+	manager := NewManager(dir, store, 3)
+	manager.hostname = func() string { return "runtime.local" }
+
+	ctx := context.Background()
+	if err := manager.EnsureFiles(); err != nil {
+		t.Fatalf("EnsureFiles returned error: %v", err)
+	}
+	if err := manager.CurateRunOutcome(ctx, RunOutcome{
+		Task:   "research the latest Kubernetes release notes",
+		Output: "Kubernetes release notes say the feature changed.",
+		ToolCalls: []ObservedToolCall{
+			{
+				ToolName: "web_search",
+				Result:   `{"ok":true,"results":[{"url":"https://kubernetes.io/docs"}]}`,
+				Success:  true,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CurateRunOutcome returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, FindingsFile))
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if strings.Contains(string(data), "Kubernetes release notes say the feature changed") {
+		t.Fatalf("expected web-only output not to be promoted to findings, got %q", string(data))
+	}
+}
+
 func TestRollbackRestoresFindingsAndReindexes(t *testing.T) {
 	t.Parallel()
 

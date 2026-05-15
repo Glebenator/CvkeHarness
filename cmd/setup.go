@@ -1474,6 +1474,8 @@ func cloneConfig(cfg *config.Config) *config.Config {
 	if len(cfg.FavoriteModels) > 0 {
 		clone.FavoriteModels = append([]string(nil), cfg.FavoriteModels...)
 	}
+	clone.WebSearch.AllowedDomains = append([]string(nil), cfg.WebSearch.AllowedDomains...)
+	clone.WebSearch.BlockedDomains = append([]string(nil), cfg.WebSearch.BlockedDomains...)
 	return &clone
 }
 

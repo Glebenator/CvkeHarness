@@ -2,9 +2,11 @@ package setupflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -113,6 +115,66 @@ func TestScannerDetectsToolsAndPython(t *testing.T) {
 	}
 	if len(profile.PackageManagers) == 0 {
 		t.Fatalf("expected package manager probes, got %#v", profile.PackageManagers)
+	}
+}
+
+func TestValidateTavilyKeySendsAuthAndPayload(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer tvly-test-key" {
+			t.Fatalf("expected Tavily bearer auth, got %q", got)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("expected JSON content type, got %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if payload["query"] == "" || payload["include_answer"] != false || payload["include_raw_content"] != false || payload["include_images"] != false {
+			t.Fatalf("unexpected validation payload: %#v", payload)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	}))
+	defer server.Close()
+
+	if err := validateTavilyKeyWithEndpoint(context.Background(), "tvly-test-key", server.URL, server.Client()); err != nil {
+		t.Fatalf("expected Tavily validation to succeed, got %v", err)
+	}
+}
+
+func TestValidateTavilyKeyRejectsEmptyBeforeHTTP(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	defer server.Close()
+
+	err := validateTavilyKeyWithEndpoint(context.Background(), "", server.URL, server.Client())
+	if err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("expected empty key error, got %v", err)
+	}
+	if called {
+		t.Fatal("expected empty key to be rejected before HTTP")
+	}
+}
+
+func TestValidateTavilyKeyMapsHTTPFailures(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"bad key"}`))
+	}))
+	defer server.Close()
+
+	err := validateTavilyKeyWithEndpoint(context.Background(), "bad-key", server.URL, server.Client())
+	if err == nil || !strings.Contains(err.Error(), "invalid Tavily credential") || !strings.Contains(err.Error(), "bad key") {
+		t.Fatalf("expected invalid credential error, got %v", err)
 	}
 }
 

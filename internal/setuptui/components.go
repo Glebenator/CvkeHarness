@@ -46,6 +46,7 @@ var stepOrder = []step{
 	stepDependencies,
 	stepDaemon,
 	stepCapabilities,
+	stepWebSearch,
 	stepRecommendations,
 	stepSoul,
 	stepNotes,
@@ -62,6 +63,7 @@ var stepLabels = map[step]string{
 	stepDependencies:    "Dependencies",
 	stepDaemon:          "Scheduler Daemon",
 	stepCapabilities:    "Capabilities",
+	stepWebSearch:       "Web Search",
 	stepRecommendations: "Guided Review",
 	stepSoul:            "Agent Soul",
 	stepNotes:           "Machine Notes",
@@ -172,6 +174,20 @@ func (m setupModel) renderList(rows []row) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func (m setupModel) renderInputField(label string) string {
+	width := 72
+	if m.width > 0 {
+		width = min(72, max(32, m.width-36))
+	}
+	field := lipgloss.NewStyle().
+		Width(width).
+		Padding(0, 1).
+		Background(colorHighlight).
+		Foreground(colorBrightText).
+		Render(m.input.View())
+	return "  " + styleAccent.Render(label) + "\n  " + field + "\n"
 }
 
 func modelRows(items []setupflow.ModelOption) []row {
