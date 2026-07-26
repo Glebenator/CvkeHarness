@@ -91,14 +91,27 @@ func (s *Store) SaveCommandApproval(ctx context.Context, approval CommandApprova
 	if approval.PolicyVersion == "" {
 		approval.PolicyVersion = CommandApprovalPolicyVersion
 	}
+	switch approval.Source {
+	case "user_confirm":
+		if approval.SessionID == "" {
+			return fmt.Errorf("interactive command approval requires a session id")
+		}
+	case "cli_policy":
+		if approval.SessionID != "" {
+			return fmt.Errorf("explicit CLI policy approval must not impersonate an interactive session")
+		}
+	default:
+		return fmt.Errorf("unsupported durable command approval source %q", approval.Source)
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO scoped_command_approvals (
-			target_id, environment, remote_identity, command, action, status, source, rationale,
+			target_id, environment, remote_identity, session_id, command, action, status, source, rationale,
 			policy_version, approved_at, expires_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(target_id, environment, command, action, policy_version) DO UPDATE SET
 			remote_identity = excluded.remote_identity,
+			session_id = excluded.session_id,
 			status = excluded.status,
 			source = excluded.source,
 			rationale = excluded.rationale,
@@ -107,6 +120,7 @@ func (s *Store) SaveCommandApproval(ctx context.Context, approval CommandApprova
 		approval.TargetID,
 		approval.Environment,
 		approval.RemoteIdentity,
+		approval.SessionID,
 		approval.Command,
 		approval.Action,
 		approval.Status,
@@ -126,7 +140,7 @@ func (s *Store) ListCommandApprovals(ctx context.Context) ([]CommandApproval, er
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT target_id, environment, remote_identity, command, action, status, source, rationale,
+		SELECT target_id, environment, remote_identity, session_id, command, action, status, source, rationale,
 		       policy_version, approved_at, expires_at
 		FROM scoped_command_approvals
 		ORDER BY approved_at DESC, target_id, command`)
@@ -142,6 +156,7 @@ func (s *Store) ListCommandApprovals(ctx context.Context) ([]CommandApproval, er
 			&item.TargetID,
 			&item.Environment,
 			&item.RemoteIdentity,
+			&item.SessionID,
 			&item.Command,
 			&item.Action,
 			&item.Status,
@@ -158,10 +173,11 @@ func (s *Store) ListCommandApprovals(ctx context.Context) ([]CommandApproval, er
 	return out, rows.Err()
 }
 
-// ListApprovedCommandApprovals returns live, deliberately user-created command
-// approvals for one exact target and environment. One-off approvals are never
-// reusable.
-func (s *Store) ListApprovedCommandApprovals(ctx context.Context, targetID, environment string, now time.Time) ([]CommandApproval, error) {
+// ListApprovedCommandApprovals returns live approvals for one exact target and
+// environment. Interactive approvals require the exact current session. An
+// explicit CLI policy exception has no session and is intentionally global to
+// the remaining target/action scope. One-off approvals are never reusable.
+func (s *Store) ListApprovedCommandApprovals(ctx context.Context, targetID, environment, sessionID string, now time.Time) ([]CommandApproval, error) {
 	if targetID == "" || environment == "" || environment == EnvironmentUnknown {
 		return nil, nil
 	}
@@ -184,7 +200,16 @@ func (s *Store) ListApprovedCommandApprovals(ctx context.Context, targetID, envi
 		if approval.PolicyVersion != CommandApprovalPolicyVersion || !approval.ExpiresAt.After(now) {
 			continue
 		}
-		if approval.Source != "cli" && approval.Source != "user_confirm" {
+		switch approval.Source {
+		case "user_confirm":
+			if sessionID == "" || approval.SessionID == "" || approval.SessionID != sessionID {
+				continue
+			}
+		case "cli_policy":
+			if approval.SessionID != "" {
+				continue
+			}
+		default:
 			continue
 		}
 		out = append(out, approval)

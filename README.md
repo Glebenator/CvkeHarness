@@ -10,7 +10,7 @@ The runtime is phase-routed, approval-aware, and uses a safety-first target-scop
 - Supports multiple providers behind a shared provider interface
 - Tracks run history, tool outcomes, routing stats, approvals, and operational memory in SQLite
 - Generates human-readable memory export views under `~/.cvkeharness/`
-- Distinguishes runtime host, stable target ID, environment, transport, and remote identity
+- Distinguishes runtime host, deterministic endpoint-label ID, environment, transport, and operator-confirmed remote identity label
 - Retrieves target-specific playbooks, cautions, and findings with strict prompt budget caps
 - Fails closed for operational memory when the canonical state DB is unavailable
 
@@ -58,9 +58,11 @@ CvkeHarness distinguishes:
 - `environment`
   An operator-bound scope such as `production` or `staging`
 - `remote_identity`
-  A transport-specific identity such as `ops@api-01`
+  An operator-confirmed transport-specific label such as `ops@api-01`; not a live machine fingerprint
 
 If no remote context is present, the target defaults to the runtime host. SSH-style context creates a provisional target with `environment=unknown`. Operational memory and reusable approvals remain withheld until the operator binds its environment and remote identity. If one host identity matches more than one environment, resolution fails closed as ambiguous.
+
+Target identity is label-based: CvkeHarness does not currently validate an SSH host-key fingerprint, cloud instance identity, or other live machine fingerprint. Binding is one-way for provisional targets, and operators must revalidate the live endpoint before mutation.
 
 ### Managed Files
 
@@ -271,9 +273,9 @@ Show why routing chose a model:
 ### Command commands
 
 - `cvkeharness commands list`
-  Show the static shell allowlist plus learned approved commands
+  Show the static shell allowlist, session-scoped interactive approvals, and explicit CLI policy exceptions
 - `cvkeharness commands approve "<command>" --target <id> --environment <env> --ttl 1h`
-  Create a short-lived exact command approval for one target and environment
+  Create an explicit, short-lived CLI policy exception for one target, environment, remote identity, and exact action
 
 ## Configuration
 
@@ -341,9 +343,9 @@ The shell tool:
 - validates shell syntax
 - parses supported chaining operators like `&&`, `||`, `;`, and `|`
 - blocks unsupported shell constructs such as redirection, substitution, and backgrounding
-- checks both the static allowlist and the learned approved-command list
+- checks the static allowlist, same-session interactive approvals, and explicit CLI policy exceptions
 - routes unknown commands through either an LLM judge or direct user confirmation, depending on config
-- persists approved command segments for reuse in future runs
+- persists an interactive approval only when an exact session ID is present; cross-session reuse fails closed
 - records telemetry and tool outcomes
 - provides the main target discovery signal for remote SSH work
 
@@ -351,8 +353,9 @@ The shell tool:
 
 The memory note tool:
 
-- writes a concise verified note into `findings.md`
-- is meant for reusable operator notes, environment facts, stable preferences, or tool heuristics discovered mid-run
+- submits a concise, untrusted finding candidate scoped to the current target
+- places the candidate in the operator review inbox; it is not retrieved until promoted
+- is meant for reviewable operator notes or tool observations discovered mid-run
 - should not be used for raw logs, speculative thoughts, or verbose summaries
 - keeps ad hoc notes provisional rather than executable
 

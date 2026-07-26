@@ -55,14 +55,19 @@ var commandsListCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Println("\nLearned approvals:")
+		fmt.Println("\nScoped approvals and explicit CLI policy exceptions:")
 		if len(approvals) == 0 {
 			fmt.Println("- (none yet)")
 			return nil
 		}
 		for _, item := range approvals {
-			fmt.Printf("- %s target=%s environment=%s action=%s source=%s status=%s expires_at=%s\n",
-				item.Command, item.TargetID, item.Environment, item.Action, item.Source, item.Status, item.ExpiresAt.Format(time.RFC3339))
+			sessionScope := item.SessionID
+			if sessionScope == "" {
+				sessionScope = "(global CLI exception)"
+			}
+			fmt.Printf("- %s target=%s environment=%s action=%s source=%s session=%s status=%s expires_at=%s\n",
+				item.Command, item.TargetID, item.Environment, item.Action, item.Source,
+				sessionScope, item.Status, item.ExpiresAt.Format(time.RFC3339))
 			if item.Rationale != "" {
 				fmt.Printf("  %s\n", item.Rationale)
 			}
@@ -73,7 +78,7 @@ var commandsListCmd = &cobra.Command{
 
 var commandsApproveCmd = &cobra.Command{
 	Use:   "approve [command]",
-	Short: "Approve one or more shell command segments for future runs",
+	Short: "Create an explicit target-scoped CLI policy exception",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
@@ -122,8 +127,8 @@ var commandsApproveCmd = &cobra.Command{
 				Command:        segment.Normalized,
 				Action:         tools.ShellSegmentAction(segment),
 				Status:         state.ApprovalStatusApproved,
-				Source:         "cli",
-				Rationale:      "user approved via commands approve",
+				Source:         "cli_policy",
+				Rationale:      "explicit operator policy exception via commands approve",
 				PolicyVersion:  state.CommandApprovalPolicyVersion,
 				ApprovedAt:     now,
 				ExpiresAt:      now.Add(commandApprovalTTL),
@@ -136,11 +141,11 @@ var commandsApproveCmd = &cobra.Command{
 		}
 
 		if len(parsed.Segments) == 1 {
-			fmt.Printf("Approved %s\n", parsed.Segments[0].Normalized)
+			fmt.Printf("Created explicit CLI policy exception for %s\n", parsed.Segments[0].Normalized)
 			return nil
 		}
 
-		fmt.Printf("Approved %d command segments from: %s\n", len(parsed.Segments), args[0])
+		fmt.Printf("Created explicit CLI policy exceptions for %d command segments from: %s\n", len(parsed.Segments), args[0])
 		return nil
 	},
 }

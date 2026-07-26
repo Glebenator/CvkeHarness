@@ -1324,7 +1324,7 @@ Only a small rendered brief may be loaded:
 The model may suggest what is worth remembering, but the harness owns ids, timestamps, dedupe, freshness, file layout, and structured persistence.
 
 The execution phase must not dump freeform run summaries into managed files.
-If a concise verified ad hoc note is worth preserving mid-run, use the memory_record_finding tool.
+If a concise observation is worth preserving mid-run, use memory_record_finding to submit an untrusted candidate for operator review.
 
 ## Dependency Handling
 

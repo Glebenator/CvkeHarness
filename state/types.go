@@ -285,6 +285,7 @@ type CommandApproval struct {
 	TargetID       string
 	Environment    string
 	RemoteIdentity string
+	SessionID      string
 	Command        string
 	Action         string
 	Status         string
@@ -456,5 +457,5 @@ const (
 	EnvironmentUnknown = "unknown"
 	EnvironmentRuntime = "runtime"
 
-	CommandApprovalPolicyVersion = "v1"
+	CommandApprovalPolicyVersion = "v2"
 )

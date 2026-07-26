@@ -616,7 +616,12 @@ func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedS
 	if s.approvalStore == nil || !s.approvalStore.Available() {
 		return
 	}
-	targetID := telemetry.FieldsFromContext(ctx).TargetID
+	fields := telemetry.FieldsFromContext(ctx)
+	targetID := fields.TargetID
+	if fields.SessionID == "" {
+		log.FromContext(ctx).Warn("interactive approval was not remembered because session scope is missing", "target_id", targetID)
+		return
+	}
 	target, err := s.approvalStore.GetTarget(ctx, targetID)
 	now := time.Now().UTC()
 	if err != nil ||
@@ -642,6 +647,7 @@ func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedS
 			TargetID:       target.ID,
 			Environment:    target.Environment,
 			RemoteIdentity: target.RemoteIdentity,
+			SessionID:      fields.SessionID,
 			Command:        segment.Normalized,
 			Action:         ShellSegmentAction(segment),
 			Status:         state.ApprovalStatusApproved,
@@ -661,7 +667,8 @@ func (s *ShellTool) scopedApprovedCommands(ctx context.Context, parsed ParsedShe
 	if s.approvalStore == nil || !s.approvalStore.Available() {
 		return out
 	}
-	targetID := telemetry.FieldsFromContext(ctx).TargetID
+	fields := telemetry.FieldsFromContext(ctx)
+	targetID := fields.TargetID
 	if targetID == "" {
 		return out
 	}
@@ -675,7 +682,7 @@ func (s *ShellTool) scopedApprovedCommands(ctx context.Context, parsed ParsedShe
 		!target.ExpiresAt.After(now) {
 		return out
 	}
-	approvals, err := s.approvalStore.ListApprovedCommandApprovals(ctx, target.ID, target.Environment, now)
+	approvals, err := s.approvalStore.ListApprovedCommandApprovals(ctx, target.ID, target.Environment, fields.SessionID, now)
 	if err != nil {
 		return out
 	}

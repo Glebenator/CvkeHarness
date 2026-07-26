@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/state"
 )
 
@@ -21,6 +23,12 @@ func (m *Manager) PersistLessons(ctx context.Context, lessons []Lesson) error {
 	}
 	m.ensureRuntimeBootstrap(&mem)
 	now := m.now()
+	targetID := strings.TrimSpace(telemetry.FieldsFromContext(ctx).TargetID)
+	if targetID == "" {
+		targetID = mem.RuntimeHostID
+	} else if targetIndex(mem, targetID) < 0 {
+		return fmt.Errorf("cannot persist memory candidate for unknown target %q", targetID)
+	}
 
 	changed := false
 	for _, lesson := range lessons {
@@ -33,9 +41,9 @@ func (m *Manager) PersistLessons(ctx context.Context, lessons []Lesson) error {
 			confidence = 0.65
 		}
 		finding := state.Finding{
-			ID:          findingID(mem.RuntimeHostID+"|model_candidate", body),
-			TargetID:    mem.RuntimeHostID,
-			Environment: targetEnvironment(mem, mem.RuntimeHostID),
+			ID:          findingID(targetID+"|model_candidate", body),
+			TargetID:    targetID,
+			Environment: targetEnvironment(mem, targetID),
 			Intent:      IntentGeneral,
 			ToolName:    strings.TrimSpace(lesson.ToolName),
 			Status:      state.MemoryStatusCandidate,
@@ -243,6 +251,7 @@ func applyPlaybookFailure(mem *fileState, targetID, intent string, call Observed
 		playbook.Confidence = maxFloat(0.35, playbook.Confidence-0.15)
 		playbook.LastUsedAt = now
 		playbook.UpdatedAt = now
+		playbook.EvidenceHash = playbookIntegrity(playbook)
 		mem.Playbooks[i] = playbook
 		return true
 	}
