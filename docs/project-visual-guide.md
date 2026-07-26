@@ -134,7 +134,7 @@ Key details:
 
 - planning is optional and tool-free
 - execution is iterative and tool-driven
-- target identity can tighten mid-run after observed `ssh`, `scp`, or `rsync` commands
+- the endpoint label can tighten mid-run after observed `ssh`, `scp`, or `rsync` commands
 - the default runtime now curates memory deterministically from observed outcomes rather than asking a model to invent durable structure
 
 ## 4. Model Routing
@@ -219,7 +219,8 @@ flowchart TD
 Important behaviors:
 
 - SQLite is canonical; Markdown files are generated views and explicit import sources
-- targets require a stable ID, environment, and remote identity before active memory can support planning
+- targets require a deterministic endpoint-label ID, environment, and operator-confirmed remote identity label before active memory can support planning
+- endpoint labels are not live machine fingerprints; the operator still verifies the endpoint before mutation
 - model-authored notes, successful command sequences, and failure text enter the review inbox as untrusted candidates
 - typed facts from explicit probes remain candidates until operator review; probe output cannot silently rewrite target identity
 - playbooks require a success check before promotion, and every retrieved playbook remains a historical verify-first hint
@@ -268,11 +269,12 @@ flowchart TD
     call["Model requests shell_execute"]
     parse["ParseShellCommand()\nsegment command\nreject blocked syntax"]
     blocked["Blocked syntax\nredirection, substitution,\nbackticks, raw newlines,\nsingle &, malformed chains"]
-    allow["Allowlist or learned\napproved segments?"]
+    allow["Allowlist, same-session approval,\nor explicit CLI exception?"]
     gate["Secondary approval gate"]
     judge["LLM judge\nSAFE or DANGEROUS"]
     user["User confirm\nreject, approve once,\napprove and remember"]
-    remember["Persist approved segments\ninto command_approvals"]
+    session{"Exact session ID\npresent?"}
+    remember["Persist same-session approval\ninto scoped_command_approvals"]
     exec["Run sh -c with timeout\ncapture and stream output"]
     events["Emit structured events\nand telemetry"]
 
@@ -283,8 +285,10 @@ flowchart TD
     allow -- "no" --> gate
     gate --> judge
     gate --> user
-    judge --> remember
-    user --> remember
+    judge --> exec
+    user --> session
+    session -- "yes, remember" --> remember
+    session -- "no or approve once" --> exec
     remember --> exec
 ```
 

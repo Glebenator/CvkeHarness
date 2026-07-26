@@ -86,7 +86,7 @@ flowchart TB
         memoryTool["MemoryRecordFindingTool\nmemory_record_finding"]
         parser["ParseShellCommand\nsyntax segmentation"]
         allowlist["Static allowlist\nconfig.allowed_commands"]
-        learnedApprovals["User-created scoped approvals\nfrom SQLite"]
+        learnedApprovals["Session approvals and explicit CLI exceptions\nfrom SQLite"]
         approver["ShellApprover\nLLM judge or user confirm"]
         hostShell["Host shell\nsh -c"]
     end
@@ -111,7 +111,7 @@ flowchart TB
         store["state.Store\nSQLite wrapper with graceful degradation"]
         runsTable["runs / phase_records / tool_outcomes"]
         statsTable["model_stats / routing_candidates"]
-        approvalsTable["model_approvals / command_approvals"]
+        approvalsTable["model_approvals / scoped_command_approvals"]
         targetsTable["targets / target_aliases"]
         factsTable["host_facts"]
         playbooksTable["playbooks"]
@@ -452,11 +452,12 @@ The registry currently exposes:
 2. reject unsupported syntax such as redirects, command substitution, backgrounding, and malformed chaining
 3. validate each segment against:
    - the static allowlist from config
-   - previously approved normalized segments from SQLite
+   - same-session interactive approvals from SQLite
+   - explicit CLI policy exceptions from SQLite
 4. if validation fails, defer to a secondary approval gate:
    - LLM-as-a-judge, or
    - direct user confirmation
-5. persist only deliberate user approvals with exact target, environment, action, policy version, and expiry
+5. persist interactive approvals only with an exact session ID; explicit CLI policy exceptions are separately labeled and intentionally session-independent
 6. execute through `sh -c` with timeout
 7. record telemetry with approval mode and outcome
 
@@ -469,7 +470,7 @@ The optional web tools are read-only public research tools. They call Tavily dir
 The memory subsystem separates four state planes:
 
 1. managed policy, which models and memory cannot write;
-2. live fleet inventory, with stable target, environment, transport, and remote identity;
+2. live fleet inventory, with a deterministic endpoint-label ID, environment, transport, and operator-confirmed remote identity label;
 3. operational knowledge, stored as target-scoped facts, playbooks, findings, and cautions;
 4. short-lived run state and resumable blocked work.
 
@@ -483,6 +484,8 @@ Generated readable views in `~/.cvkeharness/`:
 - `playbooks.md`
 - `findings.md`
 - `cautions.md`
+
+Target identity is label-based. CvkeHarness does not currently enforce a live machine, SSH host-key, or cloud-instance fingerprint, so operators must revalidate the endpoint before mutation.
 
 Canonical SQLite state:
 

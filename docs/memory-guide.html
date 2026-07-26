@@ -632,7 +632,7 @@
           <div class="plane" role="listitem">
             <span class="plane-number">2</span>
             <strong>Live fleet inventory</strong>
-            <p>Stable target ID, environment, transport, remote identity, verification time, and expiry. This plane defines the computer currently in scope.</p>
+            <p>Deterministic endpoint-label ID, environment, transport, operator-confirmed remote identity label, confirmation time, and expiry.</p>
           </div>
           <div class="plane" role="listitem">
             <span class="plane-number">3</span>
@@ -653,7 +653,7 @@
 
       <section id="targets">
         <h2>Target and environment scoping</h2>
-        <p>Every active remote target requires the following identity fields:</p>
+        <p>Every active remote target requires the following endpoint-label fields:</p>
 
         <div class="table-wrap">
           <table>
@@ -667,7 +667,7 @@
             <tbody>
               <tr>
                 <td><code>target_id</code></td>
-                <td>Stable opaque identifier used to scope memory and approvals.</td>
+                <td>Opaque identifier derived from the endpoint labels known to CvkeHarness.</td>
                 <td><code>target-7f31d4b8c0a1</code></td>
               </tr>
               <tr>
@@ -682,7 +682,7 @@
               </tr>
               <tr>
                 <td><code>remote_identity</code></td>
-                <td>Transport-specific identity.</td>
+                <td>Operator-confirmed transport-specific label.</td>
                 <td><code>ops@api-01</code></td>
               </tr>
               <tr>
@@ -694,16 +694,19 @@
           </table>
         </div>
 
-        <p>A hostname or IP address is not sufficient authority because the same value can identify different systems in different networks or environments.</p>
+        <div class="callout warning">
+          <span class="callout-title">Endpoint-label limitation</span>
+          <p>CvkeHarness does not validate a live machine fingerprint, SSH host-key fingerprint, or cloud instance identity. A target record scopes memory to operator-confirmed labels; it does not cryptographically prove which machine currently answers the endpoint. Verify the live endpoint before mutation.</p>
+        </div>
 
         <h3>Bind a provisional target</h3>
-        <p>New remote targets begin with <code>environment=unknown</code>. After independently confirming the target, bind its environment and remote identity:</p>
+        <p>New remote targets begin with <code>environment=unknown</code>. After independently confirming the endpoint labels, bind its environment and remote identity once:</p>
         <pre><code>cvkeharness memory target set-environment \
   target-7f31d4b8c0a1 production ops@api-01</code></pre>
 
         <div class="callout warning">
           <span class="callout-title">Ambiguous target</span>
-          <p>If one identity matches multiple environments, CvkeHarness withholds target memory. An LLM judge cannot authorize a shell command when the target is unresolved or ambiguous.</p>
+          <p>An already-bound target cannot be rebound. If a requested environment conflicts with the stored label, or one label matches multiple environments, CvkeHarness withholds target memory. An LLM judge cannot authorize a shell command when the target is unresolved or ambiguous.</p>
         </div>
       </section>
 
@@ -838,7 +841,7 @@
               <tr>
                 <td>Scope</td>
                 <td>Target ID and environment.</td>
-                <td>Exact command, action, target ID, environment, remote identity, policy version, and expiry.</td>
+                <td>Interactive: exact session plus command, action, target, environment, remote identity, policy version, and expiry. CLI exception: the same scope without a session.</td>
               </tr>
               <tr>
                 <td>LLM effect</td>
@@ -849,12 +852,13 @@
           </table>
         </div>
 
-        <h3>Create a scoped approval</h3>
+        <h3>Create an explicit CLI policy exception</h3>
         <pre><code>cvkeharness commands approve "systemctl restart api" \
   --target target-7f31d4b8c0a1 \
   --environment production \
   --ttl 1h</code></pre>
-        <p>The maximum CLI TTL is 24 hours. Reuse is limited to a narrow set of target-level commands. Runtime interpolation, shell globbing, and path-dependent commands cannot become reusable approvals because identical text could resolve to different values or files later. The target binding must also remain active, unexpired, and attached to the same remote identity.</p>
+        <p>This command is an explicit operator policy exception, not an interactive remembered approval. It is intentionally session-independent, with a maximum TTL of 24 hours. Reuse is limited to a narrow set of target-level commands. Runtime interpolation, shell globbing, and path-dependent commands are excluded. The target binding must remain active, unexpired, and attached to the same remote identity label.</p>
+        <p>An interactive remembered approval is different: it is persisted only when an exact session ID exists and can be reused only by that same session. Missing-session and cross-session reuse fail closed.</p>
         <p><code>approved_once</code> decisions are not returned by reusable-approval queries. The default allowlist permits diagnostic <code>systemctl</code> actions such as <code>status</code>, <code>is-active</code>, and <code>is-enabled</code>. Mutating actions require an approval path.</p>
       </section>
 
@@ -895,11 +899,11 @@
           </div>
           <div class="command-row">
             <code>cvkeharness memory target set-environment &lt;target-id&gt; &lt;environment&gt; &lt;remote-identity&gt;</code>
-            <p>Bind a provisional target to an operator-confirmed environment and remote identity.</p>
+            <p>Bind an <code>environment=unknown</code> provisional target once. Already-bound targets are rejected without mutation.</p>
           </div>
           <div class="command-row">
             <code>cvkeharness commands approve "&lt;command&gt;" --target &lt;id&gt; --environment &lt;env&gt; --ttl &lt;duration&gt;</code>
-            <p>Create a short-lived, exact reusable command approval.</p>
+            <p>Create an explicit, session-independent CLI policy exception with exact remaining scope.</p>
           </div>
         </div>
 
@@ -929,7 +933,7 @@
               <tr>
                 <td>Identity boundary</td>
                 <td>Repository, folder, user, or session.</td>
-                <td>Stable target ID, environment, transport, and remote identity.</td>
+                <td>Deterministic endpoint-label ID, environment, transport, and operator-confirmed remote identity label; no live machine fingerprint.</td>
               </tr>
               <tr>
                 <td>Use before mutation</td>
@@ -1019,7 +1023,7 @@
 
         <details>
           <summary>A reusable command approval does not match</summary>
-          <div><p>Confirm the exact normalized command, action, target ID, environment, policy version, and expiry. One-off decisions, LLM judgments, and commands containing runtime interpolation are not reusable.</p></div>
+          <div><p>Confirm the exact normalized command, action, target ID, environment, remote identity label, policy version, and expiry. An interactive approval also requires the exact session that created it; absent or different sessions fail closed. Explicit CLI policy exceptions are session-independent. One-off decisions, LLM judgments, and commands containing runtime interpolation are not reusable.</p></div>
         </details>
 
         <details>

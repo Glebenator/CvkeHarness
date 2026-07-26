@@ -9,7 +9,7 @@ CvkeHarness memory is a target-scoped planning aid. It is not an authorization s
 CvkeHarness keeps four concepts separate:
 
 1. **Managed policy**: configured safety mode, static command allowlist, approval gates, tool validation, and other operator-owned enforcement. Models and memory cannot edit this plane.
-2. **Live fleet inventory**: stable target IDs, environment, transport, and remote identity. A hostname or IP address alone is not authority.
+2. **Live fleet inventory**: deterministic endpoint-label IDs, environment, transport, and operator-confirmed remote identity labels.
 3. **Operational knowledge**: target-scoped facts, playbooks, findings, and cautions. This is historical context, filtered before retrieval and presented as a hint.
 4. **Run state**: current task, tool outcomes, telemetry, and resumable blocked work. It is short-lived execution context, not durable operational truth.
 
@@ -39,20 +39,22 @@ Import validates target scope, environment, status, trust, expiry, playbook succ
 
 Each live target has:
 
-- a stable opaque `target_id`;
+- an opaque `target_id` derived from the endpoint labels known to CvkeHarness;
 - an `environment`, such as `production` or `staging`;
 - a transport, such as `ssh` or `local`;
 - a transport-specific `remote_identity`, such as `ops@api-01`;
 - a bounded verification time and expiry.
 
-New remote targets are provisional and use `environment=unknown`. Provisional or ambiguous targets cannot use operational memory or reusable command approvals. Bind a target deliberately:
+CvkeHarness does not collect a live machine fingerprint, SSH host-key fingerprint, or cloud instance identity. A target binding proves only that an operator associated an endpoint label with an environment; it does not cryptographically prove which machine currently answers that endpoint. Operators must still verify the live endpoint before mutation.
+
+New remote targets are provisional and use `environment=unknown`. Provisional or ambiguous targets cannot use operational memory or reusable command approvals. Bind a target deliberately exactly once:
 
 ```bash
 cvkeharness memory target set-environment \
   target-7f31d4b8c0a1 production ops@api-01
 ```
 
-Resolution uses strong command or prose signals only. If the same host identity maps to more than one environment, resolution returns ambiguous and withholds target-scoped memory. A mutation then requires operator confirmation rather than guessing.
+Resolution uses explicit command or prose endpoint labels. An already-bound target cannot be rebound with this command. If a requested environment conflicts with the stored endpoint label, or if the same label maps to more than one environment, resolution returns ambiguous and withholds target-scoped memory.
 
 ## Operational knowledge metadata
 
@@ -122,13 +124,15 @@ An LLM safety judgment may allow a command under the configured safety mode, but
 A reusable approval must be deliberately created by a user and is bound to:
 
 - exact normalized command and action;
-- stable target ID;
+- exact stored target ID;
 - exact environment;
 - exact current remote identity;
 - approval policy version;
 - expiry, with a maximum CLI TTL of 24 hours.
 
 Only a narrow set of target-level commands can be remembered. Runtime interpolation, shell globbing, and path-dependent commands are excluded because identical text could resolve to different values or files later.
+
+Interactive remembered approvals also require the exact current chat session ID. They are not persisted or reused when session context is absent, and another session cannot reuse them. `cvkeharness commands approve` is different: it creates an explicit operator policy exception without a session ID. That exception can apply across sessions, but only inside its remaining exact target, environment, remote identity, command, action, policy-version, and expiry scope.
 
 ```bash
 cvkeharness commands approve "systemctl restart api" \
