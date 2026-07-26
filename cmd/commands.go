@@ -25,7 +25,7 @@ var (
 
 var commandsListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "Show static and learned approved shell commands",
+	Short: "Show static commands, scoped approvals, and CLI policy exceptions",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
@@ -46,7 +46,7 @@ var commandsListCmd = &cobra.Command{
 		store := state.Open(cfg.StateDBPath)
 		defer store.Close()
 		if !store.Available() {
-			fmt.Printf("\nLearned approvals unavailable: %v\n", store.Err())
+			fmt.Printf("\nScoped approvals and CLI policy exceptions unavailable: %v\n", store.Err())
 			return nil
 		}
 
