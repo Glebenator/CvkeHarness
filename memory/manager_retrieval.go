@@ -544,6 +544,7 @@ func renderTargetSummary(mem fileState, resolution TargetResolution) string {
 		if target.Target.ID != resolution.TargetID {
 			continue
 		}
+		_, targetLive := liveTargetEnvironment(mem, target.Target.ID, time.Now().UTC())
 		var lines []string
 		lines = append(lines, "Target summary:")
 		lines = append(lines, "- id: "+target.Target.ID)
@@ -551,16 +552,16 @@ func renderTargetSummary(mem fileState, resolution TargetResolution) string {
 		lines = append(lines, "- environment: "+firstNonEmpty(target.Target.Environment, state.EnvironmentUnknown))
 		lines = append(lines, "- remote identity: "+firstNonEmpty(target.Target.RemoteIdentity, "unverified"))
 		lines = append(lines, "- name: "+firstNonEmpty(target.Target.PrimaryName, resolution.PrimaryName))
-		if target.Target.Status != state.MemoryStatusActive || target.Target.Environment == state.EnvironmentUnknown {
-			lines = append(lines, "- scope: provisional; operational memory and reusable approvals are withheld")
+		if !targetLive {
+			lines = append(lines, "- scope: stale or provisional; operational memory and reusable approvals are withheld")
 		}
 		if len(target.Aliases) > 0 {
 			lines = append(lines, "- aliases: "+strings.Join(target.Aliases, ", "))
 		}
-		for _, fact := range prioritizedFacts(target.Facts, 2) {
+		for _, fact := range prioritizedFacts(factsForTarget(mem, target.Target.ID), 2) {
 			lines = append(lines, fmt.Sprintf("- %s: %s", fact.Key, fact.Value))
 		}
-		return clampRenderedText(strings.Join(lines, "\n"), 6, 420)
+		return clampRenderedText(strings.Join(lines, "\n"), 9, 420)
 	}
 	return ""
 }

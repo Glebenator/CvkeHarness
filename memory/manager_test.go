@@ -589,6 +589,103 @@ func TestFormatGuidanceContextLabelsViewsAsNonAuthoritative(t *testing.T) {
 	}
 }
 
+func TestTargetSummaryIncludesOnlyLiveValidatedFacts(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	target := state.Target{
+		ID: "target-1", Kind: TargetKindSSH, Environment: "production", PrimaryName: "api",
+		RemoteIdentity: "ops@api", Status: state.MemoryStatusActive, ExpiresAt: now.Add(time.Hour),
+	}
+	validFact := state.HostFact{
+		HostID: target.ID, Environment: target.Environment, Key: "service_manager", Value: "systemd",
+		Status: state.MemoryStatusActive, Source: "operator_review", EvidenceRef: "probe-1",
+		Trust: state.MemoryTrustVerified, Confidence: 0.95, ObservedAt: now,
+		VerifiedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	validFact.EvidenceHash = factIntegrity(validFact)
+	resolution := TargetResolution{
+		RuntimeHostID: "runtime-1", TargetID: target.ID, TargetKind: target.Kind,
+		Environment: target.Environment, PrimaryName: target.PrimaryName,
+	}
+
+	for _, trust := range []string{state.MemoryTrustOperator, state.MemoryTrustVerified} {
+		trustedFact := validFact
+		trustedFact.Trust = trust
+		trustedFact.EvidenceHash = factIntegrity(trustedFact)
+		validSummary := renderTargetSummary(fileState{
+			Targets: []targetRecord{{Target: target, Facts: []state.HostFact{trustedFact}}},
+		}, resolution)
+		if !strings.Contains(validSummary, "- service_manager: systemd") {
+			t.Fatalf("expected live %s fact in target summary, got %q", trust, validSummary)
+		}
+	}
+
+	cases := []struct {
+		name         string
+		mutateTarget func(*state.Target)
+		mutateFact   func(*state.HostFact)
+		wantStale    bool
+	}{
+		{
+			name: "candidate",
+			mutateFact: func(item *state.HostFact) {
+				item.Status = state.MemoryStatusCandidate
+				item.Trust = state.MemoryTrustUntrusted
+				item.EvidenceHash = factIntegrity(*item)
+			},
+		},
+		{
+			name: "tampered",
+			mutateFact: func(item *state.HostFact) {
+				item.Value = "tampered-service-manager"
+			},
+		},
+		{
+			name: "wrong environment",
+			mutateFact: func(item *state.HostFact) {
+				item.Environment = "staging"
+				item.EvidenceHash = factIntegrity(*item)
+			},
+		},
+		{
+			name: "expired fact",
+			mutateFact: func(item *state.HostFact) {
+				item.ExpiresAt = now.Add(-time.Minute)
+			},
+		},
+		{
+			name: "non-live target",
+			mutateTarget: func(item *state.Target) {
+				item.ExpiresAt = now.Add(-time.Minute)
+			},
+			wantStale: true,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			candidateTarget := target
+			candidateFact := validFact
+			if tc.mutateTarget != nil {
+				tc.mutateTarget(&candidateTarget)
+			}
+			if tc.mutateFact != nil {
+				tc.mutateFact(&candidateFact)
+			}
+			summary := renderTargetSummary(fileState{
+				Targets: []targetRecord{{Target: candidateTarget, Facts: []state.HostFact{candidateFact}}},
+			}, resolution)
+			if strings.Contains(summary, candidateFact.Value) {
+				t.Fatalf("%s fact must be absent from target summary, got %q", tc.name, summary)
+			}
+			if tc.wantStale && !strings.Contains(summary, "scope: stale or provisional") {
+				t.Fatalf("non-live target must be labeled stale or provisional, got %q", summary)
+			}
+		})
+	}
+}
+
 func TestOperationalMemoryFailsClosedWithoutSQLite(t *testing.T) {
 	t.Parallel()
 
