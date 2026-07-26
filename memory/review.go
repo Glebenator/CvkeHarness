@@ -23,8 +23,9 @@ func (m *Manager) ReviewInbox(ctx context.Context) (string, error) {
 		return "", err
 	}
 	type row struct {
-		kind, id, targetID, environment, source, evidenceRef, evidenceHash, trust, summary, successChecks string
-		observedAt, expiresAt                                                                             time.Time
+		kind, id, targetID, environment, source, evidenceRef, evidenceHash, trust, summary string
+		verifySteps, actionSteps, successChecks                                            string
+		observedAt, expiresAt                                                              time.Time
 	}
 	var rows []row
 	for _, record := range st.Targets {
@@ -43,7 +44,8 @@ func (m *Manager) ReviewInbox(ctx context.Context) (string, error) {
 			rows = append(rows, row{
 				kind: "playbook", id: item.ID, targetID: item.TargetID, environment: item.Environment,
 				source: item.Source, evidenceRef: item.EvidenceRef, evidenceHash: item.EvidenceHash, trust: item.Trust,
-				summary: item.Title, successChecks: strings.Join(item.SuccessChecks, "; "),
+				summary: item.Title, verifySteps: strings.Join(item.VerifySteps, "; "),
+				actionSteps: strings.Join(item.ActionSteps, "; "), successChecks: strings.Join(item.SuccessChecks, "; "),
 				observedAt: item.ObservedAt, expiresAt: item.ExpiresAt,
 			})
 		}
@@ -88,7 +90,10 @@ func (m *Manager) ReviewInbox(ctx context.Context) (string, error) {
 			clampRenderedText(redactSensitiveText(item.summary), 2, 240),
 		)
 		if item.kind == "playbook" {
-			fmt.Fprintf(&b, "  success_checks=%s\n", firstNonEmpty(clampRenderedText(redactSensitiveText(item.successChecks), 2, 240), "none"))
+			fmt.Fprintf(&b, "  verify_steps=%s\n  action_steps=%s\n  success_checks=%s\n",
+				firstNonEmpty(clampRenderedText(redactSensitiveText(item.verifySteps), 2, 240), "none"),
+				firstNonEmpty(clampRenderedText(redactSensitiveText(item.actionSteps), 2, 240), "none"),
+				firstNonEmpty(clampRenderedText(redactSensitiveText(item.successChecks), 2, 240), "none"))
 		}
 	}
 	return strings.TrimSpace(b.String()), nil

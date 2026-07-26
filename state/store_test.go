@@ -53,16 +53,17 @@ func TestSaveAndListCommandApprovals(t *testing.T) {
 
 	now := time.Now().UTC()
 	if err := store.SaveCommandApproval(context.Background(), CommandApproval{
-		TargetID:      "target-1",
-		Environment:   "staging",
-		Command:       "echo hello",
-		Action:        "echo",
-		Status:        ApprovalStatusApproved,
-		Source:        "cli",
-		Rationale:     "operator-approved diagnostic command",
-		PolicyVersion: CommandApprovalPolicyVersion,
-		ApprovedAt:    now,
-		ExpiresAt:     now.Add(time.Hour),
+		TargetID:       "target-1",
+		Environment:    "staging",
+		RemoteIdentity: "ops@target-1",
+		Command:        "echo hello",
+		Action:         "echo",
+		Status:         ApprovalStatusApproved,
+		Source:         "cli",
+		Rationale:      "operator-approved diagnostic command",
+		PolicyVersion:  CommandApprovalPolicyVersion,
+		ApprovedAt:     now,
+		ExpiresAt:      now.Add(time.Hour),
 	}); err != nil {
 		t.Fatalf("SaveCommandApproval returned error: %v", err)
 	}
@@ -90,7 +91,7 @@ func TestReusableApprovalsRejectOneOffWrongScopeAndExpiry(t *testing.T) {
 	defer store.Close()
 	now := time.Now().UTC()
 	base := CommandApproval{
-		TargetID: "target-1", Environment: "production", Command: "systemctl restart api",
+		TargetID: "target-1", Environment: "production", RemoteIdentity: "ops@target-1", Command: "systemctl restart api",
 		Action: "systemctl restart", Source: "cli", Rationale: "operator approved",
 		PolicyVersion: CommandApprovalPolicyVersion, ApprovedAt: now, ExpiresAt: now.Add(time.Hour),
 	}

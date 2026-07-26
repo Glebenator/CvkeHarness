@@ -114,6 +114,32 @@ func TestValidateAllowedShellCommand_UsesAllowlist(t *testing.T) {
 	}
 }
 
+func TestValidateAllowedShellCommand_RejectsEscapedJournalMutation(t *testing.T) {
+	t.Parallel()
+
+	if err := ValidateAllowedShellCommand(`journalctl --vacu\um-time=1s`, []string{"journalctl"}); err == nil {
+		t.Fatal("escaped journalctl mutation flag must not bypass the approval gate")
+	}
+}
+
+func TestReusableShellSegmentRejectsContextDependentCommands(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{"rm *.tmp", "rm relative.txt", "./repair.sh", "python repair.py", "systemctl restart $UNIT"} {
+		parsed, err := ParseShellCommand(command)
+		if err != nil {
+			continue
+		}
+		if ReusableShellSegment(parsed.Segments[0]) {
+			t.Fatalf("context-dependent command %q must not be reusable", command)
+		}
+	}
+	parsed, err := ParseShellCommand("systemctl restart api")
+	if err != nil || !ReusableShellSegment(parsed.Segments[0]) {
+		t.Fatalf("expected exact target-level service action to be reusable, err=%v", err)
+	}
+}
+
 func TestShellPolicyCorpus(t *testing.T) {
 	t.Parallel()
 
@@ -393,6 +419,56 @@ func TestShellTool_LLMJudgeNeverPersistsApprovedSegments(t *testing.T) {
 	}
 	if len(approvals) != 0 {
 		t.Fatalf("expected no persisted approvals from LLM judge, got %d", len(approvals))
+	}
+}
+
+func TestScopedApprovalRejectsExpiredOrChangedTargetIdentity(t *testing.T) {
+	t.Parallel()
+
+	store := state.Open(t.TempDir() + "/state.db")
+	defer store.Close()
+	now := time.Now().UTC()
+	target := state.Target{
+		ID: "target-1", Kind: "ssh", Environment: "production",
+		PrimaryName: "api", Transport: "ssh", RemoteIdentity: "ops@api",
+		Status: state.MemoryStatusActive, ExpiresAt: now.Add(time.Hour),
+	}
+	if err := store.ReplaceOperationalMemory(context.Background(), state.OperationalMemory{Targets: []state.Target{target}}); err != nil {
+		t.Fatalf("ReplaceOperationalMemory returned error: %v", err)
+	}
+	if err := store.SaveCommandApproval(context.Background(), state.CommandApproval{
+		TargetID: target.ID, Environment: target.Environment, RemoteIdentity: target.RemoteIdentity,
+		Command: "systemctl restart api", Action: "systemctl restart", Status: state.ApprovalStatusApproved,
+		Source: "cli", PolicyVersion: state.CommandApprovalPolicyVersion,
+		ApprovedAt: now, ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("SaveCommandApproval returned error: %v", err)
+	}
+	tool := NewShellToolWithApprovalStore(nil, NewBlockingApprover(), "primary", store)
+	parsed, err := ParseShellCommand("systemctl restart api")
+	if err != nil {
+		t.Fatalf("ParseShellCommand returned error: %v", err)
+	}
+	ctx := telemetry.WithFields(context.Background(), telemetry.Fields{TargetID: target.ID})
+	if got := tool.scopedApprovedCommands(ctx, parsed); !got[parsed.Segments[0].Normalized] {
+		t.Fatalf("expected approval for unchanged live identity, got %#v", got)
+	}
+
+	target.RemoteIdentity = "admin@api"
+	if err := store.ReplaceOperationalMemory(context.Background(), state.OperationalMemory{Targets: []state.Target{target}}); err != nil {
+		t.Fatalf("ReplaceOperationalMemory identity change returned error: %v", err)
+	}
+	if got := tool.scopedApprovedCommands(ctx, parsed); len(got) != 0 {
+		t.Fatalf("changed remote identity must invalidate approval, got %#v", got)
+	}
+
+	target.RemoteIdentity = "ops@api"
+	target.ExpiresAt = now.Add(-time.Minute)
+	if err := store.ReplaceOperationalMemory(context.Background(), state.OperationalMemory{Targets: []state.Target{target}}); err != nil {
+		t.Fatalf("ReplaceOperationalMemory expiry returned error: %v", err)
+	}
+	if got := tool.scopedApprovedCommands(ctx, parsed); len(got) != 0 {
+		t.Fatalf("expired target must invalidate approval, got %#v", got)
 	}
 }
 

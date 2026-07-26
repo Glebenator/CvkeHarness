@@ -39,7 +39,7 @@ For each run, the harness:
    - at most one fallback finding when no strong playbook exists
 5. Executes the model/tool loop
 6. Records structured outcomes to SQLite
-7. Stages target-aware memory candidates and auto-promotes only bounded typed facts from verified probes
+7. Stages target-aware memory candidates, including bounded typed facts from explicit probes
 
 ## Target-Aware Memory
 

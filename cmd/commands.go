@@ -98,31 +98,35 @@ var commandsApproveCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("target %q is not available: %w", commandApprovalTarget, err)
 		}
+		now := time.Now().UTC()
 		if target.Status != state.MemoryStatusActive ||
 			target.Environment == state.EnvironmentUnknown ||
-			target.Environment != commandApprovalEnvironment {
-			return fmt.Errorf("target must be active and match --environment before approval")
+			target.Environment != commandApprovalEnvironment ||
+			target.RemoteIdentity == "" ||
+			target.ExpiresAt.IsZero() ||
+			!target.ExpiresAt.After(now) {
+			return fmt.Errorf("target must be active, unexpired, identity-bound, and match --environment before approval")
 		}
 		if commandApprovalTTL <= 0 || commandApprovalTTL > 24*time.Hour {
 			return fmt.Errorf("--ttl must be greater than zero and no more than 24h")
 		}
 
-		now := time.Now().UTC()
 		for _, segment := range parsed.Segments {
 			if !tools.ReusableShellSegment(segment) {
 				return fmt.Errorf("command segment %q contains runtime interpolation and cannot be remembered", segment.Normalized)
 			}
 			if err := store.SaveCommandApproval(context.Background(), state.CommandApproval{
-				TargetID:      target.ID,
-				Environment:   target.Environment,
-				Command:       segment.Normalized,
-				Action:        tools.ShellSegmentAction(segment),
-				Status:        state.ApprovalStatusApproved,
-				Source:        "cli",
-				Rationale:     "user approved via commands approve",
-				PolicyVersion: state.CommandApprovalPolicyVersion,
-				ApprovedAt:    now,
-				ExpiresAt:     now.Add(commandApprovalTTL),
+				TargetID:       target.ID,
+				Environment:    target.Environment,
+				RemoteIdentity: target.RemoteIdentity,
+				Command:        segment.Normalized,
+				Action:         tools.ShellSegmentAction(segment),
+				Status:         state.ApprovalStatusApproved,
+				Source:         "cli",
+				Rationale:      "user approved via commands approve",
+				PolicyVersion:  state.CommandApprovalPolicyVersion,
+				ApprovedAt:     now,
+				ExpiresAt:      now.Add(commandApprovalTTL),
 			}); err != nil {
 				return err
 			}

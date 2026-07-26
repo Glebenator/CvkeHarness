@@ -57,7 +57,7 @@ func TestEnsureFilesCreatesStructuredMemoryAndStableRuntimeHost(t *testing.T) {
 	}
 }
 
-func TestResolveTargetCreatesProvisionalSSHRecordAndMergesHostname(t *testing.T) {
+func TestTypedHostnameProbeRemainsCandidateAndDoesNotRewriteTargetIdentity(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -95,8 +95,16 @@ func TestResolveTargetCreatesProvisionalSSHRecordAndMergesHostname(t *testing.T)
 	if err != nil {
 		t.Fatalf("second ResolveTarget returned error: %v", err)
 	}
-	if first.TargetID != second.TargetID {
-		t.Fatalf("expected hostname enrichment to merge into one target id, got %q and %q", first.TargetID, second.TargetID)
+	if first.TargetID == second.TargetID {
+		t.Fatalf("unreviewed hostname output must not rewrite target identity, got shared id %q", first.TargetID)
+	}
+	st, err := manager.loadState(ctx)
+	if err != nil {
+		t.Fatalf("loadState returned error: %v", err)
+	}
+	idx := targetIndex(st, first.TargetID)
+	if idx < 0 || len(st.Targets[idx].Facts) != 1 || st.Targets[idx].Facts[0].Status != state.MemoryStatusCandidate {
+		t.Fatalf("expected an untrusted hostname candidate, got %#v", st.Targets)
 	}
 }
 
@@ -215,6 +223,15 @@ func TestCurateRunOutcomeCreatesCandidatePlaybookUntilPromotion(t *testing.T) {
 	if memState.Playbooks[0].Status != state.MemoryStatusCandidate {
 		t.Fatalf("expected candidate status, got %#v", memState.Playbooks[0])
 	}
+	inbox, err := manager.ReviewInbox(ctx)
+	if err != nil {
+		t.Fatalf("ReviewInbox returned error: %v", err)
+	}
+	for _, field := range []string{"verify_steps=", "action_steps=", "success_checks="} {
+		if !strings.Contains(inbox, field) {
+			t.Fatalf("expected playbook inbox to show %s, got %q", field, inbox)
+		}
+	}
 	if err := manager.PromoteMemory(ctx, "playbook", memState.Playbooks[0].ID); err != nil {
 		t.Fatalf("PromoteMemory returned error: %v", err)
 	}
@@ -228,6 +245,67 @@ func TestCurateRunOutcomeCreatesCandidatePlaybookUntilPromotion(t *testing.T) {
 	if !strings.Contains(retrieved.PlaybookBrief, "ssh prod-web sudo systemctl restart nginx") ||
 		!strings.Contains(retrieved.PlaybookBrief, "verify-first") {
 		t.Fatalf("expected promoted playbook as verify-first hint, got %q", retrieved.PlaybookBrief)
+	}
+}
+
+func TestCurateRunOutcomePartitionsPlaybooksByObservedTarget(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := state.Open(filepath.Join(dir, "state.db"))
+	defer store.Close()
+	manager := NewManager(dir, store)
+	manager.hostname = func() string { return "runtime.local" }
+	ctx := context.Background()
+
+	first, err := manager.ResolveTarget(ctx, TargetResolutionInput{Command: "ssh ops@api-a systemctl status api"})
+	if err != nil {
+		t.Fatalf("ResolveTarget api-a returned error: %v", err)
+	}
+	second, err := manager.ResolveTarget(ctx, TargetResolutionInput{Command: "ssh ops@api-b systemctl status api"})
+	if err != nil {
+		t.Fatalf("ResolveTarget api-b returned error: %v", err)
+	}
+	if err := manager.SetTargetEnvironment(ctx, first.TargetID, "production", "ops@api-a"); err != nil {
+		t.Fatalf("SetTargetEnvironment api-a returned error: %v", err)
+	}
+	if err := manager.SetTargetEnvironment(ctx, second.TargetID, "staging", "ops@api-b"); err != nil {
+		t.Fatalf("SetTargetEnvironment api-b returned error: %v", err)
+	}
+
+	if err := manager.CurateRunOutcome(ctx, RunOutcome{
+		Task:   "restart api on both hosts",
+		Target: second,
+		ToolCalls: []ObservedToolCall{
+			{ToolName: "shell_execute", TargetID: first.TargetID, Command: "ssh ops@api-a systemctl restart api", Success: true},
+			{ToolName: "shell_execute", TargetID: first.TargetID, Command: "ssh ops@api-a systemctl is-active api", Result: "active", Success: true},
+			{ToolName: "shell_execute", TargetID: second.TargetID, Command: "ssh ops@api-b systemctl restart api", Success: true},
+			{ToolName: "shell_execute", TargetID: second.TargetID, Command: "ssh ops@api-b systemctl is-active api", Result: "active", Success: true},
+		},
+	}); err != nil {
+		t.Fatalf("CurateRunOutcome returned error: %v", err)
+	}
+	st, err := manager.loadState(ctx)
+	if err != nil {
+		t.Fatalf("loadState returned error: %v", err)
+	}
+	if len(st.Playbooks) != 2 {
+		t.Fatalf("expected one playbook candidate per target, got %#v", st.Playbooks)
+	}
+	for _, playbook := range st.Playbooks {
+		steps := strings.Join(append(append([]string{}, playbook.ActionSteps...), playbook.SuccessChecks...), " ")
+		switch playbook.TargetID {
+		case first.TargetID:
+			if strings.Contains(steps, "api-b") {
+				t.Fatalf("api-a playbook contains api-b command: %#v", playbook)
+			}
+		case second.TargetID:
+			if strings.Contains(steps, "api-a") {
+				t.Fatalf("api-b playbook contains api-a command: %#v", playbook)
+			}
+		default:
+			t.Fatalf("unexpected playbook target %q", playbook.TargetID)
+		}
 	}
 }
 

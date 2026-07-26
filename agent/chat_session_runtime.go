@@ -349,6 +349,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				ToolName:     call.Function.Name,
 				Command:      command,
 				Result:       resultStr,
+				TargetID:     targetResolution.TargetID,
 				Success:      toolErr == nil,
 				PolicyDenied: outcome.PolicyDenied,
 				DenialClass:  outcome.DenialClass,

@@ -284,7 +284,7 @@ func DefaultConfig() *Config {
 		ApprovedModels: []string{"openrouter/anthropic/claude-sonnet-4.6"},
 		AllowedCommands: []string{
 			"df", "echo", "free", "uptime", "ps", "netstat",
-			"systemctl status", "systemctl is-active", "systemctl is-enabled", "journalctl",
+			"systemctl status", "systemctl is-active", "systemctl is-enabled",
 		},
 	}
 }

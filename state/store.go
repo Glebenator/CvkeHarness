@@ -623,6 +623,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS scoped_command_approvals (
 			target_id TEXT NOT NULL,
 			environment TEXT NOT NULL,
+			remote_identity TEXT NOT NULL,
 			command TEXT NOT NULL,
 			action TEXT NOT NULL,
 			status TEXT NOT NULL,
@@ -785,6 +786,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`ALTER TABLE scheduled_jobs ADD COLUMN blocked_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE scheduled_jobs ADD COLUMN blocked_work_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE scheduler_health_projection ADD COLUMN claim_lease_ms INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE scoped_command_approvals ADD COLUMN remote_identity TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE targets ADD COLUMN environment TEXT NOT NULL DEFAULT 'unknown'`,
 		`ALTER TABLE targets ADD COLUMN remote_identity TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE targets ADD COLUMN verified_at DATETIME`,

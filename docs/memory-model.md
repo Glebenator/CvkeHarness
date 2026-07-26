@@ -95,7 +95,7 @@ Facts use `target_id:key` as their review ID. Promotion is refused when target s
 
 Exit code zero means a tool process returned successfully. It does not prove that a service is healthy, a rollout completed, or the requested state exists.
 
-- Typed low-risk probes, such as `hostname` or parsed OS identity output, may create bounded verified facts when target environment is already known.
+- Typed low-risk probes, such as `hostname` or parsed OS identity output, create bounded candidates. Probe output never rewrites target identity or enters retrieval without operator promotion.
 - A shell sequence remains a candidate playbook.
 - A completion verifier plus an explicit postcondition can strengthen a candidate, but operator promotion is still required.
 - Successful unrelated tool calls never verify target identity.
@@ -124,10 +124,11 @@ A reusable approval must be deliberately created by a user and is bound to:
 - exact normalized command and action;
 - stable target ID;
 - exact environment;
+- exact current remote identity;
 - approval policy version;
 - expiry, with a maximum CLI TTL of 24 hours.
 
-Runtime-interpolated commands containing `$` or backticks cannot be remembered because identical text could resolve to another host later.
+Only a narrow set of target-level commands can be remembered. Runtime interpolation, shell globbing, and path-dependent commands are excluded because identical text could resolve to different values or files later.
 
 ```bash
 cvkeharness commands approve "systemctl restart api" \
