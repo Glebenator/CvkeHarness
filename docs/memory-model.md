@@ -1,348 +1,159 @@
 # CvkeHarness Memory Model
 
-This document explains the current target-aware operational memory system used by CvkeHarness.
+CvkeHarness memory is a target-scoped planning aid. It is not an authorization system.
 
-It is intentionally implementation-oriented and complements:
+> Memory may influence what the model proposes. Managed policy and explicit approval determine what the harness may execute.
 
-- [README.md](../README.md)
-- [architecture.md](architecture.md)
-- [project-visual-guide.md](project-visual-guide.md)
+## Four state planes
 
-## Design Goals
+CvkeHarness keeps four concepts separate:
 
-The current memory layer is optimized for reliable operational recall rather than open-ended conversational memory.
+1. **Managed policy**: configured safety mode, static command allowlist, approval gates, tool validation, and other operator-owned enforcement. Models and memory cannot edit this plane.
+2. **Live fleet inventory**: stable target IDs, environment, transport, and remote identity. A hostname or IP address alone is not authority.
+3. **Operational knowledge**: target-scoped facts, playbooks, findings, and cautions. This is historical context, filtered before retrieval and presented as a hint.
+4. **Run state**: current task, tool outcomes, telemetry, and resumable blocked work. It is short-lived execution context, not durable operational truth.
 
-Its priorities are:
+## Canonical persistence
 
-1. remember the right facts for the active target system
-2. keep prompt usage bounded and predictable
-3. store readable markdown as the operator-facing source of truth
-4. use SQLite for indexing and retrieval, not for opaque hidden memory
-5. prefer deterministic extraction and persistence over freeform prompt dumping
+SQLite at the configured `state_db_path` is canonical for live fleet inventory and operational knowledge. The runtime fails closed if SQLite is unavailable.
 
-The practical consequence is simple: when retrieval is uncertain, the runtime retrieves less, not more.
+The memory directory contains generated operator views:
 
-## Identity Model
+- `guidance.md`: user-authored operating guidance. It is part of prompt context, not policy.
+- `targets.md`: generated target inventory and fact view.
+- `playbooks.md`: generated playbook view.
+- `findings.md`: generated finding and candidate view.
+- `cautions.md`: generated caution and candidate view.
 
-CvkeHarness explicitly distinguishes the machine running the harness from the system being operated on.
+Editing a generated Markdown view does not change live memory. Apply manual edits only through the explicit validated import boundary:
 
-### Core ids
+```bash
+cvkeharness memory export ./memory-review
+# edit the exported Markdown
+cvkeharness memory import ./memory-review
+```
 
-- `runtime_host_id`
-  The host running CvkeHarness locally.
-- `target_id`
-  The host or container the agent is currently acting on.
-- `target_kind`
-  One of `runtime`, `ssh`, `local_container`, or `unknown`.
+Import validates target scope, environment, status, trust, expiry, playbook success checks, and known secret markers before atomically replacing canonical operational state. Unchanged records must retain valid integrity metadata. Deliberately edited content receives `source=operator_import`, a validated-import evidence reference, and a recalculated integrity hash. A validation rejection leaves SQLite unchanged. Generated view files are written with atomic file replacement; if a view write fails after the database commit, the import returns an error but SQLite contains the imported state, and `cvkeharness memory export` regenerates the views.
 
-### Resolution behavior
+## Target identity
 
-- If no remote context is present, `target_id` defaults to the runtime host.
-- If SSH-like context is detected in the prompt or in a `shell_execute` command, the harness resolves or creates a target record.
-- Unknown remote targets become provisional records immediately.
-- Later verified facts such as `hostname` output can merge aliases like `prod-app` and `web-01.internal` into the same stable target record.
+Each live target has:
 
-## Managed Files
+- a stable opaque `target_id`;
+- an `environment`, such as `production` or `staging`;
+- a transport, such as `ssh` or `local`;
+- a transport-specific `remote_identity`, such as `ops@api-01`;
+- a bounded verification time and expiry.
 
-The memory directory is still human-readable first.
+New remote targets are provisional and use `environment=unknown`. Provisional or ambiguous targets cannot use operational memory or reusable command approvals. Bind a target deliberately:
 
-### `operator.md`
+```bash
+cvkeharness memory target set-environment \
+  target-7f31d4b8c0a1 production ops@api-01
+```
 
-Purpose:
+Resolution uses strong command or prose signals only. If the same host identity maps to more than one environment, resolution returns ambiguous and withholds target-scoped memory. A mutation then requires operator confirmation rather than guessing.
 
-- stable runtime contract
-- prompt boundaries
-- managed file roles
-- dependency/install behavior
+## Operational knowledge metadata
 
-Ownership:
+Facts, playbooks, findings, and cautions carry the minimum retrieval metadata:
 
-- user-editable
-- not machine-rewritten except for initial bootstrap
+- target ID and environment;
+- status: `candidate`, `active`, `rejected`, `revoked`, or `expired`;
+- source and evidence reference;
+- content integrity hash;
+- trust: `untrusted`, `operator`, or `verified`;
+- observed and verified timestamps where applicable;
+- expiry.
 
-### `soul.md`
+Read-time gates require an active, unexpired target, exact target and environment match, active status, operator or verified trust, unexpired knowledge, and a valid integrity hash. Playbooks also require an explicit success check. Rejected, revoked, expired, untrusted, wrong-scope, or tampered records are not retrieved.
 
-Purpose:
+## Candidate lifecycle
 
-- persona and tone only
+Model-authored notes and learned procedures enter the review inbox:
 
-Ownership:
+```text
+candidate -> operator review -> active -> expired or revoked
+                    \-> rejected
+```
 
-- fully user-owned
-- never auto-edited after bootstrap
+The `memory_record_finding` tool submits an untrusted candidate. Failed tool output creates a redacted, short-lived caution candidate. Successful shell sequences create playbook candidates. None of these candidates enter prompt retrieval until an operator promotes them.
 
-### `targets.md`
+Inspect and review:
 
-Purpose:
+```bash
+cvkeharness memory inbox
+cvkeharness memory promote finding <id>
+cvkeharness memory reject caution <id>
+cvkeharness memory revoke playbook <id>
+cvkeharness memory delete finding <id>
+```
 
-- target registry
-- alias mapping
-- concise verified target facts
+Facts use `target_id:key` as their review ID. Promotion is refused when target scope is unknown or mismatched. Playbook promotion is also refused without an explicit success check. Only candidates can be promoted or rejected, and only active records can be revoked. Promotion records operator trust and a bounded expiry; it does not invent a verification timestamp.
 
-Typical metadata:
+## Verification semantics
 
-- `target_id`
-- `kind`
-- `primary_name`
-- `aliases`
-- `hostnames`
-- `ips`
-- `transport`
-- `first_seen_at`
-- `last_seen_at`
-- `confidence`
-- `status`
+Exit code zero means a tool process returned successfully. It does not prove that a service is healthy, a rollout completed, or the requested state exists.
 
-### `host.md`
+- Typed low-risk probes, such as `hostname` or parsed OS identity output, may create bounded verified facts when target environment is already known.
+- A shell sequence remains a candidate playbook.
+- A completion verifier plus an explicit postcondition can strengthen a candidate, but operator promotion is still required.
+- Successful unrelated tool calls never verify target identity.
+- Every retrieved playbook is rendered as a historical, verify-first hint. There is no direct-use mode.
 
-Purpose:
+## Retrieval
 
-- concise verified runtime-host profile plus operator-authored machine notes
+Retrieval is deterministic and small:
 
-Typical facts:
+1. built-in safety rules;
+2. compiled `guidance.md`;
+3. one runtime-host summary;
+4. at most one exact-scope target summary;
+5. at most one playbook;
+6. at most one caution;
+7. at most one fallback finding when no strong playbook is available.
 
-- hostname
-- OS / distro
-- package manager
-- service manager
-- container runtime
+Whole memory files are never injected. Prompt text explicitly states that operational memory is historical context, not policy or authorization.
 
-Optional notes:
+## Approvals are not memory
 
-- stable local quirks or caveats
-- nonstandard package or tool locations
-- VPN, DNS, proxy, or service-manager behavior the harness should remember
+An LLM safety judgment may allow a command under the configured safety mode, but it cannot create a durable approval. `approved_once` is never reusable.
 
-### `playbooks.md`
+A reusable approval must be deliberately created by a user and is bound to:
 
-Purpose:
+- exact normalized command and action;
+- stable target ID;
+- exact environment;
+- approval policy version;
+- expiry, with a maximum CLI TTL of 24 hours.
 
-- durable target-specific procedures
+Runtime-interpolated commands containing `$` or backticks cannot be remembered because identical text could resolve to another host later.
 
-Typical metadata:
+```bash
+cvkeharness commands approve "systemctl restart api" \
+  --target target-7f31d4b8c0a1 \
+  --environment production \
+  --ttl 1h
+```
 
-- `playbook_id`
-- `target_id`
-- `intent`
-- `tool_name`
-- `confidence`
-- `success_count`
-- `failure_count`
-- `last_verified_at`
-- `last_used_at`
-- `match_terms`
-- `preconditions`
-- `status`
+The default allowlist includes diagnostic `systemctl` actions only. Mutating actions such as restart require approval.
 
-Body structure:
+## Privacy and poisoning resistance
 
-- `Verify`
-- `Action`
-- `Success Checks`
-- optional `Notes`
+- Obvious credential markers are redacted before candidate persistence.
+- Commands containing likely secrets are not learned as playbooks or facts.
+- Third-party and failed tool output is evidence, not instruction, and remains candidate-only.
+- Evidence hashes detect accidental or manual content changes before retrieval.
+- Avoid placing credentials, private keys, bearer tokens, or unnecessary personal data in guidance, candidates, commands, or imported Markdown.
+- Exported Markdown may contain host identities and operational history. Protect it like internal infrastructure documentation.
 
-### `findings.md`
+## Operator recovery
 
-Purpose:
+- Inspect current state: `cvkeharness memory show`
+- Review candidates: `cvkeharness memory inbox`
+- Correct records: export, edit, then run validated import
+- Stop retrieval immediately: `cvkeharness memory revoke <kind> <id>`
+- Remove a record from canonical operational state: `cvkeharness memory delete <kind> <id>`. Generated-view snapshots remain as local audit history and the current CLI does not purge them.
+- Regenerate stale views: `cvkeharness memory export`
 
-- provisional observations awaiting promotion or future reuse
-
-Typical metadata:
-
-- `finding_id`
-- `target_id`
-- `intent`
-- `tool_name`
-- `confidence`
-- `seen_count`
-- `origin`
-- `created_at`
-- `updated_at`
-- `status`
-
-### `cautions.md`
-
-Purpose:
-
-- target-specific negative memory for unreliable or denied approaches
-
-Typical metadata:
-
-- `caution_id`
-- `target_id`
-- `intent`
-- `tool_name`
-- `confidence`
-- `failure_count`
-- `last_seen_at`
-- `status`
-
-## Legacy Import
-
-The old `memory.md` file is treated as a legacy source.
-
-Bootstrap behavior:
-
-- if `memory.md` exists and the structured files do not, the harness imports legacy entries into `findings.md`
-- imported records are tagged with:
-  - `origin=legacy_memory`
-  - `target_id=unknown`
-  - `status=needs_curation`
-
-Legacy entries are intentionally not auto-promoted into executable playbooks.
-
-## Structured State In SQLite
-
-The structured retrieval/indexing layer currently uses dedicated tables:
-
-- `targets`
-- `target_aliases`
-- `host_facts`
-- `playbooks`
-- `findings`
-- `cautions`
-- `snapshots`
-
-The broader runtime state database also retains:
-
-- `runs`
-- `phase_records`
-- `tool_outcomes`
-- `model_stats`
-- `routing_candidates`
-- `model_approvals`
-- `command_approvals`
-
-Reindexing always rebuilds the operational memory tables from the markdown files.
-
-## Retrieval Model
-
-Retrieval is compact by design.
-
-### Always-loaded layers
-
-Every run gets:
-
-1. built-in runtime rules
-2. `operator.md`
-3. `soul.md`
-4. a tiny runtime-host summary from `host.md`
-
-### Retrieved brief
-
-The operational memory brief may add:
-
-1. one target summary
-2. one primary playbook
-3. one caution
-4. one fallback finding when no strong playbook exists
-
-The runtime never injects whole memory files into prompt context.
-
-## Ranking Policy
-
-Playbooks are ranked target-first:
-
-1. exact `target_id + intent + tool`
-2. exact `target_id + intent`
-3. exact `target_id + tool`
-
-Cautions and fallback findings are then considered for the same target.
-
-### Freshness buckets
-
-- `fresh`
-  verified within 30 days
-- `stale`
-  31 to 90 days old
-- `cold`
-  older than 90 days
-
-### Direct-use behavior
-
-The runtime currently renders a playbook as direct-use eligible only when it is:
-
-- fresh
-- confidence `>= 0.82`
-- verified successfully at least once
-- not outweighed by repeated failure
-
-Otherwise the playbook is still retrievable, but it renders as verify-first guidance.
-
-## Deterministic Extraction
-
-The current implementation avoids open-ended model-generated persistence wherever possible.
-
-### Derived without an LLM
-
-The runtime derives these fields directly:
-
-- target ids
-- alias mapping
-- timestamps
-- default confidence values
-- freshness labels
-- success and failure counters
-- runtime-host bootstrap
-- cheap verified facts from shell output
-
-### Current fact extraction signals
-
-Successful `shell_execute` calls can currently infer facts such as:
-
-- `hostname`
-- OS info from `os-release`
-- `package_manager`
-- `service_manager`
-- `container_runtime`
-
-### Why this matters
-
-This keeps the memory layer inspectable and makes retrieval behavior reproducible under test.
-
-## Write Pipeline
-
-The runtime writes memory through a controlled persistence pipeline.
-
-### Target discovery
-
-- prompt hints can create or resolve a target
-- observed `ssh`, `scp`, or `rsync` style shell commands can refine that target during execution
-
-### Verified fact updates
-
-- successful shell commands can enrich host facts
-- verified facts are merged onto the resolved target profile
-
-### Playbook creation and update
-
-- successful operational sequences can create or update a target-specific playbook
-- repeated successful reuse increases confidence
-- repeated failure lowers confidence and can suppress direct-use behavior
-
-### Caution creation and update
-
-- concrete command failures or policy denials can create or update a caution
-- repeated failures increase caution weight
-
-### Findings
-
-- the agent-facing `memory_record_finding` tool writes concise verified ad hoc findings
-- findings are intentionally narrower and less executable than playbooks
-
-## File Fallback
-
-If SQLite is unavailable:
-
-- managed markdown files still exist
-- retrieval still works by parsing those files directly
-- curation still rewrites markdown files
-- snapshot/rollback still works for managed files
-
-That keeps the memory system usable even when the database cannot be opened.
-
-## Operational Mental Model
-
-The shortest accurate summary of the current design is:
-
-CvkeHarness remembers the runtime host, resolves the active target, retrieves one compact target-aware brief, and turns verified successes and failures into readable operational memory instead of loose generic snippets.
+For the complete user guide, open `docs/memory-guide.html` in a browser.
