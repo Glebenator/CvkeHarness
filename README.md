@@ -2,17 +2,17 @@
 
 CvkeHarness is a provider-agnostic Go CLI for running a tool-using LLM agent against local DevOps-style workflows.
 
-The runtime is phase-routed, approval-aware, and now uses a target-aware operational memory model. It distinguishes the machine running the harness from the system being operated on, remembers verified host facts and proven procedures for the active target, and injects only a compact retrieval brief into the prompt.
+The runtime is phase-routed, approval-aware, and uses a safety-first target-scoped memory model. It distinguishes the machine running the harness from the system being operated on, stages learned procedures for operator review, and injects only compact, active, unexpired hints into the prompt.
 
 ## What It Does
 
 - Runs a local agent loop with a compact layered system prompt and tool access
 - Supports multiple providers behind a shared provider interface
 - Tracks run history, tool outcomes, routing stats, approvals, and operational memory in SQLite
-- Maintains human-readable managed memory files under `~/.cvkeharness/`
-- Distinguishes the runtime host from remote SSH targets
+- Generates human-readable memory export views under `~/.cvkeharness/`
+- Distinguishes runtime host, stable target ID, environment, transport, and remote identity
 - Retrieves target-specific playbooks, cautions, and findings with strict prompt budget caps
-- Falls back gracefully to file-backed memory when the state DB is unavailable
+- Fails closed for operational memory when the canonical state DB is unavailable
 
 ## Runtime Model
 
@@ -31,16 +31,15 @@ For each run, the harness:
 3. Resolves the active target identity from the prompt and later from observed tool calls such as `ssh host ...`
 4. Loads:
    - built-in runtime rules
-   - `operator.md`
-   - `soul.md`
-   - a tiny runtime-host summary from `host.md`
+   - compact compiled guidance from `guidance.md`
+   - a tiny runtime-host summary from `targets.md`
    - at most one target summary
    - at most one primary playbook
    - at most one caution
    - at most one fallback finding when no strong playbook exists
 5. Executes the model/tool loop
 6. Records structured outcomes to SQLite
-7. Curates durable target-aware memory from verified shell outcomes, failures, and host facts
+7. Stages target-aware memory candidates and auto-promotes only bounded typed facts from verified probes
 
 ## Target-Aware Memory
 
@@ -56,32 +55,28 @@ CvkeHarness distinguishes:
   The system the agent is acting on
 - `target_kind`
   `runtime`, `ssh`, `local_container`, or `unknown`
+- `environment`
+  An operator-bound scope such as `production` or `staging`
+- `remote_identity`
+  A transport-specific identity such as `ops@api-01`
 
-If no remote context is present, the target defaults to the runtime host. When SSH-style context is detected, the harness resolves or creates a stable target record and keeps aliases, hostnames, IPs, and `user@host` forms attached to the same `target_id`.
+If no remote context is present, the target defaults to the runtime host. SSH-style context creates a provisional target with `environment=unknown`. Operational memory and reusable approvals remain withheld until the operator binds its environment and remote identity. If one host identity matches more than one environment, resolution fails closed as ambiguous.
 
 ### Managed Files
 
-These live under `~/.cvkeharness/`:
+These views live under `~/.cvkeharness/`:
 
-- `operator.md`
-  Stable harness rules, memory boundaries, and dependency/install behavior. User-editable.
-- `soul.md`
-  Persona and tone only. User-editable and never auto-edited by the harness.
+- `guidance.md`
+  User-authored operating guidance. It is prompt context, not managed policy.
 - `targets.md`
-  Target registry plus alias mapping and concise target facts.
-- `host.md`
-  Concise verified profile of the runtime host plus operator-authored machine quirks and environment caveats.
+  Generated target registry, scope, identity, and fact view.
 - `playbooks.md`
-  Durable target-specific procedures with `Verify`, `Action`, and `Success Checks` sections.
+  Generated candidate and active procedures with `Verify`, `Action`, and `Success Checks` sections.
 - `findings.md`
-  Provisional observations awaiting promotion or future reuse.
+  Generated candidate and active finding view.
 - `cautions.md`
-  Target-specific negative memory for bad or unreliable approaches.
+  Generated candidate and active caution view.
 
-Legacy handling:
-
-- if `memory.md` still exists and the new structured files are missing, the harness imports its entries into `findings.md`
-- imported legacy records are tagged with `origin=legacy_memory`, `target_id=unknown`, and `status=needs_curation`
 
 ### Retrieval Policy
 
@@ -90,9 +85,8 @@ The runtime never injects whole memory files into the prompt.
 Structured retrieval always loads:
 
 1. built-in runtime rules
-2. `operator.md`
-3. `soul.md`
-4. one small runtime-host summary
+2. compiled `guidance.md`
+3. one small runtime-host summary
 
 Structured retrieval may additionally load:
 
@@ -101,49 +95,45 @@ Structured retrieval may additionally load:
 3. one caution
 4. one fallback finding when no strong playbook exists
 
-Selection priority is target-first:
+Selection is target-first and gated at read time:
 
-1. exact `target_id + intent + tool`
-2. exact `target_id + intent`
-3. exact `target_id + tool`
-4. exact `target_id` caution
-5. runtime-host guidance only when target-specific memory is absent
+1. exact live target and environment
+2. active status and operator or verified trust
+3. unexpired target and memory item
+4. valid evidence integrity hash
+5. exact intent and tool match
+6. explicit success check for playbooks
 
-Freshness buckets:
+Candidates, rejected items, revoked items, expired items, wrong-environment items, and tampered items are withheld.
 
-- `fresh`: verified within 30 days
-- `stale`: 31 to 90 days
-- `cold`: older than 90 days
+Every playbook is rendered as a historical, verify-first hint. Memory never authorizes a command.
 
-Direct-use behavior:
+### Candidate lifecycle
 
-- a fresh, high-confidence playbook with at least one successful verified use can be rendered as direct-use eligible
-- stale or cold playbooks are still retrievable, but they render as verify-first guidance
-- repeated failures lower confidence and increase caution weight
+Model-authored findings, successful operational sequences, and failed-output cautions enter a review inbox:
+
+```text
+candidate -> operator review -> active -> expired or revoked
+                    \-> rejected
+```
+
+Use `cvkeharness memory inbox` and the `promote`, `reject`, `revoke`, or `delete` subcommands to manage the lifecycle.
 
 ### Persistence Model
 
-The memory content decision is narrow and deterministic.
-
-The runtime writes memory through a controlled pipeline:
-
-- target resolution creates or updates target records
-- successful shell outcomes can enrich verified host facts
-- successful operational sequences can create or update playbooks
-- concrete failures or policy denials can create or update cautions
-- narrow reusable notes can be written into `findings.md`
+SQLite is canonical for live fleet inventory and operational knowledge. Markdown is a generated export and explicit validated import surface. Normal runtime loading never trusts edited Markdown over SQLite.
 
 `memory_record_finding` is intentionally narrow:
 
-- it writes a concise verified ad hoc note into `findings.md`
-- it is for reusable operator notes, preferences, or heuristics
-- it does not directly create playbooks or cautions
+- it submits an untrusted candidate for operator review
+- it cannot create active memory, policy, permissions, credentials, host mappings, or command approvals
+- its candidate is not retrieved before promotion
 
-For a deeper walkthrough, see [docs/memory-model.md](docs/memory-model.md).
+For a deeper walkthrough, see [docs/memory-model.md](docs/memory-model.md) and the standalone [memory guide](docs/memory-guide.html).
 
 ## Human-Readable Files vs Structured State
 
-Markdown remains the operator-facing source of truth. SQLite is the retrieval and indexing layer.
+SQLite is the source of truth. Markdown files are inspectable generated views and an explicit validated import format.
 
 The state database in `~/.cvkeharness/state.db` stores:
 
@@ -153,7 +143,7 @@ The state database in `~/.cvkeharness/state.db` stores:
 - per-model stats
 - routing candidates
 - model approvals
-- command approvals
+- target-scoped, expiring command approvals
 - `targets`
 - `target_aliases`
 - `host_facts`
@@ -162,7 +152,7 @@ The state database in `~/.cvkeharness/state.db` stores:
 - `cautions`
 - `snapshots`
 
-The runtime reindexes from the managed markdown files back into SQLite with `cvkeharness memory reindex`.
+Use `cvkeharness memory export [directory]` to generate views and `cvkeharness memory import [directory]` to validate and apply deliberate edits.
 
 ## Quick Start
 
@@ -208,12 +198,12 @@ The setup wizard configures:
 - token limit
 - iteration limit
 - log level
-- initial `soul.md` profile
+- initial `guidance.md` profile
 - optional runtime-host machine notes for stable local quirks
 - optional Tavily-backed public web search tools
-- bootstrap of the structured memory files
+- bootstrap of generated, readable memory views backed by SQLite
 
-`setup` creates the readable managed memory files up front in `~/.cvkeharness/`. If they are missing later, `run`, `chat`, and `memory reindex` bootstrap them again automatically before retrieval.
+`setup` creates SQLite-backed operational memory plus readable generated views in `~/.cvkeharness/`. Later `run` and `chat` commands regenerate missing views from SQLite before retrieval. Manual Markdown edits have no effect until an operator runs the explicit, validated `memory import` workflow.
 
 ### Run a task
 
@@ -247,11 +237,17 @@ Show why routing chose a model:
 ### Memory commands
 
 - `cvkeharness memory show`
-  Show `operator.md`, `soul.md`, `targets.md`, `host.md`, `playbooks.md`, `findings.md`, `cautions.md`, and snapshot summary
-- `cvkeharness memory rollback <snapshot>`
-  Restore a managed memory file from a snapshot and reindex state
-- `cvkeharness memory reindex`
-  Rebuild structured target-aware memory metadata from the markdown files
+  Show `guidance.md`, `targets.md`, `playbooks.md`, `findings.md`, `cautions.md`, and snapshot summary
+- `cvkeharness memory inbox`
+  List untrusted candidates waiting for operator review
+- `cvkeharness memory promote|reject|revoke|delete <kind> <id>`
+  Manage the reviewed lifecycle of a fact, playbook, finding, or caution
+- `cvkeharness memory target set-environment <target-id> <environment> <remote-identity>`
+  Bind a provisional target to its operator-confirmed scope
+- `cvkeharness memory export [directory]`
+  Generate Markdown views from canonical SQLite state
+- `cvkeharness memory import [directory]`
+  Validate Markdown views and atomically replace canonical operational state
 
 ### Model commands
 
@@ -276,8 +272,8 @@ Show why routing chose a model:
 
 - `cvkeharness commands list`
   Show the static shell allowlist plus learned approved commands
-- `cvkeharness commands approve "<command>"`
-  Approve one or more parsed shell command segments for future runs
+- `cvkeharness commands approve "<command>" --target <id> --environment <env> --ttl 1h`
+  Create a short-lived exact command approval for one target and environment
 
 ## Configuration
 
@@ -327,16 +323,12 @@ Important fields:
 
 For execution runs, the system prompt is layered in this order:
 
-1. built-in runtime rules
-2. `operator.md`
-3. `soul.md`
-4. runtime-host summary from `host.md`
-5. retrieved brief from `targets.md`, `playbooks.md`, `cautions.md`, and `findings.md`
-6. optional planning notes
+1. compiled guidance prefix from built-in rules plus `guidance.md`
+2. stable per-turn tool policy and schemas
+3. compact host-target-memory brief from `targets.md`, `playbooks.md`, `cautions.md`, and `findings.md`
+4. volatile turn context, conversation history, and optional planning notes
 
-Use `operator.md` for durable harness-operating instructions such as approval expectations, memory ownership boundaries, and how the agent should respond to missing dependencies.
-
-Use `soul.md` for the human-facing collaboration layer only.
+Each model call records a stable-prefix hash, full prompt hash, cached-token count, and cache-hit ratio so provider-side cache behavior is measurable without opening raw prompt dumps.
 
 ## Tooling Model
 
@@ -390,7 +382,7 @@ The optional Tavily-backed web tools:
 - `router/`
   Deterministic per-phase model routing
 - `memory/`
-  Structured target-aware memory, retrieval, curation, reindex, and rollback
+  Structured target-aware memory, candidate review, validated import/export, retrieval, and curation
 - `state/`
   SQLite persistence for runs, stats, routing, approvals, structured operational memory, and snapshots
 
@@ -423,7 +415,7 @@ If you are reading the code for the first time, these are the best entry points:
 - `memory/manager_persist.go`
   Deterministic curation of playbooks, findings, cautions, and host facts
 - `memory/manager_files.go`
-  Managed file parsing, rendering, snapshots, rollback, and legacy import
+  Canonical SQLite persistence plus generated Markdown views and validated import/export
 - `state/store.go`
   The SQLite schema and persistence layer
 - `state/store_operational_memory.go`
@@ -436,6 +428,7 @@ If you are reading the code for the first time, these are the best entry points:
 For a deeper walkthrough of the current runtime, see:
 
 - [docs/memory-model.md](docs/memory-model.md)
+- [docs/memory-guide.html](docs/memory-guide.html), a standalone operator field guide
 - [docs/project-visual-guide.md](docs/project-visual-guide.md)
 - [docs/architecture.md](docs/architecture.md)
 
@@ -460,7 +453,7 @@ gofmt -w .
 - Keep the runtime provider-agnostic at the core.
 - Store normalized operational facts rather than provider-specific lore.
 - Prefer deterministic local heuristics over hidden autonomy.
-- Treat `soul.md` as user-owned and never auto-edit it.
+- Treat `guidance.md` as user-owned and never auto-edit it.
 - When changing memory behavior, keep file readability and DB consistency aligned.
 - When changing routing behavior, preserve the approval boundary.
 - When retrieval is uncertain, prefer retrieving less, not more.

@@ -1,0 +1,1053 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="CvkeHarness operational memory concepts, workflows, command reference, and troubleshooting.">
+  <title>Operational memory | CvkeHarness documentation</title>
+  <style>
+    :root {
+      --page: oklch(98% 0.006 84);
+      --surface: oklch(95.5% 0.012 83);
+      --surface-blue: oklch(95% 0.025 238);
+      --surface-amber: oklch(95% 0.04 80);
+      --surface-red: oklch(95% 0.032 28);
+      --text: oklch(24% 0.026 248);
+      --muted: oklch(45% 0.03 247);
+      --border: oklch(82% 0.02 79);
+      --link: oklch(42% 0.12 242);
+      --blue: oklch(49% 0.13 242);
+      --amber: oklch(56% 0.14 71);
+      --red: oklch(52% 0.17 28);
+      --green: oklch(44% 0.1 151);
+      --code-bg: oklch(25% 0.028 246);
+      --code-text: oklch(94% 0.014 225);
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.65;
+    }
+
+    a {
+      color: var(--link);
+      text-underline-offset: 0.18em;
+    }
+
+    a:hover {
+      text-decoration-thickness: 0.12em;
+    }
+
+    :focus-visible {
+      outline: 3px solid var(--amber);
+      outline-offset: 3px;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 20;
+      top: 0.75rem;
+      left: 0.75rem;
+      padding: 0.55rem 0.75rem;
+      background: var(--text);
+      color: var(--page);
+      transform: translateY(-180%);
+    }
+
+    .skip-link:focus {
+      transform: translateY(0);
+    }
+
+    .site-header {
+      border-bottom: 1px solid var(--border);
+      background: var(--page);
+    }
+
+    .header-inner {
+      display: flex;
+      width: min(1440px, calc(100% - 2rem));
+      min-height: 4rem;
+      margin: 0 auto;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    .brand-mark {
+      font-weight: 800;
+      letter-spacing: 0.06em;
+    }
+
+    .brand-section {
+      padding-left: 0.8rem;
+      border-left: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .header-meta {
+      color: var(--muted);
+      font: 0.78rem/1.4 var(--mono);
+    }
+
+    .docs-layout {
+      display: grid;
+      grid-template-columns: 15rem minmax(0, 52rem) 13rem;
+      gap: clamp(2rem, 4vw, 4.5rem);
+      width: min(1440px, calc(100% - 2rem));
+      margin: 0 auto;
+      padding: 2.5rem 0 5rem;
+    }
+
+    .sidebar,
+    .toc {
+      position: sticky;
+      top: 1.5rem;
+      align-self: start;
+      max-height: calc(100vh - 3rem);
+      overflow-y: auto;
+    }
+
+    .sidebar h2,
+    .toc h2 {
+      margin: 0 0 0.8rem;
+      color: var(--muted);
+      font-size: 0.74rem;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .sidebar ul,
+    .toc ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .sidebar li + li,
+    .toc li + li {
+      margin-top: 0.25rem;
+    }
+
+    .sidebar a,
+    .toc a {
+      display: block;
+      padding: 0.35rem 0;
+      color: var(--muted);
+      font-size: 0.86rem;
+      line-height: 1.35;
+      text-decoration: none;
+    }
+
+    .sidebar a:hover,
+    .toc a:hover {
+      color: var(--link);
+    }
+
+    .sidebar .current {
+      padding-left: 0.75rem;
+      border-left: 2px solid var(--blue);
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    main {
+      min-width: 0;
+    }
+
+    .breadcrumbs {
+      margin: 0 0 1.5rem;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .breadcrumbs a {
+      color: inherit;
+    }
+
+    h1,
+    h2,
+    h3 {
+      line-height: 1.25;
+      scroll-margin-top: 1.5rem;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(2.2rem, 5vw, 3.5rem);
+      letter-spacing: -0.035em;
+    }
+
+    h2 {
+      margin: 3.8rem 0 1rem;
+      padding-bottom: 0.45rem;
+      border-bottom: 1px solid var(--border);
+      font-size: 1.7rem;
+      letter-spacing: -0.02em;
+    }
+
+    h3 {
+      margin: 2.2rem 0 0.65rem;
+      font-size: 1.18rem;
+    }
+
+    p,
+    ul,
+    ol,
+    table,
+    pre,
+    .callout {
+      max-width: 75ch;
+    }
+
+    .lead {
+      margin: 1rem 0 1.6rem;
+      color: var(--muted);
+      font-size: 1.18rem;
+      line-height: 1.55;
+    }
+
+    .page-meta {
+      margin: 0 0 2rem;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .callout {
+      margin: 1.5rem 0;
+      padding: 1rem 1.1rem;
+      border: 1px solid var(--border);
+      border-left-width: 4px;
+      background: var(--surface);
+    }
+
+    .callout-title {
+      display: block;
+      margin-bottom: 0.35rem;
+      font-size: 0.82rem;
+      font-weight: 750;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .callout p {
+      margin: 0;
+    }
+
+    .callout.note {
+      border-left-color: var(--blue);
+      background: var(--surface-blue);
+    }
+
+    .callout.warning {
+      border-left-color: var(--amber);
+      background: var(--surface-amber);
+    }
+
+    .callout.danger {
+      border-left-color: var(--red);
+      background: var(--surface-red);
+    }
+
+    code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+    }
+
+    :not(pre) > code {
+      padding: 0.1em 0.32em;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: var(--surface);
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 1rem 0 1.5rem;
+      padding: 1rem 1.1rem;
+      border-radius: 4px;
+      background: var(--code-bg);
+      color: var(--code-text);
+      font: 0.84rem/1.6 var(--mono);
+      tab-size: 2;
+    }
+
+    .table-wrap {
+      max-width: 100%;
+      margin: 1.25rem 0 1.75rem;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+    }
+
+    table {
+      width: 100%;
+      min-width: 42rem;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+    }
+
+    caption {
+      padding: 0.8rem;
+      background: var(--surface);
+      color: var(--muted);
+      text-align: left;
+    }
+
+    th,
+    td {
+      padding: 0.75rem 0.8rem;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    th {
+      background: var(--surface);
+      font-size: 0.78rem;
+      letter-spacing: 0.03em;
+    }
+
+    .plane-list {
+      margin: 1.5rem 0;
+      border-top: 1px solid var(--border);
+    }
+
+    .plane {
+      display: grid;
+      grid-template-columns: 2rem minmax(10rem, 0.55fr) minmax(0, 1.45fr);
+      gap: 1rem;
+      padding: 1rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .plane-number {
+      color: var(--link);
+      font: 0.78rem/1.5 var(--mono);
+    }
+
+    .plane strong {
+      line-height: 1.4;
+    }
+
+    .plane p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .lifecycle {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 1.25rem 0;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+    }
+
+    .state {
+      padding: 0.45rem 0.65rem;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .state.active {
+      border-color: var(--green);
+    }
+
+    .state.end {
+      border-color: var(--amber);
+    }
+
+    .arrow {
+      color: var(--muted);
+    }
+
+    .procedure {
+      margin: 1.4rem 0 2.5rem;
+      padding-left: 1.25rem;
+    }
+
+    .procedure > li {
+      padding-left: 0.35rem;
+    }
+
+    .procedure > li + li {
+      margin-top: 1rem;
+    }
+
+    .procedure pre {
+      margin-left: -1.6rem;
+    }
+
+    .command-list {
+      margin: 1.25rem 0;
+      border-top: 1px solid var(--border);
+    }
+
+    .command-row {
+      display: grid;
+      grid-template-columns: minmax(15rem, 0.8fr) minmax(0, 1.2fr);
+      gap: 1.5rem;
+      padding: 0.9rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .command-row code {
+      align-self: start;
+      word-break: break-word;
+    }
+
+    .command-row p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    details {
+      border-top: 1px solid var(--border);
+    }
+
+    details:last-of-type {
+      border-bottom: 1px solid var(--border);
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 0.9rem 0;
+      font-weight: 650;
+    }
+
+    details > div {
+      padding: 0 0 1rem;
+      color: var(--muted);
+    }
+
+    details p {
+      margin: 0;
+    }
+
+    .page-footer {
+      margin-top: 4rem;
+      padding-top: 1.2rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    @media (max-width: 1120px) {
+      .docs-layout {
+        grid-template-columns: 14rem minmax(0, 1fr);
+      }
+
+      .toc {
+        display: none;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .header-inner {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.25rem;
+        padding: 0.8rem 0;
+      }
+
+      .docs-layout {
+        grid-template-columns: 1fr;
+        padding-top: 1.5rem;
+      }
+
+      .sidebar {
+        position: static;
+        max-height: none;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .sidebar ul {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem 1rem;
+      }
+
+      .sidebar li + li {
+        margin-top: 0;
+      }
+
+      .sidebar .current {
+        padding-left: 0;
+        border-left: 0;
+      }
+
+      .plane,
+      .command-row {
+        grid-template-columns: 1fr;
+        gap: 0.3rem;
+      }
+
+      .plane-number {
+        display: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+    }
+
+    @media print {
+      .site-header,
+      .sidebar,
+      .toc {
+        display: none;
+      }
+
+      .docs-layout {
+        display: block;
+        width: 100%;
+        padding: 0;
+      }
+
+      body {
+        font-size: 10pt;
+      }
+
+      h2 {
+        break-after: avoid;
+      }
+
+      pre,
+      .table-wrap,
+      .callout {
+        break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="#main" aria-label="CvkeHarness memory documentation">
+        <span class="brand-mark">CvkeHarness</span>
+        <span class="brand-section">Documentation</span>
+      </a>
+      <span class="header-meta">Operational memory · local guide</span>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <nav class="sidebar" aria-label="Documentation sections">
+      <h2>Memory</h2>
+      <ul>
+        <li><a class="current" href="#overview">Overview</a></li>
+        <li><a href="#concepts">Core concepts</a></li>
+        <li><a href="#targets">Target scoping</a></li>
+        <li><a href="#lifecycle">Lifecycle</a></li>
+        <li><a href="#manage">Manage memory</a></li>
+        <li><a href="#approvals">Approvals</a></li>
+        <li><a href="#reference">Command reference</a></li>
+        <li><a href="#devops-difference">DevOps safety model</a></li>
+        <li><a href="#security">Security and privacy</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+      </ul>
+    </nav>
+
+    <main id="main">
+      <p class="breadcrumbs"><a href="../README.md">CvkeHarness</a> / Memory / Operational memory</p>
+      <h1>Operational memory</h1>
+      <p class="lead">CvkeHarness uses target-scoped operational memory to provide concise historical context during planning. Memory does not grant permission to execute commands.</p>
+      <p class="page-meta">Audience: operators and maintainers · Persistence: SQLite · Scope: one target and environment</p>
+
+      <div class="callout danger">
+        <span class="callout-title">Safety invariant</span>
+        <p>Memory can influence what a model proposes. Managed policy and valid approvals determine what CvkeHarness can execute.</p>
+      </div>
+
+      <section id="overview">
+        <h2>Overview</h2>
+        <p>CvkeHarness stores four types of operational knowledge:</p>
+        <ul>
+          <li><strong>Facts:</strong> typed, low-risk observations obtained from explicit probes.</li>
+          <li><strong>Playbooks:</strong> target-specific procedures with verification steps, actions, and explicit success checks.</li>
+          <li><strong>Findings:</strong> reusable observations about one target and environment.</li>
+          <li><strong>Cautions:</strong> short-lived warnings based on failures or denied approaches.</li>
+        </ul>
+
+        <p>SQLite at the configured <code>state_db_path</code> is the canonical source for live target inventory and operational knowledge. Markdown files in the memory directory are generated views and validated import material.</p>
+
+        <h3>What memory does not contain</h3>
+        <p>Operational memory is not used to store:</p>
+        <ul>
+          <li>managed policy or permission rules;</li>
+          <li>durable command approvals;</li>
+          <li>credentials, API tokens, private keys, or passwords;</li>
+          <li>host-to-environment mappings created only by a model;</li>
+          <li>verified outcomes inferred only from exit code zero.</li>
+        </ul>
+
+        <div class="callout note">
+          <span class="callout-title">Note</span>
+          <p><code>guidance.md</code> is user-authored prompt context. It is not managed policy and cannot override shell validation or approval requirements.</p>
+        </div>
+      </section>
+
+      <section id="concepts">
+        <h2>Core concepts</h2>
+        <p>CvkeHarness separates enforcement, identity, historical knowledge, and current execution state into four planes.</p>
+
+        <div class="plane-list" role="list" aria-label="CvkeHarness state planes">
+          <div class="plane" role="listitem">
+            <span class="plane-number">1</span>
+            <strong>Managed policy</strong>
+            <p>Safety mode, shell validation, diagnostic allowlist, deny rules, and approval gates. This plane controls execution and is not model-writable.</p>
+          </div>
+          <div class="plane" role="listitem">
+            <span class="plane-number">2</span>
+            <strong>Live fleet inventory</strong>
+            <p>Stable target ID, environment, transport, remote identity, verification time, and expiry. This plane defines the computer currently in scope.</p>
+          </div>
+          <div class="plane" role="listitem">
+            <span class="plane-number">3</span>
+            <strong>Operational knowledge</strong>
+            <p>Facts, playbooks, findings, and cautions. These records are historical planning hints and pass read-time safety checks before retrieval.</p>
+          </div>
+          <div class="plane" role="listitem">
+            <span class="plane-number">4</span>
+            <strong>Run state</strong>
+            <p>The current task, tool outcomes, telemetry, verification result, and resumable blocked work. Run state is not durable operational truth by default.</p>
+          </div>
+        </div>
+
+        <h3>Canonical persistence</h3>
+        <p>Normal retrieval reads operational state from SQLite. If SQLite is unavailable, operational memory fails closed. CvkeHarness does not treat a populated Markdown file as a fallback authority.</p>
+        <p>Generated Markdown files are written using atomic file replacement. Operational state updates use one SQLite transaction. If view generation fails after a database commit, run <code>cvkeharness memory export</code> to regenerate the views.</p>
+      </section>
+
+      <section id="targets">
+        <h2>Target and environment scoping</h2>
+        <p>Every active remote target requires the following identity fields:</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Field</th>
+                <th scope="col">Description</th>
+                <th scope="col">Example</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>target_id</code></td>
+                <td>Stable opaque identifier used to scope memory and approvals.</td>
+                <td><code>target-7f31d4b8c0a1</code></td>
+              </tr>
+              <tr>
+                <td><code>environment</code></td>
+                <td>Operational tier. Values such as production and staging are separate scopes.</td>
+                <td><code>production</code></td>
+              </tr>
+              <tr>
+                <td><code>transport</code></td>
+                <td>Connection mechanism.</td>
+                <td><code>ssh</code></td>
+              </tr>
+              <tr>
+                <td><code>remote_identity</code></td>
+                <td>Transport-specific identity.</td>
+                <td><code>ops@api-01</code></td>
+              </tr>
+              <tr>
+                <td><code>expires_at</code></td>
+                <td>Time after which the target binding is no longer considered live.</td>
+                <td>RFC 3339 timestamp</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>A hostname or IP address is not sufficient authority because the same value can identify different systems in different networks or environments.</p>
+
+        <h3>Bind a provisional target</h3>
+        <p>New remote targets begin with <code>environment=unknown</code>. After independently confirming the target, bind its environment and remote identity:</p>
+        <pre><code>cvkeharness memory target set-environment \
+  target-7f31d4b8c0a1 production ops@api-01</code></pre>
+
+        <div class="callout warning">
+          <span class="callout-title">Ambiguous target</span>
+          <p>If one identity matches multiple environments, CvkeHarness withholds target memory. An LLM judge cannot authorize a shell command when the target is unresolved or ambiguous.</p>
+        </div>
+      </section>
+
+      <section id="lifecycle">
+        <h2>Memory lifecycle</h2>
+        <p>Model-authored knowledge and learned procedures enter the review inbox as untrusted candidates. They are not included in prompt retrieval before operator promotion.</p>
+
+        <div class="lifecycle" aria-label="Memory lifecycle">
+          <span class="state">candidate</span>
+          <span class="arrow" aria-hidden="true">→</span>
+          <span class="state">operator review</span>
+          <span class="arrow" aria-hidden="true">→</span>
+          <span class="state active">active</span>
+          <span class="arrow" aria-hidden="true">→</span>
+          <span class="state end">expired or revoked</span>
+        </div>
+
+        <p>A candidate can instead become <code>rejected</code>. Lifecycle transitions are one-way:</p>
+        <ul>
+          <li>only a candidate can be promoted or rejected;</li>
+          <li>only an active record can be revoked;</li>
+          <li>a rejected or revoked record cannot be reactivated with <code>promote</code>;</li>
+          <li>delete removes a record from canonical operational state.</li>
+        </ul>
+
+        <div class="callout note">
+          <span class="callout-title">Promotion is not verification</span>
+          <p>Promotion records operator trust and adds a bounded expiry. It does not create a verification timestamp. A playbook must contain a success check before promotion, and the retrieved procedure is still presented as a verify-first historical hint.</p>
+        </div>
+
+        <h3>Read-time safety checks</h3>
+        <p>Before a record is retrieved, CvkeHarness checks:</p>
+        <ol>
+          <li>the target binding is active and unexpired;</li>
+          <li>the target ID and environment match exactly;</li>
+          <li>the record status is active;</li>
+          <li>trust is <code>operator</code> or <code>verified</code>;</li>
+          <li>the record has not expired;</li>
+          <li>the evidence hash matches the stored content;</li>
+          <li>for playbooks, at least one explicit success check exists.</li>
+        </ol>
+        <p>Candidate, rejected, revoked, expired, wrong-scope, untrusted, and integrity-invalid records are excluded.</p>
+      </section>
+
+      <section id="manage">
+        <h2>Manage operational memory</h2>
+
+        <h3>Prerequisites</h3>
+        <ul>
+          <li>The configured SQLite state database must be available.</li>
+          <li>Before promotion, confirm the target ID and environment independently.</li>
+          <li>Do not place credentials or private material in notes, commands, or import files.</li>
+        </ul>
+
+        <h3>Inspect current memory</h3>
+        <ol class="procedure">
+          <li>Show the generated views and snapshot count.
+            <pre><code>cvkeharness memory show</code></pre>
+          </li>
+          <li>Review records under the headings for targets, playbooks, findings, and cautions.</li>
+        </ol>
+
+        <h3>Review and promote a candidate</h3>
+        <ol class="procedure">
+          <li>List candidates.
+            <pre><code>cvkeharness memory inbox</code></pre>
+          </li>
+          <li>For the candidate, inspect target, environment, source, trust, evidence reference, evidence hash, observed time, expiry, sensitivity result, and summary. Playbooks also show success checks.</li>
+          <li>Confirm that the content is narrow, contains no sensitive data, and applies to the displayed target and environment.</li>
+          <li>Promote the exact record.
+            <pre><code>cvkeharness memory promote finding finding-9</code></pre>
+          </li>
+        </ol>
+
+        <h3>Reject a candidate</h3>
+        <p>Reject content that is incorrect, too broad, sensitive, or not useful:</p>
+        <pre><code>cvkeharness memory reject caution caution-17</code></pre>
+
+        <h3>Revoke active memory</h3>
+        <p>Revocation immediately removes an active record from retrieval while leaving it available for inspection:</p>
+        <pre><code>cvkeharness memory revoke playbook pb-42</code></pre>
+
+        <h3>Correct memory with export and import</h3>
+        <ol class="procedure">
+          <li>Export a review copy.
+            <pre><code>cvkeharness memory export ./memory-review</code></pre>
+          </li>
+          <li>Edit the Markdown files in <code>./memory-review</code>.</li>
+          <li>Import the edited copy.
+            <pre><code>cvkeharness memory import ./memory-review</code></pre>
+          </li>
+          <li>Inspect the resulting state.
+            <pre><code>cvkeharness memory show</code></pre>
+          </li>
+        </ol>
+        <p>Import validates target and environment scope, status, trust, expiry, playbook success checks, and known credential markers. If integrity-bound content changed, import records <code>source=operator_import</code>, assigns a validated import evidence reference, and recalculates the evidence hash. A validation rejection does not change canonical SQLite state. If a generated-view write fails after the database commit, the command returns an error but SQLite contains the imported state; run <code>cvkeharness memory export</code> to regenerate the views.</p>
+
+        <h3>Delete a record</h3>
+        <p>Delete removes one fact, playbook, finding, or caution from canonical operational state:</p>
+        <pre><code>cvkeharness memory delete finding finding-9</code></pre>
+
+        <div class="callout warning">
+          <span class="callout-title">Snapshot retention</span>
+          <p>Delete does not erase generated-view snapshots. Snapshots are retained as local audit history and can contain a previous version of the record. The current CLI does not provide a snapshot purge command.</p>
+        </div>
+      </section>
+
+      <section id="approvals">
+        <h2>Approvals and memory</h2>
+        <p>Approvals are enforcement records. Operational memory is planning context. They are stored and evaluated separately.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Property</th>
+                <th scope="col">Operational memory</th>
+                <th scope="col">Reusable command approval</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Purpose</td>
+                <td>Provide historical context for planning.</td>
+                <td>Allow one exact action through an approval gate.</td>
+              </tr>
+              <tr>
+                <td>Created by</td>
+                <td>Typed evidence or operator review.</td>
+                <td>Explicit user action only.</td>
+              </tr>
+              <tr>
+                <td>Scope</td>
+                <td>Target ID and environment.</td>
+                <td>Exact command, action, target ID, environment, policy version, and expiry.</td>
+              </tr>
+              <tr>
+                <td>LLM effect</td>
+                <td>May influence a proposal.</td>
+                <td>An LLM judgment cannot create a reusable approval.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Create a scoped approval</h3>
+        <pre><code>cvkeharness commands approve "systemctl restart api" \
+  --target target-7f31d4b8c0a1 \
+  --environment production \
+  --ttl 1h</code></pre>
+        <p>The maximum CLI TTL is 24 hours. Commands containing <code>$</code> or backticks cannot become reusable approvals because identical text could resolve to different values later.</p>
+        <p><code>approved_once</code> decisions are not returned by reusable-approval queries. The default allowlist permits diagnostic <code>systemctl</code> actions such as <code>status</code>, <code>is-active</code>, and <code>is-enabled</code>. Mutating actions require an approval path.</p>
+      </section>
+
+      <section id="reference">
+        <h2>Command reference</h2>
+        <div class="command-list">
+          <div class="command-row">
+            <code>cvkeharness memory show</code>
+            <p>Show generated memory views and the snapshot count.</p>
+          </div>
+          <div class="command-row">
+            <code>cvkeharness memory inbox</code>
+            <p>List candidate facts, playbooks, findings, and cautions with review metadata.</p>
+          </div>
+          <div class="command-row">
+            <code>cvkeharness memory promote &lt;kind&gt; &lt;id&gt;</code>
+            <p>Promote one candidate to bounded active memory.</p>
+          </div>
+          <div class="command-row">
+            <code>cvkeharness memory reject &lt;kind&gt; &lt;id&gt;</code>
+            <p>Reject one candidate.</p>
+          </div>
+          <div class="command-row">
+            <code>cvkeharness memory revoke &lt;kind&gt; &lt;id&gt;</code>
+            <p>Revoke one active record.</p>
+          </div>
+          <div class="command-row">
+            <code>cvkeharness memory delete &lt;kind&gt; &lt;id&gt;</code>
+            <p>Remove one record from canonical operational state. Snapshots remain.</p>
+          </div>
+          <div class="command-row">
+            <code>cvkeharness memory export [directory]</code>
+            <p>Generate Markdown views from canonical SQLite state.</p>
+          </div>
+          <div class="command-row">
+            <code>cvkeharness memory import [directory]</code>
+            <p>Validate Markdown and replace canonical operational state in one SQLite transaction.</p>
+          </div>
+          <div class="command-row">
+            <code>cvkeharness memory target set-environment &lt;target-id&gt; &lt;environment&gt; &lt;remote-identity&gt;</code>
+            <p>Bind a provisional target to an operator-confirmed environment and remote identity.</p>
+          </div>
+          <div class="command-row">
+            <code>cvkeharness commands approve "&lt;command&gt;" --target &lt;id&gt; --environment &lt;env&gt; --ttl &lt;duration&gt;</code>
+            <p>Create a short-lived, exact reusable command approval.</p>
+          </div>
+        </div>
+
+        <h3>Review IDs</h3>
+        <p>For playbooks, findings, and cautions, use the record ID shown by <code>memory inbox</code> or <code>memory show</code>. Facts use <code>target_id:key</code>.</p>
+      </section>
+
+      <section id="devops-difference">
+        <h2>How DevOps memory differs from coding-agent memory</h2>
+        <p>Coding-agent memory is commonly scoped to a repository, user, folder, or session. CvkeHarness operates across computers and environments, so its memory model adds fleet-specific controls.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Concern</th>
+                <th scope="col">Typical coding-agent memory</th>
+                <th scope="col">CvkeHarness DevOps memory</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Primary risk</td>
+                <td>Stale repository convention or an incorrect implementation hint.</td>
+                <td>Wrong host, wrong environment, or excessive operational blast radius.</td>
+              </tr>
+              <tr>
+                <td>Identity boundary</td>
+                <td>Repository, folder, user, or session.</td>
+                <td>Stable target ID, environment, transport, and remote identity.</td>
+              </tr>
+              <tr>
+                <td>Use before mutation</td>
+                <td>Context may be applied directly inside a workspace sandbox.</td>
+                <td>Verify the live target and current state, then evaluate managed policy and approval.</td>
+              </tr>
+              <tr>
+                <td>Permissions</td>
+                <td>Often handled by the coding tool or workspace sandbox.</td>
+                <td>Managed policy and short-lived approvals are separate from memory.</td>
+              </tr>
+              <tr>
+                <td>Production separation</td>
+                <td>A branch or worktree is often the primary scope.</td>
+                <td>Development, staging, and production remain distinct even when hostnames overlap.</td>
+              </tr>
+              <tr>
+                <td>Remote credentials</td>
+                <td>Repository secret handling remains important.</td>
+                <td>Credentials are excluded from operational memory and known secret markers are rejected during import.</td>
+              </tr>
+              <tr>
+                <td>Failure behavior</td>
+                <td>Missing memory typically reduces convenience.</td>
+                <td>Unavailable SQLite, ambiguous identity, expired evidence, or failed integrity checks withhold memory.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout danger">
+          <span class="callout-title">Before mutation</span>
+          <p>Confirm the live target, exact environment, current system state, and intended postcondition. Historical success is evidence, not authorization.</p>
+        </div>
+      </section>
+
+      <section id="security">
+        <h2>Security and privacy considerations</h2>
+        <ul>
+          <li>Model-authored notes and failed output remain candidate-only until review.</li>
+          <li>Known credential markers are redacted on selected write paths and rejected during validated import.</li>
+          <li>Commands containing likely secrets are not learned as playbooks or facts.</li>
+          <li>Evidence hashes detect content changes during normal retrieval.</li>
+          <li>Generated exports and snapshots can contain host identities, environment names, procedures, and failure history.</li>
+        </ul>
+
+        <div class="callout warning">
+          <span class="callout-title">Protect exported files</span>
+          <p>Treat memory exports and snapshots as internal infrastructure documentation. Store them with access controls appropriate for system inventory and operational history.</p>
+        </div>
+
+        <p>Secret-marker detection is a defense-in-depth filter, not a complete data-loss-prevention system. Operators must still inspect candidates and import files for sensitive values that do not match known patterns.</p>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+
+        <details>
+          <summary>A candidate does not appear in the agent prompt</summary>
+          <div><p>This is expected. Candidates appear in <code>cvkeharness memory inbox</code> and are excluded from retrieval until promotion. Promotion also requires an exact, known target environment.</p></div>
+        </details>
+
+        <details>
+          <summary>An active record stopped appearing</summary>
+          <div><p>Check the live target status and expiry, exact environment, record status, trust, expiry, evidence hash, and playbook success checks. Any failed gate excludes the record.</p></div>
+        </details>
+
+        <details>
+          <summary>Editing a generated Markdown file had no effect</summary>
+          <div><p>SQLite is canonical. Export a review directory, edit that copy, and run <code>cvkeharness memory import &lt;directory&gt;</code>.</p></div>
+        </details>
+
+        <details>
+          <summary>Import reports a secret marker</summary>
+          <div><p>Remove the credential or sensitive parameter from the operational record. Store credentials in the system intended for secrets, not in CvkeHarness memory.</p></div>
+        </details>
+
+        <details>
+          <summary>Import fails after an edit</summary>
+          <div><p>Verify that every record references a known target, matches its environment, has a valid status and trust value, and has a future expiry when active. Active playbooks must have a success check. A validation rejection leaves SQLite unchanged. A view-write error after commit requires <code>cvkeharness memory export</code> to regenerate the views.</p></div>
+        </details>
+
+        <details>
+          <summary>The state database is unavailable</summary>
+          <div><p>Operational memory fails closed. Correct <code>state_db_path</code> or database access before using memory retrieval or mutation.</p></div>
+        </details>
+
+        <details>
+          <summary>A reusable command approval does not match</summary>
+          <div><p>Confirm the exact normalized command, action, target ID, environment, policy version, and expiry. One-off decisions, LLM judgments, and commands containing runtime interpolation are not reusable.</p></div>
+        </details>
+
+        <details>
+          <summary>A deleted item is still present in a snapshot</summary>
+          <div><p>Delete affects canonical operational state and generated current views. Existing snapshots are retained as audit history. The current CLI does not purge them.</p></div>
+        </details>
+      </section>
+
+      <footer class="page-footer">
+        <p>See also: <a href="memory-model.md">Memory model</a> · <a href="architecture.md">Architecture</a> · <a href="../README.md">CLI overview</a></p>
+      </footer>
+    </main>
+
+    <nav class="toc" aria-label="On this page">
+      <h2>On this page</h2>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#concepts">Core concepts</a></li>
+        <li><a href="#targets">Target scoping</a></li>
+        <li><a href="#lifecycle">Lifecycle</a></li>
+        <li><a href="#manage">Manage memory</a></li>
+        <li><a href="#approvals">Approvals</a></li>
+        <li><a href="#reference">Command reference</a></li>
+        <li><a href="#devops-difference">DevOps safety model</a></li>
+        <li><a href="#security">Security and privacy</a></li>
+        <li><a href="#troubleshooting">Troubleshooting</a></li>
+      </ul>
+    </nav>
+  </div>
+</body>
+</html>

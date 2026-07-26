@@ -21,7 +21,7 @@ It focuses on:
 | `provider/` | Provider abstraction plus concrete Codex ChatGPT, OpenRouter, OpenAI, and LM Studio adapters. |
 | `router/` | Historical model routing based on SQLite-backed model statistics and approval state. |
 | `tools/` | Tool registry, shell execution guardrails, and ad hoc memory recording tool. |
-| `memory/` | Target-aware readable memory files, target resolution, retrieval brief rendering, deterministic curation, reindex, rollback. |
+| `memory/` | Target/environment resolution, candidate review, bounded retrieval, SQLite-canonical persistence, and generated Markdown import/export views. |
 | `state/` | SQLite persistence for runs, phases, tool outcomes, routing candidates, approvals, operational memory tables, snapshots, and chat history. |
 | `safety/` | Deterministic scorecard generation and live red-team harness. |
 | `internal/httputil` | Shared HTTP client with timeout and retry/backoff. |
@@ -40,7 +40,7 @@ flowchart TB
         setup["setup / settings\nInteractive wizard"]
         run["run [task]\nPrimary agent runtime"]
         chat["chat\nInteractive session"]
-        memoryCmd["memory show|rollback|reindex"]
+        memoryCmd["memory show|inbox|promote|reject|revoke|delete|export|import"]
         modelsCmd["models shortlist|approve|stats"]
         commandsCmd["commands list|approve"]
         scorecardCmd["scorecard\nDeterministic safety analysis"]
@@ -86,22 +86,21 @@ flowchart TB
         memoryTool["MemoryRecordFindingTool\nmemory_record_finding"]
         parser["ParseShellCommand\nsyntax segmentation"]
         allowlist["Static allowlist\nconfig.allowed_commands"]
-        learnedApprovals["Learned command approvals\nfrom SQLite"]
+        learnedApprovals["User-created scoped approvals\nfrom SQLite"]
         approver["ShellApprover\nLLM judge or user confirm"]
         hostShell["Host shell\nsh -c"]
     end
 
-    subgraph Memory["Readable Operational Memory (`memory/`)"]
+    subgraph Memory["SQLite-Canonical Operational Memory (`memory/`)"]
         manager["memory.Manager"]
-        ensureFiles["EnsureFiles\nbootstrap files + snapshots dir + legacy import"]
+        ensureFiles["EnsureFiles\nbootstrap generated views"]
         resolveTarget["ResolveTarget\nregistry + alias merge"]
         retrievePlan["RetrievePlan\nruntime summary + target summary + playbook + caution + finding"]
-        curateOutcome["CurateRunOutcome\nfacts + playbooks + cautions + findings"]
-        reindex["Reindex / parse managed markdown files"]
-        operatorFile["operator.md"]
-        soulFile["soul.md"]
+        curateOutcome["CurateRunOutcome\nverified facts + candidates"]
+        review["Review lifecycle\npromote, reject, revoke, delete"]
+        exchange["Validated import/export"]
+        guidanceFile["guidance.md"]
         targetsFile["targets.md"]
-        hostFile["host.md"]
         playbooksFile["playbooks.md"]
         findingsFile["findings.md"]
         cautionsFile["cautions.md"]
@@ -125,7 +124,7 @@ flowchart TB
 
     subgraph Observability["Observability"]
         slog["internal/log\nstructured runtime logs"]
-        telemetry["internal/telemetry\ntelemetry.jsonl"]
+        telemetry["internal/telemetry\ntelemetry/live/events.jsonl + SQLite projections"]
     end
 
     subgraph Safety["Safety Evaluation Flows (`safety/`)"]
@@ -214,7 +213,8 @@ flowchart TB
     manager --> resolveTarget
     manager --> retrievePlan
     manager --> curateOutcome
-    manager --> reindex
+    manager --> review
+    manager --> exchange
     retrievePlan --> operatorFile
     retrievePlan --> soulFile
     retrievePlan --> targetsFile
@@ -228,14 +228,14 @@ flowchart TB
     curateOutcome --> playbooksFile
     curateOutcome --> findingsFile
     curateOutcome --> cautionsFile
-    curateOutcome --> snapshotsDir
     curateOutcome --> store
-    reindex --> targetsFile
-    reindex --> hostFile
-    reindex --> playbooksFile
-    reindex --> findingsFile
-    reindex --> cautionsFile
-    reindex --> store
+    review --> store
+    exchange --> targetsFile
+    exchange --> hostFile
+    exchange --> playbooksFile
+    exchange --> findingsFile
+    exchange --> cautionsFile
+    exchange --> store
 
     store --> runsTable
     store --> statsTable
@@ -284,16 +284,15 @@ sequenceDiagram
     participant SH as ShellTool
     participant DB as state.db
     participant MEM as managed markdown files
-    participant TEL as telemetry.jsonl
+    participant TEL as telemetry/live/events.jsonl
 
     U->>C: cvkeharness run "task"
     C->>CFG: LoadConfig()
     C->>S: Open(state.db)
     C->>M: NewManager(memoryDir, store)
     C->>M: EnsureFiles()
-    C->>M: Reindex()
-    M->>MEM: Parse targets.md, host.md, playbooks.md, findings.md, cautions.md
-    M->>DB: ReplaceOperationalMemory(...)
+    M->>DB: LoadOperationalMemory()
+    M->>MEM: Regenerate missing Markdown views from SQLite
     C->>T: NewDefaultRegistryWithStoreAndMemory(...)
     T->>DB: ListCommandApprovals()
     C->>R: New(routingConfigFromConfig(cfg, store))
@@ -309,11 +308,11 @@ sequenceDiagram
         opt Top candidate unapproved and confident
             R->>U: Prompt for one-off model approval
             U-->>R: yes / no
-            R->>DB: SaveModelApproval(approved_once)
+            R->>DB: Save non-reusable one-off routing decision
         end
         A->>M: RetrievePlan(planning context)
-        M->>MEM: Read operator.md + soul.md
-        M->>DB: LoadOperationalMemory() or parse fallback files
+        M->>MEM: Read guidance.md
+        M->>DB: LoadOperationalMemory()
         A->>P: ChatCompletion(plan prompt)
         P-->>A: concise planning notes
     end
@@ -321,8 +320,8 @@ sequenceDiagram
     A->>R: Select(execution, taskClass, toolset)
     R->>DB: ListModelStats(execution, taskClass, toolset)
     A->>M: RetrievePlan(execution context)
-    M->>MEM: Read operator.md + soul.md
-    M->>DB: LoadOperationalMemory() or parse fallback files
+    M->>MEM: Read guidance.md
+    M->>DB: LoadOperationalMemory()
     A->>A: Build system prompt stack
 
     loop Up to MaxIterations
@@ -383,7 +382,7 @@ sequenceDiagram
   - validates Codex CLI ChatGPT login, OpenRouter/OpenAI credentials, or LM Studio base URLs
   - configures safety mode, routing, token/iteration limits, and logging
   - writes `config.yaml`
-  - bootstraps `soul.md` plus the structured memory files
+  - bootstraps `guidance.md` plus the structured memory files
 
 ### 2. Agent orchestration
 
@@ -404,15 +403,14 @@ Prompt construction is layered rather than monolithic.
 `memory.Manager.RetrievePlan()` returns:
 
 - built-in invariant rules
-- `operator.md`
-- `soul.md`
+- compiled `guidance.md`
 - runtime-host summary
 - optional target summary
 - optional primary playbook
 - optional caution
 - optional fallback finding
 
-`agent.initialSystemMessages()` then stacks those pieces into ordered `system` messages and optionally appends planning notes during execution.
+`agent.buildPromptPlan()` lays those pieces out as a stable prefix, stable tool policy, compact target brief, and volatile turn context.
 
 This is a deliberate architecture choice: the runtime treats human-managed instructions and machine-curated operational knowledge as separate layers instead of flattening everything into one mutable memory file.
 
@@ -458,46 +456,51 @@ The registry currently exposes:
 4. if validation fails, defer to a secondary approval gate:
    - LLM-as-a-judge, or
    - direct user confirmation
-5. persist newly approved segments for reuse
+5. persist only deliberate user approvals with exact target, environment, action, policy version, and expiry
 6. execute through `sh -c` with timeout
 7. record telemetry with approval mode and outcome
 
-The memory note tool is intentionally narrower: it writes reusable ad hoc findings into `findings.md` through the same structured memory manager, but it does not create playbooks or cautions directly.
+The memory note tool submits an untrusted finding candidate. It cannot create active memory, policy, credentials, host mappings, or command approval.
 
 The optional web tools are read-only public research tools. They call Tavily directly over HTTP, return bounded structured JSON, reject obvious secrets, and prevent `web_fetch` from sending localhost, private, metadata, or internal-looking URLs to the external provider. Successful web-only output is not promoted into target-aware operational memory automatically.
 
 ### 6. Target-aware operational memory
 
-The memory subsystem has a dual representation by design.
+The memory subsystem separates four state planes:
 
-Readable files in `~/.cvkeharness/`:
+1. managed policy, which models and memory cannot write;
+2. live fleet inventory, with stable target, environment, transport, and remote identity;
+3. operational knowledge, stored as target-scoped facts, playbooks, findings, and cautions;
+4. short-lived run state and resumable blocked work.
 
-- `operator.md`
-- `soul.md`
+SQLite is canonical for live inventory and operational knowledge. The runtime fails closed when it is unavailable.
+
+Generated readable views in `~/.cvkeharness/`:
+
+- `guidance.md`
 - `targets.md`
-- `host.md`
-  Runtime-host profile plus durable operator notes about local-machine quirks.
+  Includes the runtime host as a normal target record.
 - `playbooks.md`
 - `findings.md`
 - `cautions.md`
 
-Structured SQLite metadata:
+Canonical SQLite state:
 
 - target registry
 - alias mapping
 - verified host facts
-- durable playbooks
-- provisional findings
-- cautions
+- candidate and active playbooks
+- candidate and active findings
+- candidate and active cautions
 - snapshots
 
-This split allows:
+Markdown edits take effect only through `cvkeharness memory import`, which validates target/environment scope, status, trust, expiry, playbook success checks, and known secret markers before replacing canonical state. Deliberate content edits receive operator-import provenance and a recalculated integrity hash. This design provides:
 
-- user-editable readable files
+- inspectable and portable generated views
 - fast scoped retrieval and ranking
 - deterministic target resolution
 - strict prompt budget enforcement
-- rollback through snapshots
+- an explicit operator review and import boundary
 
 ### 7. State database
 
@@ -505,12 +508,12 @@ This split allows:
 
 - runtime observability through `runs`, `phase_records`, and `tool_outcomes`
 - adaptive routing through `model_stats` and `routing_candidates`
-- approval memory through `model_approvals` and `command_approvals`
+- model approval state plus target-scoped, expiring command approvals
 - operational memory indexing through `targets`, `target_aliases`, `host_facts`, `playbooks`, `findings`, and `cautions`
-- rollback support through `snapshots`
+- generated view snapshots used for inspection and export history, not as an automatic rollback authority
 - chat history through `chat_sessions`, `chat_turns`, and `chat_messages`
 
-An important resilience detail: the store degrades to an unavailable/no-op style if SQLite cannot be opened. The CLI warns and continues with file-backed memory fallback where possible.
+The store may degrade for unrelated telemetry paths, but operational memory does not fall back to Markdown. If SQLite cannot be opened, operational retrieval and mutation fail closed.
 
 ### 8. Provider abstraction and HTTP behavior
 
@@ -574,7 +577,7 @@ CvkeHarness is best understood as a local-first, CLI-hosted agent runtime with f
 1. a bootstrap loop that turns user choices into config and prompt files
 2. an execution loop that alternates model reasoning and tool calls
 3. a routing loop that learns which approved model tends to work best for each phase/profile
-4. a target-aware memory loop that turns verified successes and failures into operational recall
+4. a target-aware memory loop that stages learned knowledge as candidates and retrieves only reviewed, unexpired, evidence-backed hints
 5. a safety loop that continuously tests whether the shell boundary still behaves as intended
 
 That combination is what gives the codebase its character: it is not just a single agent loop, but a small self-observing runtime around that loop.

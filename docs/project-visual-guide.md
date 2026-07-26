@@ -27,9 +27,9 @@ flowchart TD
     memory["memory.Manager"]
     store["state.Store\n~/.cvkeharness/state.db"]
     provider["provider.Provider\nOpenRouter or LM Studio"]
-    files["Readable managed files\noperator.md\nsoul.md\ntargets.md\nhost.md\nplaybooks.md\nfindings.md\ncautions.md"]
+    files["Readable managed files\nguidance.md\ntargets.md\nplaybooks.md\nfindings.md\ncautions.md"]
     safety["safety package\nscorecard + redteam"]
-    telemetry["telemetry.jsonl\nstreamed runtime events"]
+    telemetry["telemetry/live/events.jsonl\ncanonical runtime events"]
 
     user --> cli
     cli --> cfg
@@ -72,10 +72,10 @@ flowchart TD
     resolve["ResolveTarget()\nruntime host or remote target"]
     retrieval["core.RetrievalContext\nphase + task_class + active_model\n+ runtime_host_id + target_id\n+ target_kind + tool_names + trouble"]
     ensure["memory.Manager.EnsureFiles()"]
-    files["Read operator.md and soul.md"]
+    files["Read guidance.md"]
     stateLoad["LoadOperationalMemory()\nor parse markdown fallback"]
     rank["Select one compact brief\nruntime host summary\n+ optional target summary\n+ optional playbook\n+ optional caution\n+ optional finding"]
-    stack["initialSystemMessages()\n1. built-in rules\n2. operator.md\n3. soul.md\n4. runtime-host summary\n5. retrieved brief\n6. planning notes"]
+    stack["buildPromptPlan()\n1. compiled guidance prefix\n2. stable tool policy\n3. host-target-memory brief\n4. volatile turn context"]
     chat["agent.ChatState"]
     refresh["One refresh after tool trouble\nor policy denial"]
 
@@ -90,8 +90,7 @@ flowchart TD
 What matters here:
 
 - `builtInRules()` is fixed runtime policy and keeps baseline behavior stable
-- `operator.md` is the harness operating manual
-- `soul.md` is the human-facing persona layer and remains user-owned
+- `guidance.md` is the user-authored operating surface
 - retrieval is structured-first, not semantic-first
 - the runtime host and the active target are modeled separately
 - mid-run refresh is allowed once after tool trouble so the model can see a tighter brief for the failing target/tool
@@ -153,7 +152,7 @@ flowchart TD
     approved{"Top candidate approved\nand confidence >= threshold?"}
     recommend{"Top candidate unapproved,\npositive score, and confident?"}
     prompt["Prompt user for one-off approval"]
-    persist["Save approved_once\nmodel approval in SQLite"]
+    persist["Save non-reusable\none-off routing decision"]
     useTop["Use routed model"]
     useDefault["Use default model"]
 
@@ -178,49 +177,53 @@ That means a model can be preferred for execution on debugging tasks with `shell
 
 ## 5. Operational Memory Lifecycle
 
-Memory is now target-aware and structured around verified operational outcomes.
+Operational memory is target- and environment-scoped planning context. It is separate from managed policy and command authorization.
 
 ```mermaid
 flowchart TD
     task["Task or chat turn"]
     resolve["Resolve target\nruntime host or remote target"]
     run["Execute tools and collect outcomes"]
-    facts["Extract cheap verified host facts\nhostname, os-release,\npackage manager,\nservice manager,\ncontainer runtime"]
-    success{"Verified successful sequence?"}
-    playbook["Create or update\nplaybook"]
+    facts["Extract typed facts\nfrom explicit probes"]
+    factgate{"Typed evidence and\nknown environment?"}
+    activefact["Auto-promote low-risk fact"]
+    success{"Successful sequence with\nexplicit postcondition?"}
+    playbook["Create playbook candidate"]
     failure{"Concrete failure or denial?"}
-    caution["Create or update\ncaution"]
+    caution["Create short-lived\ncaution candidate"]
     note["Optional ad hoc note\nmemory_record_finding"]
-    findings["Write finding"]
-    snapshot["Snapshot managed files"]
-    reindex["Reindex markdown into SQLite"]
-    fallback["If SQLite is unavailable,\nparse markdown directly"]
+    findings["Create untrusted\nfinding candidate"]
+    inbox["Operator review inbox"]
+    decision{"Promote, reject,\nor leave pending?"}
+    active["Active, scoped,\nexpiring memory"]
+    views["Regenerate readable\nMarkdown views"]
 
     task --> resolve --> run
-    run --> facts
+    run --> facts --> factgate
+    factgate -- "yes" --> activefact --> active
+    factgate -- "no" --> inbox
     run --> success
     success -- "yes" --> playbook
     run --> failure
     failure -- "yes" --> caution
     note --> findings
-    facts --> snapshot
-    playbook --> snapshot
-    caution --> snapshot
-    findings --> snapshot --> reindex
-    fallback --> facts
-    fallback --> playbook
-    fallback --> caution
-    fallback --> findings
+    playbook --> inbox
+    caution --> inbox
+    findings --> inbox
+    inbox --> decision
+    decision -- "promote" --> active
+    decision -- "reject" --> views
+    active --> views
 ```
 
 Important behaviors:
 
-- the runtime host gets its own stable profile in `host.md`, including optional operator-authored machine quirks
-- remote targets live in `targets.md` with aliases and verified facts
-- playbooks only come from successful verified operational sequences
-- cautions come from concrete failures or policy denials
-- `memory_record_finding` is the narrow manual note path, not the main executable memory path
-- legacy `memory.md` is imported into `findings.md` as `needs_curation`
+- SQLite is canonical; Markdown files are generated views and explicit import sources
+- targets require a stable ID, environment, and remote identity before active memory can support planning
+- model-authored notes, successful command sequences, and failure text enter the review inbox as untrusted candidates
+- low-risk typed facts may activate automatically only with verified evidence and known target scope
+- playbooks require a success check before promotion, and every retrieved playbook remains a historical verify-first hint
+- `memory_record_finding` cannot create policy, approvals, credentials, host mappings, or active memory
 
 ## 6. Retrieval Priorities
 
@@ -252,9 +255,9 @@ Freshness buckets:
 
 Rendering behavior:
 
-- fresh, high-confidence playbooks can be marked direct-use eligible
-- stale or cold playbooks render as verify-first
-- unrelated target memory does not leak into the brief
+- active, unexpired, integrity-valid records are considered only for an exact target and environment match
+- every playbook renders as a historical verify-first hint
+- candidate, rejected, revoked, expired, tampered, and unrelated target memory does not enter the brief
 
 ## 7. Safety Model
 
