@@ -168,7 +168,8 @@ func (m *Manager) LoadTargetProfile(ctx context.Context, targetID string) (state
 	return state.Target{}, nil, fmt.Errorf("target %q was not found", targetID)
 }
 
-// ResolveTarget finds or creates a stable target record from prompt or command hints.
+// ResolveTarget finds or creates a deterministic endpoint-label record from
+// prompt or command hints. It does not prove a live machine fingerprint.
 func (m *Manager) ResolveTarget(ctx context.Context, input TargetResolutionInput) (TargetResolution, error) {
 	if err := m.EnsureFiles(); err != nil {
 		return TargetResolution{}, err
@@ -194,23 +195,32 @@ func (m *Manager) ResolveTarget(ctx context.Context, input TargetResolutionInput
 		return resolution, nil
 	}
 
-	targetIdx := findTargetByHint(mem, *hint)
+	requestedEnvironment := strings.ToLower(strings.TrimSpace(input.Environment))
+	targetIdx := findTargetByHint(mem, *hint, requestedEnvironment)
 	if targetIdx == -2 {
 		return TargetResolution{
 			RuntimeHostID: mem.RuntimeHostID,
 			PrimaryName:   hint.Host,
-			Environment:   firstNonEmpty(strings.TrimSpace(input.Environment), state.EnvironmentUnknown),
+			Environment:   firstNonEmpty(requestedEnvironment, state.EnvironmentUnknown),
 			Ambiguous:     true,
 		}, nil
 	}
 	now := m.now()
 	changed := false
 	if targetIdx < 0 {
+		if requestedEnvironment != "" && requestedEnvironment != state.EnvironmentUnknown {
+			return TargetResolution{
+				RuntimeHostID: mem.RuntimeHostID,
+				PrimaryName:   hint.Host,
+				Environment:   requestedEnvironment,
+				Ambiguous:     true,
+			}, nil
+		}
 		record := targetRecord{
 			Target: state.Target{
-				ID:             targetIDFromHint(*hint, input.Environment),
+				ID:             targetIDFromHint(*hint, state.EnvironmentUnknown),
 				Kind:           hint.Kind,
-				Environment:    firstNonEmpty(strings.TrimSpace(input.Environment), state.EnvironmentUnknown),
+				Environment:    state.EnvironmentUnknown,
 				PrimaryName:    hint.Host,
 				Transport:      transportForTargetKind(hint.Kind),
 				RemoteIdentity: remoteIdentityForHint(*hint),
@@ -417,12 +427,12 @@ func formatGuidanceContext(dir, guidance string) string {
 		"Compiled guidance:",
 		compiled,
 		"",
-		"Authoritative memory files:",
-		"- " + filepath.Join(dir, GuidanceFile),
-		"- " + filepath.Join(dir, TargetsFile),
-		"- " + filepath.Join(dir, PlaybooksFile),
-		"- " + filepath.Join(dir, CautionsFile),
-		"- " + filepath.Join(dir, FindingsFile),
+		"Non-authoritative guidance and generated operational views:",
+		"- operator guidance: " + filepath.Join(dir, GuidanceFile),
+		"- generated view: " + filepath.Join(dir, TargetsFile),
+		"- generated view: " + filepath.Join(dir, PlaybooksFile),
+		"- generated view: " + filepath.Join(dir, CautionsFile),
+		"- generated view: " + filepath.Join(dir, FindingsFile),
 	}
 	return strings.Join(parts, "\n")
 }
@@ -807,8 +817,9 @@ func parseTargetToken(token, kind string) *targetHint {
 	}
 }
 
-func findTargetByHint(mem fileState, hint targetHint) int {
+func findTargetByHint(mem fileState, hint targetHint, requestedEnvironment string) int {
 	var matches []int
+	identityMatched := false
 	wantedIdentity := remoteIdentityForHint(hint)
 	for i, target := range mem.Targets {
 		if hint.User != "" && target.Target.RemoteIdentity != "" && !strings.EqualFold(target.Target.RemoteIdentity, wantedIdentity) {
@@ -832,6 +843,12 @@ func findTargetByHint(mem fileState, hint targetHint) int {
 			}
 		}
 		if matched {
+			identityMatched = true
+			if requestedEnvironment != "" &&
+				requestedEnvironment != state.EnvironmentUnknown &&
+				!strings.EqualFold(target.Target.Environment, requestedEnvironment) {
+				continue
+			}
 			matches = append(matches, i)
 		}
 	}
@@ -839,6 +856,9 @@ func findTargetByHint(mem fileState, hint targetHint) int {
 		return matches[0]
 	}
 	if len(matches) > 1 {
+		return -2
+	}
+	if identityMatched && requestedEnvironment != "" && requestedEnvironment != state.EnvironmentUnknown {
 		return -2
 	}
 	return -1

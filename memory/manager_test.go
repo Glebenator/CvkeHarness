@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/state"
 )
 
@@ -133,6 +134,96 @@ func TestResolveTargetDoesNotCreateTargetsFromFillerProse(t *testing.T) {
 	}
 	if len(memState.Targets) != 1 {
 		t.Fatalf("expected only the runtime target, got %#v", memState.Targets)
+	}
+}
+
+func TestSetTargetEnvironmentRejectsRebindingWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := state.Open(filepath.Join(dir, "state.db"))
+	defer store.Close()
+	manager := NewManager(dir, store)
+	manager.hostname = func() string { return "runtime.local" }
+	ctx := context.Background()
+
+	target, err := manager.ResolveTarget(ctx, TargetResolutionInput{Command: "ssh ops@api systemctl status api"})
+	if err != nil {
+		t.Fatalf("ResolveTarget returned error: %v", err)
+	}
+	if err := manager.SetTargetEnvironment(ctx, target.TargetID, "production", "ops@api"); err != nil {
+		t.Fatalf("initial SetTargetEnvironment returned error: %v", err)
+	}
+	targetCtx := telemetry.WithFields(ctx, telemetry.Fields{TargetID: target.TargetID})
+	if err := manager.PersistLessons(targetCtx, []Lesson{{Body: "Check the API health endpoint."}}); err != nil {
+		t.Fatalf("PersistLessons returned error: %v", err)
+	}
+	withFinding, err := manager.loadState(ctx)
+	if err != nil || len(withFinding.Findings) != 1 {
+		t.Fatalf("expected target finding candidate, got %#v err=%v", withFinding.Findings, err)
+	}
+	if err := manager.PromoteMemory(ctx, "finding", withFinding.Findings[0].ID); err != nil {
+		t.Fatalf("PromoteMemory returned error: %v", err)
+	}
+	before, err := manager.loadState(ctx)
+	if err != nil {
+		t.Fatalf("loadState before rebind returned error: %v", err)
+	}
+	if err := manager.SetTargetEnvironment(ctx, target.TargetID, "staging", "admin@api"); err == nil {
+		t.Fatal("expected active target rebinding to fail")
+	}
+	after, err := manager.loadState(ctx)
+	if err != nil {
+		t.Fatalf("loadState after rebind returned error: %v", err)
+	}
+	beforeTarget := before.Targets[targetIndex(before, target.TargetID)].Target
+	afterTarget := after.Targets[targetIndex(after, target.TargetID)].Target
+	if afterTarget.Environment != beforeTarget.Environment ||
+		afterTarget.RemoteIdentity != beforeTarget.RemoteIdentity ||
+		afterTarget.Status != beforeTarget.Status ||
+		!afterTarget.VerifiedAt.Equal(beforeTarget.VerifiedAt) ||
+		!afterTarget.ExpiresAt.Equal(beforeTarget.ExpiresAt) {
+		t.Fatalf("rejected rebind mutated target: before=%#v after=%#v", beforeTarget, afterTarget)
+	}
+	if len(after.Findings) != 1 ||
+		after.Findings[0].Environment != before.Findings[0].Environment ||
+		after.Findings[0].Status != before.Findings[0].Status ||
+		after.Findings[0].Trust != before.Findings[0].Trust ||
+		after.Findings[0].EvidenceHash != before.Findings[0].EvidenceHash {
+		t.Fatalf("rejected rebind mutated related finding: before=%#v after=%#v", before.Findings, after.Findings)
+	}
+}
+
+func TestResolveTargetFailsClosedOnRequestedEnvironmentMismatch(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := state.Open(filepath.Join(dir, "state.db"))
+	defer store.Close()
+	manager := NewManager(dir, store)
+	manager.hostname = func() string { return "runtime.local" }
+	ctx := context.Background()
+
+	target, err := manager.ResolveTarget(ctx, TargetResolutionInput{Command: "ssh ops@api systemctl status api"})
+	if err != nil {
+		t.Fatalf("ResolveTarget returned error: %v", err)
+	}
+	if err := manager.SetTargetEnvironment(ctx, target.TargetID, "production", "ops@api"); err != nil {
+		t.Fatalf("SetTargetEnvironment returned error: %v", err)
+	}
+	before, _ := manager.loadState(ctx)
+	resolution, err := manager.ResolveTarget(ctx, TargetResolutionInput{
+		Command: "ssh ops@api systemctl status api", Environment: "staging",
+	})
+	if err != nil {
+		t.Fatalf("mismatched ResolveTarget returned error: %v", err)
+	}
+	if !resolution.Ambiguous || resolution.TargetID != "" || resolution.Environment != "staging" {
+		t.Fatalf("expected explicit environment mismatch to fail closed, got %#v", resolution)
+	}
+	after, _ := manager.loadState(ctx)
+	if len(after.Targets) != len(before.Targets) {
+		t.Fatalf("mismatched resolution must not create a target, before=%d after=%d", len(before.Targets), len(after.Targets))
 	}
 }
 
@@ -390,6 +481,9 @@ func TestPlaybookWithoutPostconditionStaysCandidate(t *testing.T) {
 	if memState.Playbooks[0].FailureCount == 0 {
 		t.Fatal("expected playbook failure count to increase")
 	}
+	if memState.Playbooks[0].EvidenceHash != playbookIntegrity(memState.Playbooks[0]) {
+		t.Fatal("playbook failure update must preserve integrity")
+	}
 	if len(memState.Cautions) == 0 {
 		t.Fatal("expected a caution to be created after failure")
 	}
@@ -423,6 +517,36 @@ func TestCurateRunOutcomeDoesNotCreateFindingsFromAssistantSummary(t *testing.T)
 	}
 }
 
+func TestPersistLessonsUsesTelemetryTargetScope(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := state.Open(filepath.Join(dir, "state.db"))
+	defer store.Close()
+	manager := NewManager(dir, store)
+	manager.hostname = func() string { return "runtime.local" }
+	ctx := context.Background()
+
+	target, err := manager.ResolveTarget(ctx, TargetResolutionInput{Command: "ssh ops@api systemctl status api"})
+	if err != nil {
+		t.Fatalf("ResolveTarget returned error: %v", err)
+	}
+	if err := manager.SetTargetEnvironment(ctx, target.TargetID, "production", "ops@api"); err != nil {
+		t.Fatalf("SetTargetEnvironment returned error: %v", err)
+	}
+	targetCtx := telemetry.WithFields(ctx, telemetry.Fields{TargetID: target.TargetID})
+	if err := manager.PersistLessons(targetCtx, []Lesson{{Body: "Check the API health endpoint first."}}); err != nil {
+		t.Fatalf("PersistLessons returned error: %v", err)
+	}
+	st, err := manager.loadState(ctx)
+	if err != nil || len(st.Findings) != 1 {
+		t.Fatalf("expected one remote candidate finding, got %#v err=%v", st.Findings, err)
+	}
+	if st.Findings[0].TargetID != target.TargetID || st.Findings[0].Environment != "production" {
+		t.Fatalf("finding used wrong target scope: %#v", st.Findings[0])
+	}
+}
+
 func TestCompileGuidanceMarkdownProducesCompactDirectives(t *testing.T) {
 	t.Parallel()
 
@@ -449,6 +573,19 @@ Stable prose paragraph that should be preserved compactly.
 	}
 	if strings.Contains(got, "# Guidance") || strings.Contains(got, "## Rules") {
 		t.Fatalf("expected headings to be removed from compiled guidance, got:\n%s", got)
+	}
+}
+
+func TestFormatGuidanceContextLabelsViewsAsNonAuthoritative(t *testing.T) {
+	t.Parallel()
+
+	got := formatGuidanceContext("/memory", "- Verify the live endpoint.")
+	if strings.Contains(got, "Authoritative memory files") {
+		t.Fatalf("generated views must not be labeled authoritative: %q", got)
+	}
+	if !strings.Contains(got, "Non-authoritative guidance and generated operational views") ||
+		!strings.Contains(got, "generated view:") {
+		t.Fatalf("expected truthful generated-view labeling, got %q", got)
 	}
 }
 

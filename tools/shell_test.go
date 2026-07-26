@@ -439,7 +439,7 @@ func TestScopedApprovalRejectsExpiredOrChangedTargetIdentity(t *testing.T) {
 	if err := store.SaveCommandApproval(context.Background(), state.CommandApproval{
 		TargetID: target.ID, Environment: target.Environment, RemoteIdentity: target.RemoteIdentity,
 		Command: "systemctl restart api", Action: "systemctl restart", Status: state.ApprovalStatusApproved,
-		Source: "cli", PolicyVersion: state.CommandApprovalPolicyVersion,
+		Source: "cli_policy", PolicyVersion: state.CommandApprovalPolicyVersion,
 		ApprovedAt: now, ExpiresAt: now.Add(time.Hour),
 	}); err != nil {
 		t.Fatalf("SaveCommandApproval returned error: %v", err)
@@ -469,6 +469,46 @@ func TestScopedApprovalRejectsExpiredOrChangedTargetIdentity(t *testing.T) {
 	}
 	if got := tool.scopedApprovedCommands(ctx, parsed); len(got) != 0 {
 		t.Fatalf("expired target must invalidate approval, got %#v", got)
+	}
+}
+
+func TestInteractiveRememberedApprovalRequiresAndMatchesSession(t *testing.T) {
+	t.Parallel()
+
+	store := state.Open(t.TempDir() + "/state.db")
+	defer store.Close()
+	now := time.Now().UTC()
+	target := state.Target{
+		ID: "target-1", Kind: "ssh", Environment: "production",
+		PrimaryName: "api", Transport: "ssh", RemoteIdentity: "ops@api",
+		Status: state.MemoryStatusActive, ExpiresAt: now.Add(time.Hour),
+	}
+	if err := store.ReplaceOperationalMemory(context.Background(), state.OperationalMemory{Targets: []state.Target{target}}); err != nil {
+		t.Fatalf("ReplaceOperationalMemory returned error: %v", err)
+	}
+	tool := NewShellToolWithApprovalStore(nil, staticApprover{decision: ShellApprovalDecision{
+		Approved: true, Mode: SafetyModeUserConfirm, Remember: true,
+	}}, "primary", store)
+	command := json.RawMessage(`{"command":"echo session-bound"}`)
+	missingSession := telemetry.WithFields(context.Background(), telemetry.Fields{TargetID: target.ID})
+	if _, err := tool.Execute(missingSession, command); err != nil {
+		t.Fatalf("missing-session execution may proceed once after confirmation, got %v", err)
+	}
+	if approvals, err := store.ListCommandApprovals(context.Background()); err != nil || len(approvals) != 0 {
+		t.Fatalf("missing session must not persist approval, got %#v err=%v", approvals, err)
+	}
+
+	sessionA := telemetry.WithFields(context.Background(), telemetry.Fields{TargetID: target.ID, SessionID: "session-a"})
+	if _, err := tool.Execute(sessionA, command); err != nil {
+		t.Fatalf("session-a confirmation returned error: %v", err)
+	}
+	tool.approver = staticApprover{err: fmt.Errorf("approval requested")}
+	if _, err := tool.Execute(sessionA, command); err != nil {
+		t.Fatalf("same session should reuse approval, got %v", err)
+	}
+	sessionB := telemetry.WithFields(context.Background(), telemetry.Fields{TargetID: target.ID, SessionID: "session-b"})
+	if _, err := tool.Execute(sessionB, command); err == nil || !strings.Contains(err.Error(), "approval requested") {
+		t.Fatalf("different session must request approval again, got %v", err)
 	}
 }
 

@@ -313,44 +313,63 @@ func (m *Manager) SetTargetEnvironment(ctx context.Context, targetID, environmen
 		return err
 	}
 	now := m.now()
-	found := false
-	for idx := range st.Targets {
-		target := &st.Targets[idx]
-		if target.Target.ID != targetID {
-			continue
-		}
-		target.Target.Environment = environment
-		target.Target.RemoteIdentity = remoteIdentity
-		target.Target.Status = state.MemoryStatusActive
-		target.Target.VerifiedAt = now
-		target.Target.ExpiresAt = now.Add(activeTTL)
-		target.Target.LastSeenAt = now
-		for factIdx := range target.Facts {
-			target.Facts[factIdx].Environment = environment
-			target.Facts[factIdx].EvidenceHash = factIntegrity(target.Facts[factIdx])
-		}
-		for idx := range st.Playbooks {
-			if st.Playbooks[idx].TargetID == targetID {
-				st.Playbooks[idx].Environment = environment
-				st.Playbooks[idx].EvidenceHash = playbookIntegrity(st.Playbooks[idx])
-			}
-		}
-		for idx := range st.Findings {
-			if st.Findings[idx].TargetID == targetID {
-				st.Findings[idx].Environment = environment
-				st.Findings[idx].EvidenceHash = findingIntegrity(st.Findings[idx])
-			}
-		}
-		for idx := range st.Cautions {
-			if st.Cautions[idx].TargetID == targetID {
-				st.Cautions[idx].Environment = environment
-				st.Cautions[idx].EvidenceHash = cautionIntegrity(st.Cautions[idx])
-			}
-		}
-		found = true
-	}
-	if !found {
+	targetIdx := targetIndex(st, targetID)
+	if targetIdx < 0 {
 		return fmt.Errorf("target %q was not found", targetID)
+	}
+	target := &st.Targets[targetIdx]
+	if target.Target.Status != state.MemoryStatusCandidate ||
+		target.Target.Environment != state.EnvironmentUnknown {
+		return fmt.Errorf("target %q is already bound; only provisional targets with environment=unknown can be bound", targetID)
+	}
+	for _, fact := range target.Facts {
+		if fact.Status != state.MemoryStatusCandidate {
+			return fmt.Errorf("target %q has non-candidate facts and cannot be rebound safely", targetID)
+		}
+	}
+	for _, playbook := range st.Playbooks {
+		if playbook.TargetID == targetID && playbook.Status != state.MemoryStatusCandidate {
+			return fmt.Errorf("target %q has non-candidate playbooks and cannot be rebound safely", targetID)
+		}
+	}
+	for _, finding := range st.Findings {
+		if finding.TargetID == targetID && finding.Status != state.MemoryStatusCandidate {
+			return fmt.Errorf("target %q has non-candidate findings and cannot be rebound safely", targetID)
+		}
+	}
+	for _, caution := range st.Cautions {
+		if caution.TargetID == targetID && caution.Status != state.MemoryStatusCandidate {
+			return fmt.Errorf("target %q has non-candidate cautions and cannot be rebound safely", targetID)
+		}
+	}
+
+	target.Target.Environment = environment
+	target.Target.RemoteIdentity = remoteIdentity
+	target.Target.Status = state.MemoryStatusActive
+	target.Target.VerifiedAt = now
+	target.Target.ExpiresAt = now.Add(activeTTL)
+	target.Target.LastSeenAt = now
+	for factIdx := range target.Facts {
+		target.Facts[factIdx].Environment = environment
+		target.Facts[factIdx].EvidenceHash = factIntegrity(target.Facts[factIdx])
+	}
+	for idx := range st.Playbooks {
+		if st.Playbooks[idx].TargetID == targetID {
+			st.Playbooks[idx].Environment = environment
+			st.Playbooks[idx].EvidenceHash = playbookIntegrity(st.Playbooks[idx])
+		}
+	}
+	for idx := range st.Findings {
+		if st.Findings[idx].TargetID == targetID {
+			st.Findings[idx].Environment = environment
+			st.Findings[idx].EvidenceHash = findingIntegrity(st.Findings[idx])
+		}
+	}
+	for idx := range st.Cautions {
+		if st.Cautions[idx].TargetID == targetID {
+			st.Cautions[idx].Environment = environment
+			st.Cautions[idx].EvidenceHash = cautionIntegrity(st.Cautions[idx])
+		}
 	}
 	return m.writeAllState(ctx, st, "operator bound target environment")
 }
