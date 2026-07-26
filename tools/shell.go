@@ -19,7 +19,6 @@ import (
 // ShellTool runs restricted shell commands on the host.
 type ShellTool struct {
 	allowedCommands  map[string]bool
-	approvedCommands map[string]bool
 	timeout          time.Duration
 	approver         ShellApprover
 	primaryModel     string
@@ -100,36 +99,27 @@ func (w *streamCaptureWriter) Result() string {
 
 // NewShellTool creates a shell tool constrained to an allowlist and LLM judge.
 func NewShellTool(allowed []string, judge provider.Provider, safetyModel, primaryModel string) *ShellTool {
-	return NewShellToolWithApprovals(allowed, nil, NewLLMJudgeApprover(judge, safetyModel), primaryModel, nil)
+	return NewShellToolWithApprovalStore(allowed, NewLLMJudgeApprover(judge, safetyModel), primaryModel, nil)
 }
 
 // NewShellToolWithApprover creates a shell tool with a configurable approval path.
 func NewShellToolWithApprover(allowed []string, approver ShellApprover, primaryModel string) *ShellTool {
-	return NewShellToolWithApprovals(allowed, nil, approver, primaryModel, nil)
+	return NewShellToolWithApprovalStore(allowed, approver, primaryModel, nil)
 }
 
-// NewShellToolWithApprovals creates a shell tool with both static and learned
-// approved command lists.
-func NewShellToolWithApprovals(allowed, approved []string, approver ShellApprover, primaryModel string, approvalStore *state.Store) *ShellTool {
+// NewShellToolWithApprovalStore creates a shell tool whose reusable approvals
+// come only from the target-scoped, expiring state store.
+func NewShellToolWithApprovalStore(allowed []string, approver ShellApprover, primaryModel string, approvalStore *state.Store) *ShellTool {
 	amap := make(map[string]bool)
 	for _, a := range allowed {
 		amap[a] = true
 	}
-	pmap := make(map[string]bool)
-	for _, item := range approved {
-		normalized := normalizeShellWhitespace(item)
-		if normalized == "" {
-			continue
-		}
-		pmap[normalized] = true
-	}
 	return &ShellTool{
-		allowedCommands:  amap,
-		approvedCommands: pmap,
-		timeout:          30 * time.Duration(time.Second),
-		approver:         approver,
-		primaryModel:     primaryModel,
-		approvalStore:    approvalStore,
+		allowedCommands: amap,
+		timeout:         30 * time.Duration(time.Second),
+		approver:        approver,
+		primaryModel:    primaryModel,
+		approvalStore:   approvalStore,
 	}
 }
 
@@ -209,6 +199,9 @@ func validateShellSegment(segment ShellSegment, allowedCommands, approvedCommand
 	}
 
 	if allowedCommands[baseCmd] {
+		if baseCmd == "journalctl" && !safeJournalctlSegment(segment.Command) {
+			return "", fmt.Errorf("journalctl mutation flags require explicit approval")
+		}
 		return baseCmd, nil
 	}
 	if approvedCommands != nil && approvedCommands[segment.Normalized] {
@@ -216,6 +209,16 @@ func validateShellSegment(segment ShellSegment, allowedCommands, approvedCommand
 	}
 
 	return "", fmt.Errorf("command %q is not in the auto-approved command list", segment.Normalized)
+}
+
+func safeJournalctlSegment(command string) bool {
+	lower := strings.ToLower(command)
+	for _, flag := range []string{"--rotate", "--vacuum", "--flush", "--sync", "--relinquish-var"} {
+		if strings.Contains(lower, flag) {
+			return false
+		}
+	}
+	return true
 }
 
 // ParseShellCommand tokenizes a shell command into approved segments and
@@ -456,8 +459,6 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	cmdStr := strings.TrimSpace(parsedArgs.Command)
 
 	start := time.Now()
-	approvedByJudge := false
-	approvedByUser := false
 	approvalMode := "allowlist"
 	historyNote := ""
 	exitCode := 0
@@ -483,34 +484,6 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		}()
 	}
 
-	defer func() {
-		model := telemetry.ModelFromContext(ctx)
-		if model == "" {
-			model = s.primaryModel
-		}
-
-		baseCmd := "unknown"
-		if parsed, err := ParseShellCommand(cmdStr); err == nil && len(parsed.Segments) > 0 {
-			fields := strings.Fields(parsed.Segments[0].Command)
-			if len(fields) > 0 {
-				baseCmd = fields[0]
-			}
-		}
-
-		_ = telemetry.RecordEvent(telemetry.TelemetryEvent{
-			Timestamp:       start.UTC(),
-			Model:           model,
-			ToolName:        "shell_execute",
-			BaseCommand:     baseCmd,
-			FullCommand:     cmdStr,
-			ApprovedByJudge: approvedByJudge,
-			ApprovedByUser:  approvedByUser,
-			ApprovalMode:    approvalMode,
-			Success:         execErr == nil,
-			DurationMs:      time.Since(start).Milliseconds(),
-		})
-	}()
-
 	parsedCommand, err := ParseShellCommand(cmdStr)
 	if err != nil {
 		return "", fmt.Errorf("security violation: %w", err)
@@ -519,7 +492,8 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	if s.unrestricted {
 		approvalMode = SafetyModeUnrestricted
 	} else {
-		_, err = validateAllowedShellCommand(cmdStr, s.allowedCommands, s.approvedCommands)
+		approvedCommands := s.scopedApprovedCommands(ctx, parsedCommand)
+		_, err = validateAllowedShellCommand(cmdStr, s.allowedCommands, approvedCommands)
 	}
 	if !s.unrestricted && (err != nil || s.approvalRequired) {
 		validationMessage := "safety mode requires user approval before every command"
@@ -527,6 +501,15 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 			validationMessage = err.Error()
 		}
 		logger.Warn("command not in auto-approved command list, asking approval gate", "command", cmdStr)
+		payload, _ := json.Marshal(map[string]any{
+			"tool_name": "shell_execute",
+			"command":   cmdStr,
+			"reason":    validationMessage,
+		})
+		_ = telemetry.Record(ctx, telemetry.Event{
+			Type:    telemetry.EventApprovalRequested,
+			Payload: payload,
+		})
 		if s.approver == nil {
 			if err != nil {
 				return "", fmt.Errorf("security violation: %w (and no approval path is configured)", err)
@@ -534,17 +517,36 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 			return "", fmt.Errorf("security violation: %s (and no approval path is configured)", validationMessage)
 		}
 
+		fields := telemetry.FieldsFromContext(ctx)
+		targetEnvironment := ""
+		if s.approvalStore != nil && s.approvalStore.Available() && fields.TargetID != "" {
+			if target, targetErr := s.approvalStore.GetTarget(ctx, fields.TargetID); targetErr == nil {
+				targetEnvironment = target.Environment
+			}
+		}
+		action := ""
+		if len(parsedCommand.Segments) == 1 {
+			action = ShellSegmentAction(parsedCommand.Segments[0])
+		}
 		decision, approvalErr := s.approver.Approve(ctx, ShellApprovalRequest{
 			Command:         cmdStr,
+			TargetID:        fields.TargetID,
+			Environment:     targetEnvironment,
+			Action:          action,
 			ValidationError: validationMessage,
 		})
 		if approvalErr != nil {
 			return "", approvalErr
 		}
+		if !decision.Approved {
+			return "", fmt.Errorf("safety constraint violated: approval gate did not approve command")
+		}
+		if decision.Mode == SafetyModeLLMJudge &&
+			(fields.TargetID == "" || targetEnvironment == "" || targetEnvironment == state.EnvironmentUnknown) {
+			return "", fmt.Errorf("safety constraint violated: LLM approval cannot authorize a command for an unresolved or ambiguous target")
+		}
 		approvalMode = decision.Mode
 		historyNote = strings.TrimSpace(decision.HistoryNote)
-		approvedByJudge = decision.Mode == SafetyModeLLMJudge
-		approvedByUser = decision.Mode == SafetyModeUserConfirm || decision.Mode == SafetyModeUserConfirmAll
 		logger.Info("command approved by secondary gate", "command", cmdStr, "mode", decision.Mode, "remember", decision.Remember)
 		if decision.Remember && !s.approvalRequired {
 			s.rememberApprovedSegments(ctx, parsedCommand, decision)
@@ -555,6 +557,15 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		Command:      cmdStr,
 		ApprovalMode: approvalMode,
 		Success:      true,
+	})
+	payload, _ := json.Marshal(map[string]any{
+		"tool_name":     "shell_execute",
+		"command":       cmdStr,
+		"approval_mode": approvalMode,
+	})
+	_ = telemetry.Record(ctx, telemetry.Event{
+		Type:    telemetry.EventApprovalResolved,
+		Payload: payload,
 	})
 
 	logger.Info("executing shell command", "command", cmdStr)
@@ -596,9 +607,21 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 }
 
 func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedShellCommand, decision ShellApprovalDecision) {
-	source := decision.Mode
-	if source == "" {
-		source = "unknown"
+	if decision.Mode != SafetyModeUserConfirm && decision.Mode != SafetyModeUserConfirmAll {
+		return
+	}
+	if s.approvalStore == nil || !s.approvalStore.Available() {
+		return
+	}
+	targetID := telemetry.FieldsFromContext(ctx).TargetID
+	target, err := s.approvalStore.GetTarget(ctx, targetID)
+	if err != nil ||
+		target.Status != state.MemoryStatusActive ||
+		target.Environment == "" ||
+		target.Environment == state.EnvironmentUnknown ||
+		(target.Kind != "runtime" && target.RemoteIdentity == "") {
+		log.FromContext(ctx).Warn("approval was not remembered because target scope is unresolved", "target_id", targetID)
+		return
 	}
 	rationale := strings.TrimSpace(decision.HistoryNote)
 	if rationale == "" {
@@ -606,24 +629,72 @@ func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedS
 	}
 
 	for _, segment := range parsed.Segments {
-		if segment.Normalized == "" {
-			continue
-		}
-		s.approvedCommands[segment.Normalized] = true
-
-		if s.approvalStore == nil || !s.approvalStore.Available() {
+		if segment.Normalized == "" || !ReusableShellSegment(segment) {
 			continue
 		}
 		if err := s.approvalStore.SaveCommandApproval(ctx, state.CommandApproval{
-			Command:    segment.Normalized,
-			Status:     state.ApprovalStatusApproved,
-			Source:     source,
-			Rationale:  rationale,
-			ApprovedAt: time.Now().UTC(),
+			TargetID:      target.ID,
+			Environment:   target.Environment,
+			Command:       segment.Normalized,
+			Action:        ShellSegmentAction(segment),
+			Status:        state.ApprovalStatusApproved,
+			Source:        "user_confirm",
+			Rationale:     rationale,
+			PolicyVersion: state.CommandApprovalPolicyVersion,
+			ApprovedAt:    time.Now().UTC(),
+			ExpiresAt:     time.Now().UTC().Add(time.Hour),
 		}); err != nil {
 			log.FromContext(ctx).Warn("failed to persist command approval", "command", segment.Normalized, "error", err)
 		}
 	}
+}
+
+func (s *ShellTool) scopedApprovedCommands(ctx context.Context, parsed ParsedShellCommand) map[string]bool {
+	out := make(map[string]bool)
+	if s.approvalStore == nil || !s.approvalStore.Available() {
+		return out
+	}
+	targetID := telemetry.FieldsFromContext(ctx).TargetID
+	if targetID == "" {
+		return out
+	}
+	target, err := s.approvalStore.GetTarget(ctx, targetID)
+	if err != nil || target.Status != state.MemoryStatusActive || target.Environment == state.EnvironmentUnknown {
+		return out
+	}
+	approvals, err := s.approvalStore.ListApprovedCommandApprovals(ctx, target.ID, target.Environment, time.Now().UTC())
+	if err != nil {
+		return out
+	}
+	for _, approval := range approvals {
+		for _, segment := range parsed.Segments {
+			if segment.Normalized == approval.Command &&
+				ShellSegmentAction(segment) == approval.Action &&
+				ReusableShellSegment(segment) {
+				out[segment.Normalized] = true
+			}
+		}
+	}
+	return out
+}
+
+// ReusableShellSegment reports whether an exact command segment is stable
+// enough for a short-lived target-scoped approval. Runtime interpolation is
+// intentionally excluded because the same text could point at another host.
+func ReusableShellSegment(segment ShellSegment) bool {
+	return segment.Normalized != "" && !strings.ContainsAny(segment.Command, "$`")
+}
+
+// ShellSegmentAction returns the bounded action label used by scoped approvals.
+func ShellSegmentAction(segment ShellSegment) string {
+	fields := strings.Fields(segment.Command)
+	if len(fields) == 0 {
+		return ""
+	}
+	if len(fields) > 1 && (fields[0] == "systemctl" || fields[0] == "journalctl") {
+		return fields[0] + " " + fields[1]
+	}
+	return fields[0]
 }
 
 func errorString(err error) string {

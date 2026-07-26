@@ -17,7 +17,7 @@ type FindingRecorder interface {
 	PersistLessons(ctx context.Context, lessons []memory.Lesson) error
 }
 
-// MemoryRecordFindingTool lets the agent persist a concise ad hoc note into findings.md.
+// MemoryRecordFindingTool lets the agent submit a concise candidate finding.
 type MemoryRecordFindingTool struct {
 	recorder FindingRecorder
 }
@@ -39,7 +39,7 @@ func (t *MemoryRecordFindingTool) Name() string {
 }
 
 func (t *MemoryRecordFindingTool) Description() string {
-	return "Writes a concise verified ad hoc finding into findings.md for future runs. Use sparingly for reusable environment facts, preferences, or tool heuristics."
+	return "Submits a concise untrusted memory candidate for operator review. It cannot create active memory, policy, permissions, credentials, host mappings, or command approvals."
 }
 
 func (t *MemoryRecordFindingTool) Parameters() json.RawMessage {
@@ -118,5 +118,5 @@ func (t *MemoryRecordFindingTool) Execute(ctx context.Context, args json.RawMess
 	}
 
 	findingsPath := filepath.Join(t.recorder.Dir(), memory.FindingsFile)
-	return fmt.Sprintf("Recorded finding in %s", findingsPath), nil
+	return fmt.Sprintf("Submitted memory candidate for review; exported view: %s", findingsPath), nil
 }

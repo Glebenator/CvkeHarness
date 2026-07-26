@@ -128,14 +128,18 @@ type MemoryFilter struct {
 
 // Target stores one resolved runtime or remote host identity.
 type Target struct {
-	ID          string
-	Kind        string
-	PrimaryName string
-	Transport   string
-	Confidence  float64
-	Status      string
-	FirstSeenAt time.Time
-	LastSeenAt  time.Time
+	ID             string
+	Kind           string
+	Environment    string
+	PrimaryName    string
+	Transport      string
+	RemoteIdentity string
+	Confidence     float64
+	Status         string
+	FirstSeenAt    time.Time
+	LastSeenAt     time.Time
+	VerifiedAt     time.Time
+	ExpiresAt      time.Time
 }
 
 // TargetAlias links alternate names back to a stable target identifier.
@@ -149,26 +153,41 @@ type TargetAlias struct {
 
 // HostFact stores one verified fact about a runtime or target host.
 type HostFact struct {
-	HostID     string
-	Key        string
-	Value      string
-	Confidence float64
-	VerifiedAt time.Time
-	UpdatedAt  time.Time
+	HostID       string
+	Environment  string
+	Key          string
+	Value        string
+	Status       string
+	Source       string
+	EvidenceRef  string
+	EvidenceHash string
+	Trust        string
+	Confidence   float64
+	ObservedAt   time.Time
+	VerifiedAt   time.Time
+	ExpiresAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // Playbook stores a durable target-specific operational procedure.
 type Playbook struct {
 	ID             string
 	TargetID       string
+	Environment    string
 	Intent         string
 	ToolName       string
 	Status         string
+	Source         string
+	EvidenceRef    string
+	EvidenceHash   string
+	Trust          string
 	Title          string
 	Confidence     float64
 	SuccessCount   int
 	FailureCount   int
+	ObservedAt     time.Time
 	LastVerifiedAt time.Time
+	ExpiresAt      time.Time
 	LastUsedAt     time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -182,29 +201,45 @@ type Playbook struct {
 
 // Finding stores a provisional reusable observation awaiting promotion.
 type Finding struct {
-	ID         string
-	TargetID   string
-	Intent     string
-	ToolName   string
-	Status     string
-	Origin     string
-	Body       string
-	Confidence float64
-	SeenCount  int
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID           string
+	TargetID     string
+	Environment  string
+	Intent       string
+	ToolName     string
+	Status       string
+	Origin       string
+	Source       string
+	EvidenceRef  string
+	EvidenceHash string
+	Trust        string
+	Body         string
+	Confidence   float64
+	SeenCount    int
+	ObservedAt   time.Time
+	VerifiedAt   time.Time
+	ExpiresAt    time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // Caution stores negative memory for unreliable or denied approaches.
 type Caution struct {
 	ID           string
 	TargetID     string
+	Environment  string
 	Intent       string
 	ToolName     string
 	Status       string
+	Source       string
+	EvidenceRef  string
+	EvidenceHash string
+	Trust        string
 	Body         string
 	Confidence   float64
 	FailureCount int
+	ObservedAt   time.Time
+	VerifiedAt   time.Time
+	ExpiresAt    time.Time
 	LastSeenAt   time.Time
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -247,11 +282,16 @@ type ModelApproval struct {
 
 // CommandApproval tracks approved shell commands that may be reused later.
 type CommandApproval struct {
-	Command    string
-	Status     string
-	Source     string
-	Rationale  string
-	ApprovedAt time.Time
+	TargetID      string
+	Environment   string
+	Command       string
+	Action        string
+	Status        string
+	Source        string
+	Rationale     string
+	PolicyVersion string
+	ApprovedAt    time.Time
+	ExpiresAt     time.Time
 }
 
 // ScheduledJob stores a durable CvkeHarness-owned background task.
@@ -399,4 +439,21 @@ type Snapshot struct {
 const (
 	ApprovalStatusApproved     = "approved"
 	ApprovalStatusApprovedOnce = "approved_once"
+)
+
+const (
+	MemoryStatusCandidate = "candidate"
+	MemoryStatusActive    = "active"
+	MemoryStatusRejected  = "rejected"
+	MemoryStatusRevoked   = "revoked"
+	MemoryStatusExpired   = "expired"
+
+	MemoryTrustUntrusted = "untrusted"
+	MemoryTrustOperator  = "operator"
+	MemoryTrustVerified  = "verified"
+
+	EnvironmentUnknown = "unknown"
+	EnvironmentRuntime = "runtime"
+
+	CommandApprovalPolicyVersion = "v1"
 )

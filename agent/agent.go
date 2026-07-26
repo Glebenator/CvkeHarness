@@ -178,12 +178,14 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 	if a.opts.MemoryCurator != nil {
 		if curator, ok := a.opts.MemoryCurator.(structuredMemoryCurator); ok {
 			if curErr := curator.CurateRunOutcome(ctx, memory.RunOutcome{
-				Task:           prompt,
-				TaskClass:      taskClass,
-				Target:         targetResolution,
-				Output:         output,
-				ExecutionError: errString(execErr),
-				ToolCalls:      observedCalls,
+				Task:                 prompt,
+				TaskClass:            taskClass,
+				Target:               targetResolution,
+				Output:               output,
+				ExecutionError:       errString(execErr),
+				VerifiedOutcome:      verification.satisfied(),
+				VerificationEvidence: verification.Reason,
+				ToolCalls:            observedCalls,
 			}); curErr != nil {
 				logger.Warn("failed to curate run outcome", "error", curErr)
 			}

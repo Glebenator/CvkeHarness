@@ -7,9 +7,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/internal/shellpolicy"
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/state"
 )
 
@@ -329,13 +331,49 @@ func TestShellTool_ReturnsUserDenial(t *testing.T) {
 	}
 }
 
-func TestShellTool_PersistsApprovedSegments(t *testing.T) {
+func TestBlockingApproverReturnsApprovalRequiredError(t *testing.T) {
+	t.Parallel()
+
+	tool := NewShellToolWithApprover([]string{"ps"}, NewBlockingApprover(), "primary")
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello"}`))
+	if err == nil {
+		t.Fatal("expected blocked approval error")
+	}
+	approvalErr, ok := IsApprovalRequired(err)
+	if !ok {
+		t.Fatalf("expected ApprovalRequiredError, got %T: %v", err, err)
+	}
+	if approvalErr.Request.Command != "echo hello" {
+		t.Fatalf("expected command to persist in approval request, got %#v", approvalErr)
+	}
+}
+
+func TestShellToolFailsClosedWhenApproverDoesNotApprove(t *testing.T) {
+	t.Parallel()
+
+	tool := NewShellToolWithApprover([]string{"ps"}, staticApprover{
+		decision: ShellApprovalDecision{Approved: false, Mode: SafetyModeUserConfirm},
+	}, "primary")
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo should-not-run"}`)); err == nil {
+		t.Fatal("expected non-approved decision to fail closed")
+	}
+}
+
+func TestShellTool_LLMJudgeNeverPersistsApprovedSegments(t *testing.T) {
 	t.Parallel()
 
 	store := state.Open(t.TempDir() + "/state.db")
 	defer store.Close()
+	now := time.Now().UTC()
+	if err := store.ReplaceOperationalMemory(context.Background(), state.OperationalMemory{Targets: []state.Target{{
+		ID: "runtime-1", Kind: "runtime", Environment: state.EnvironmentRuntime,
+		PrimaryName: "runtime.local", Transport: "local", RemoteIdentity: "local:runtime-1",
+		Status: state.MemoryStatusActive, FirstSeenAt: now, LastSeenAt: now, VerifiedAt: now, ExpiresAt: now.Add(time.Hour),
+	}}}); err != nil {
+		t.Fatalf("ReplaceOperationalMemory returned error: %v", err)
+	}
 
-	tool := NewShellToolWithApprovals([]string{"ps"}, nil, staticApprover{
+	tool := NewShellToolWithApprovalStore([]string{"ps"}, staticApprover{
 		decision: ShellApprovalDecision{
 			Approved:    true,
 			Mode:        SafetyModeLLMJudge,
@@ -344,7 +382,8 @@ func TestShellTool_PersistsApprovedSegments(t *testing.T) {
 		},
 	}, "primary", store)
 
-	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello && echo goodbye"}`)); err != nil {
+	ctx := telemetry.WithFields(context.Background(), telemetry.Fields{TargetID: "runtime-1"})
+	if _, err := tool.Execute(ctx, json.RawMessage(`{"command":"echo hello && echo goodbye"}`)); err != nil {
 		t.Fatalf("Execute returned unexpected error: %v", err)
 	}
 
@@ -352,15 +391,20 @@ func TestShellTool_PersistsApprovedSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCommandApprovals returned unexpected error: %v", err)
 	}
-	if len(approvals) != 2 {
-		t.Fatalf("expected 2 persisted approvals, got %d", len(approvals))
+	if len(approvals) != 0 {
+		t.Fatalf("expected no persisted approvals from LLM judge, got %d", len(approvals))
 	}
+}
 
-	tool.approver = staticApprover{
-		err: fmt.Errorf("approval path should not be reached once commands are remembered"),
-	}
-	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello && echo goodbye"}`)); err != nil {
-		t.Fatalf("expected remembered approval to bypass secondary gate, got %v", err)
+func TestShellTool_LLMJudgeCannotApproveUnresolvedTarget(t *testing.T) {
+	t.Parallel()
+
+	tool := NewShellToolWithApprover([]string{"ps"}, staticApprover{
+		decision: ShellApprovalDecision{Approved: true, Mode: SafetyModeLLMJudge},
+	}, "primary")
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"systemctl restart api"}`))
+	if err == nil || !strings.Contains(err.Error(), "unresolved or ambiguous target") {
+		t.Fatalf("expected unresolved LLM approval to fail closed, got %v", err)
 	}
 }
 
@@ -370,7 +414,7 @@ func TestShellTool_ApproveOnceDoesNotPersistSegments(t *testing.T) {
 	store := state.Open(t.TempDir() + "/state.db")
 	defer store.Close()
 
-	tool := NewShellToolWithApprovals([]string{"ps"}, nil, staticApprover{
+	tool := NewShellToolWithApprovalStore([]string{"ps"}, staticApprover{
 		decision: ShellApprovalDecision{
 			Approved:    true,
 			Mode:        SafetyModeUserConfirm,

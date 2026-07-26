@@ -17,6 +17,12 @@ var commandsCmd = &cobra.Command{
 	Short: "Inspect and manage approved shell commands",
 }
 
+var (
+	commandApprovalTarget      string
+	commandApprovalEnvironment string
+	commandApprovalTTL         time.Duration
+)
+
 var commandsListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Show static and learned approved shell commands",
@@ -55,8 +61,8 @@ var commandsListCmd = &cobra.Command{
 			return nil
 		}
 		for _, item := range approvals {
-			fmt.Printf("- %s source=%s status=%s approved_at=%s\n",
-				item.Command, item.Source, item.Status, item.ApprovedAt.Format(time.RFC3339))
+			fmt.Printf("- %s target=%s environment=%s action=%s source=%s status=%s expires_at=%s\n",
+				item.Command, item.TargetID, item.Environment, item.Action, item.Source, item.Status, item.ExpiresAt.Format(time.RFC3339))
 			if item.Rationale != "" {
 				fmt.Printf("  %s\n", item.Rationale)
 			}
@@ -88,16 +94,39 @@ var commandsApproveCmd = &cobra.Command{
 		if len(parsed.Segments) == 0 {
 			return fmt.Errorf("command cannot be empty")
 		}
+		target, err := store.GetTarget(context.Background(), commandApprovalTarget)
+		if err != nil {
+			return fmt.Errorf("target %q is not available: %w", commandApprovalTarget, err)
+		}
+		if target.Status != state.MemoryStatusActive ||
+			target.Environment == state.EnvironmentUnknown ||
+			target.Environment != commandApprovalEnvironment {
+			return fmt.Errorf("target must be active and match --environment before approval")
+		}
+		if commandApprovalTTL <= 0 || commandApprovalTTL > 24*time.Hour {
+			return fmt.Errorf("--ttl must be greater than zero and no more than 24h")
+		}
 
 		now := time.Now().UTC()
 		for _, segment := range parsed.Segments {
+			if !tools.ReusableShellSegment(segment) {
+				return fmt.Errorf("command segment %q contains runtime interpolation and cannot be remembered", segment.Normalized)
+			}
 			if err := store.SaveCommandApproval(context.Background(), state.CommandApproval{
-				Command:    segment.Normalized,
-				Status:     state.ApprovalStatusApproved,
-				Source:     "cli",
-				Rationale:  "user approved via commands approve",
-				ApprovedAt: now,
+				TargetID:      target.ID,
+				Environment:   target.Environment,
+				Command:       segment.Normalized,
+				Action:        tools.ShellSegmentAction(segment),
+				Status:        state.ApprovalStatusApproved,
+				Source:        "cli",
+				Rationale:     "user approved via commands approve",
+				PolicyVersion: state.CommandApprovalPolicyVersion,
+				ApprovedAt:    now,
+				ExpiresAt:     now.Add(commandApprovalTTL),
 			}); err != nil {
+				return err
+			}
+			if _, err := store.ResolveBlockedShellCommand(context.Background(), segment.Normalized); err != nil {
 				return err
 			}
 		}
@@ -113,6 +142,11 @@ var commandsApproveCmd = &cobra.Command{
 }
 
 func init() {
+	commandsApproveCmd.Flags().StringVar(&commandApprovalTarget, "target", "", "stable target id (required)")
+	commandsApproveCmd.Flags().StringVar(&commandApprovalEnvironment, "environment", "", "exact target environment (required)")
+	commandsApproveCmd.Flags().DurationVar(&commandApprovalTTL, "ttl", time.Hour, "approval lifetime, maximum 24h")
+	_ = commandsApproveCmd.MarkFlagRequired("target")
+	_ = commandsApproveCmd.MarkFlagRequired("environment")
 	commandsCmd.AddCommand(commandsListCmd)
 	commandsCmd.AddCommand(commandsApproveCmd)
 	rootCmd.AddCommand(commandsCmd)

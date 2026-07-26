@@ -115,12 +115,14 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 	if c.agent.opts.MemoryCurator != nil {
 		if curator, ok := c.agent.opts.MemoryCurator.(structuredMemoryCurator); ok {
 			curErr := curator.CurateRunOutcome(ctx, memory.RunOutcome{
-				Task:           prompt,
-				TaskClass:      taskClass,
-				Target:         targetResolution,
-				Output:         output,
-				ExecutionError: errString(execErr),
-				ToolCalls:      observedCalls,
+				Task:                 prompt,
+				TaskClass:            taskClass,
+				Target:               targetResolution,
+				Output:               output,
+				ExecutionError:       errString(execErr),
+				VerifiedOutcome:      verification.satisfied(),
+				VerificationEvidence: verification.Reason,
+				ToolCalls:            observedCalls,
 			})
 			result.CurationError = curErr
 			if curErr != nil {

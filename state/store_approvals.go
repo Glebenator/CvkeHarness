@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -61,7 +62,7 @@ func (s *Store) ListApprovedModelApprovals(ctx context.Context) ([]ModelApproval
 
 	out := make([]ModelApproval, 0, len(approvals))
 	for _, approval := range approvals {
-		if approval.Status != ApprovalStatusApproved && approval.Status != ApprovalStatusApprovedOnce {
+		if approval.Status != ApprovalStatusApproved {
 			continue
 		}
 		out = append(out, approval)
@@ -74,18 +75,43 @@ func (s *Store) SaveCommandApproval(ctx context.Context, approval CommandApprova
 	if !s.Available() {
 		return s.Err()
 	}
+	if approval.TargetID == "" || approval.Environment == "" || approval.Environment == EnvironmentUnknown {
+		return fmt.Errorf("scoped command approval requires an unambiguous target and environment")
+	}
+	if approval.Command == "" || approval.Action == "" {
+		return fmt.Errorf("scoped command approval requires a command and action")
+	}
 	if approval.ApprovedAt.IsZero() {
 		approval.ApprovedAt = time.Now().UTC()
 	}
+	if approval.ExpiresAt.IsZero() || !approval.ExpiresAt.After(approval.ApprovedAt) {
+		return fmt.Errorf("scoped command approval requires a future expiry")
+	}
+	if approval.PolicyVersion == "" {
+		approval.PolicyVersion = CommandApprovalPolicyVersion
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO command_approvals (command, status, source, rationale, approved_at)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(command) DO UPDATE SET
+		INSERT INTO scoped_command_approvals (
+			target_id, environment, command, action, status, source, rationale,
+			policy_version, approved_at, expires_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(target_id, environment, command, action, policy_version) DO UPDATE SET
 			status = excluded.status,
 			source = excluded.source,
 			rationale = excluded.rationale,
-			approved_at = excluded.approved_at`,
-		approval.Command, approval.Status, approval.Source, approval.Rationale, approval.ApprovedAt.UTC(),
+			approved_at = excluded.approved_at,
+			expires_at = excluded.expires_at`,
+		approval.TargetID,
+		approval.Environment,
+		approval.Command,
+		approval.Action,
+		approval.Status,
+		approval.Source,
+		approval.Rationale,
+		approval.PolicyVersion,
+		approval.ApprovedAt.UTC(),
+		approval.ExpiresAt.UTC(),
 	)
 	return err
 }
@@ -97,9 +123,10 @@ func (s *Store) ListCommandApprovals(ctx context.Context) ([]CommandApproval, er
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT command, status, source, rationale, approved_at
-		FROM command_approvals
-		ORDER BY approved_at DESC, command ASC`)
+		SELECT target_id, environment, command, action, status, source, rationale,
+		       policy_version, approved_at, expires_at
+		FROM scoped_command_approvals
+		ORDER BY approved_at DESC, target_id, command`)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +135,18 @@ func (s *Store) ListCommandApprovals(ctx context.Context) ([]CommandApproval, er
 	var out []CommandApproval
 	for rows.Next() {
 		var item CommandApproval
-		if err := rows.Scan(&item.Command, &item.Status, &item.Source, &item.Rationale, &item.ApprovedAt); err != nil {
+		if err := rows.Scan(
+			&item.TargetID,
+			&item.Environment,
+			&item.Command,
+			&item.Action,
+			&item.Status,
+			&item.Source,
+			&item.Rationale,
+			&item.PolicyVersion,
+			&item.ApprovedAt,
+			&item.ExpiresAt,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, item)
@@ -116,8 +154,16 @@ func (s *Store) ListCommandApprovals(ctx context.Context) ([]CommandApproval, er
 	return out, rows.Err()
 }
 
-// ListApprovedCommandApprovals returns reusable command approvals only.
-func (s *Store) ListApprovedCommandApprovals(ctx context.Context) ([]CommandApproval, error) {
+// ListApprovedCommandApprovals returns live, deliberately user-created command
+// approvals for one exact target and environment. One-off approvals are never
+// reusable.
+func (s *Store) ListApprovedCommandApprovals(ctx context.Context, targetID, environment string, now time.Time) ([]CommandApproval, error) {
+	if targetID == "" || environment == "" || environment == EnvironmentUnknown {
+		return nil, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
 	approvals, err := s.ListCommandApprovals(ctx)
 	if err != nil {
 		return nil, err
@@ -125,7 +171,16 @@ func (s *Store) ListApprovedCommandApprovals(ctx context.Context) ([]CommandAppr
 
 	out := make([]CommandApproval, 0, len(approvals))
 	for _, approval := range approvals {
-		if approval.Status != ApprovalStatusApproved && approval.Status != ApprovalStatusApprovedOnce {
+		if approval.Status != ApprovalStatusApproved {
+			continue
+		}
+		if approval.TargetID != targetID || approval.Environment != environment {
+			continue
+		}
+		if approval.PolicyVersion != CommandApprovalPolicyVersion || !approval.ExpiresAt.After(now) {
+			continue
+		}
+		if approval.Source != "cli" && approval.Source != "user_confirm" {
 			continue
 		}
 		out = append(out, approval)
