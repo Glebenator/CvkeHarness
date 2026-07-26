@@ -96,6 +96,7 @@ type ObservedToolCall struct {
 	ToolName     string
 	Command      string
 	Result       string
+	TargetID     string
 	Success      bool
 	PolicyDenied bool
 	DenialClass  string

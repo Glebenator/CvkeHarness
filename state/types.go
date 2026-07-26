@@ -282,16 +282,17 @@ type ModelApproval struct {
 
 // CommandApproval tracks approved shell commands that may be reused later.
 type CommandApproval struct {
-	TargetID      string
-	Environment   string
-	Command       string
-	Action        string
-	Status        string
-	Source        string
-	Rationale     string
-	PolicyVersion string
-	ApprovedAt    time.Time
-	ExpiresAt     time.Time
+	TargetID       string
+	Environment    string
+	RemoteIdentity string
+	Command        string
+	Action         string
+	Status         string
+	Source         string
+	Rationale      string
+	PolicyVersion  string
+	ApprovedAt     time.Time
+	ExpiresAt      time.Time
 }
 
 // ScheduledJob stores a durable CvkeHarness-owned background task.

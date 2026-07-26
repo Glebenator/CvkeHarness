@@ -93,30 +93,44 @@ func (m *Manager) CurateRunOutcome(ctx context.Context, outcome RunOutcome) erro
 	}
 
 	now := m.now()
-	targetID := resolution.TargetID
 	changed := false
+	successfulByTarget := make(map[string][]ObservedToolCall)
 
 	for _, call := range outcome.ToolCalls {
 		if isWebResearchTool(call.ToolName) {
 			continue
 		}
-		callTargetID := targetID
-		callResolution, hasSpecificTarget := m.resolveToolCallTarget(ctx, call)
-		if hasSpecificTarget {
-			callTargetID = callResolution.TargetID
-			targetID = callTargetID
-			resolution = callResolution
+		callTargetID := strings.TrimSpace(call.TargetID)
+		if callTargetID != "" && targetIndex(mem, callTargetID) < 0 {
+			callTargetID = ""
+		}
+		if callTargetID == "" {
+			callResolution, hasSpecificTarget := m.resolveToolCallTarget(ctx, call)
+			if callResolution.Ambiguous {
+				continue
+			}
+			if hasSpecificTarget {
+				callTargetID = callResolution.TargetID
+			} else {
+				callTargetID = resolution.TargetID
+			}
+		}
+		if callTargetID == "" || targetIndex(mem, callTargetID) < 0 {
+			continue
 		}
 		changed = m.applyObservedFacts(&mem, callTargetID, call, now) || changed
 		if !call.Success {
 			changed = applyPlaybookFailure(&mem, callTargetID, intent, call, now) || changed
 			changed = applyCaution(&mem, callTargetID, intent, call, now) || changed
+		} else if call.ToolName == "shell_execute" && strings.TrimSpace(call.Command) != "" {
+			successfulByTarget[callTargetID] = append(successfulByTarget[callTargetID], call)
 		}
 	}
 
-	successfulCommands := successfulShellCommands(outcome.ToolCalls, targetID)
-	if len(successfulCommands) > 0 && strings.TrimSpace(outcome.ExecutionError) == "" {
-		changed = applyPlaybook(&mem, targetID, intent, successfulCommands, outcome.Task, outcome.VerifiedOutcome, outcome.VerificationEvidence, now) || changed
+	if strings.TrimSpace(outcome.ExecutionError) == "" {
+		for callTargetID, successfulCommands := range successfulByTarget {
+			changed = applyPlaybook(&mem, callTargetID, intent, successfulCommands, outcome.Task, outcome.VerifiedOutcome, outcome.VerificationEvidence, now) || changed
+		}
 	}
 
 	if !changed {
@@ -146,17 +160,6 @@ func (m *Manager) resolveToolCallTarget(ctx context.Context, call ObservedToolCa
 		return resolution, false
 	}
 	return resolution, true
-}
-
-func successfulShellCommands(calls []ObservedToolCall, targetID string) []ObservedToolCall {
-	var out []ObservedToolCall
-	for _, call := range calls {
-		if call.ToolName != "shell_execute" || !call.Success || strings.TrimSpace(call.Command) == "" {
-			continue
-		}
-		out = append(out, call)
-	}
-	return out
 }
 
 func applyPlaybook(mem *fileState, targetID, intent string, calls []ObservedToolCall, task string, verifiedOutcome bool, verificationEvidence string, now time.Time) bool {
@@ -317,13 +320,6 @@ func (m *Manager) applyObservedFacts(mem *fileState, targetID string, call Obser
 	before := len(target.Facts)
 	for _, fact := range facts {
 		target.Facts = upsertFact(target.Facts, fact)
-		switch fact.Key {
-		case "hostname":
-			target.Hostnames = append(target.Hostnames, strings.ToLower(fact.Value))
-			if target.Target.PrimaryName == "" {
-				target.Target.PrimaryName = fact.Value
-			}
-		}
 	}
 	target.Facts = dedupeFacts(target.Facts)
 	target.Hostnames = dedupeStrings(target.Hostnames)
@@ -442,7 +438,7 @@ func playbookTitle(intent, target string) string {
 }
 
 func extractFacts(command, result, targetID, environment string, now time.Time) []state.HostFact {
-	commandLower := strings.ToLower(command)
+	commandLower := strings.TrimSpace(strings.ToLower(command))
 	result = strings.TrimSpace(result)
 	var out []state.HostFact
 	add := func(key, value string) {
@@ -450,39 +446,31 @@ func extractFacts(command, result, targetID, environment string, now time.Time) 
 		if value == "" {
 			return
 		}
-		status := state.MemoryStatusCandidate
-		trust := state.MemoryTrustUntrusted
-		expiresAt := now.Add(candidateTTL)
-		if environment != "" && environment != state.EnvironmentUnknown {
-			status = state.MemoryStatusActive
-			trust = state.MemoryTrustVerified
-			expiresAt = now.Add(activeTTL)
-		}
 		item := state.HostFact{
 			HostID:      targetID,
 			Environment: firstNonEmpty(environment, state.EnvironmentUnknown),
 			Key:         key,
 			Value:       value,
-			Status:      status,
+			Status:      state.MemoryStatusCandidate,
 			Source:      "typed_shell_probe",
 			EvidenceRef: redactSensitiveText(command),
-			Trust:       trust,
+			Trust:       state.MemoryTrustUntrusted,
 			Confidence:  1,
 			ObservedAt:  now,
 			VerifiedAt:  now,
-			ExpiresAt:   expiresAt,
+			ExpiresAt:   now.Add(candidateTTL),
 			UpdatedAt:   now,
 		}
 		item.EvidenceHash = factIntegrity(item)
 		out = append(out, item)
 	}
 
-	if strings.Contains(commandLower, "hostname") || strings.Contains(commandLower, "uname -n") {
+	if exactProbe(commandLower, "hostname") || exactProbe(commandLower, "uname -n") {
 		if line := firstOutputLine(result); line != "" {
 			add("hostname", strings.ToLower(line))
 		}
 	}
-	if strings.Contains(result, "PRETTY_NAME=") || strings.Contains(result, "\nID=") || strings.HasPrefix(result, "ID=") {
+	if exactProbe(commandLower, "cat /etc/os-release") {
 		for _, raw := range strings.Split(result, "\n") {
 			line := strings.TrimSpace(raw)
 			switch {
@@ -507,13 +495,25 @@ func extractFacts(command, result, targetID, environment string, now time.Time) 
 	case isToolProbe(commandLower, "pacman"):
 		add("package_manager", "pacman")
 	}
-	if strings.Contains(commandLower, "systemctl") {
+	if exactProbe(commandLower, "systemctl --version") {
 		add("service_manager", "systemd")
 	}
-	if strings.Contains(commandLower, "docker") {
+	if exactProbe(commandLower, "docker --version") {
 		add("container_runtime", "docker")
 	}
 	return dedupeFacts(out)
+}
+
+func exactProbe(command, probe string) bool {
+	command = strings.TrimSpace(command)
+	probe = strings.TrimSpace(probe)
+	if command == probe {
+		return true
+	}
+	fields := strings.Fields(command)
+	return len(fields) >= 3 &&
+		fields[0] == "ssh" &&
+		strings.Join(fields[len(fields)-len(strings.Fields(probe)):], " ") == probe
 }
 
 func firstOutputLine(result string) string {

@@ -75,8 +75,9 @@ func (s *Store) SaveCommandApproval(ctx context.Context, approval CommandApprova
 	if !s.Available() {
 		return s.Err()
 	}
-	if approval.TargetID == "" || approval.Environment == "" || approval.Environment == EnvironmentUnknown {
-		return fmt.Errorf("scoped command approval requires an unambiguous target and environment")
+	if approval.TargetID == "" || approval.Environment == "" || approval.Environment == EnvironmentUnknown ||
+		approval.RemoteIdentity == "" {
+		return fmt.Errorf("scoped command approval requires an unambiguous target, environment, and remote identity")
 	}
 	if approval.Command == "" || approval.Action == "" {
 		return fmt.Errorf("scoped command approval requires a command and action")
@@ -92,11 +93,12 @@ func (s *Store) SaveCommandApproval(ctx context.Context, approval CommandApprova
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO scoped_command_approvals (
-			target_id, environment, command, action, status, source, rationale,
+			target_id, environment, remote_identity, command, action, status, source, rationale,
 			policy_version, approved_at, expires_at
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(target_id, environment, command, action, policy_version) DO UPDATE SET
+			remote_identity = excluded.remote_identity,
 			status = excluded.status,
 			source = excluded.source,
 			rationale = excluded.rationale,
@@ -104,6 +106,7 @@ func (s *Store) SaveCommandApproval(ctx context.Context, approval CommandApprova
 			expires_at = excluded.expires_at`,
 		approval.TargetID,
 		approval.Environment,
+		approval.RemoteIdentity,
 		approval.Command,
 		approval.Action,
 		approval.Status,
@@ -123,7 +126,7 @@ func (s *Store) ListCommandApprovals(ctx context.Context) ([]CommandApproval, er
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT target_id, environment, command, action, status, source, rationale,
+		SELECT target_id, environment, remote_identity, command, action, status, source, rationale,
 		       policy_version, approved_at, expires_at
 		FROM scoped_command_approvals
 		ORDER BY approved_at DESC, target_id, command`)
@@ -138,6 +141,7 @@ func (s *Store) ListCommandApprovals(ctx context.Context) ([]CommandApproval, er
 		if err := rows.Scan(
 			&item.TargetID,
 			&item.Environment,
+			&item.RemoteIdentity,
 			&item.Command,
 			&item.Action,
 			&item.Status,

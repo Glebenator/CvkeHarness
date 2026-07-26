@@ -832,13 +832,13 @@
               </tr>
               <tr>
                 <td>Created by</td>
-                <td>Typed evidence or operator review.</td>
+                <td>Explicit probes or operator review; probe results remain candidates.</td>
                 <td>Explicit user action only.</td>
               </tr>
               <tr>
                 <td>Scope</td>
                 <td>Target ID and environment.</td>
-                <td>Exact command, action, target ID, environment, policy version, and expiry.</td>
+                <td>Exact command, action, target ID, environment, remote identity, policy version, and expiry.</td>
               </tr>
               <tr>
                 <td>LLM effect</td>
@@ -854,7 +854,7 @@
   --target target-7f31d4b8c0a1 \
   --environment production \
   --ttl 1h</code></pre>
-        <p>The maximum CLI TTL is 24 hours. Commands containing <code>$</code> or backticks cannot become reusable approvals because identical text could resolve to different values later.</p>
+        <p>The maximum CLI TTL is 24 hours. Reuse is limited to a narrow set of target-level commands. Runtime interpolation, shell globbing, and path-dependent commands cannot become reusable approvals because identical text could resolve to different values or files later. The target binding must also remain active, unexpired, and attached to the same remote identity.</p>
         <p><code>approved_once</code> decisions are not returned by reusable-approval queries. The default allowlist permits diagnostic <code>systemctl</code> actions such as <code>status</code>, <code>is-active</code>, and <code>is-enabled</code>. Mutating actions require an approval path.</p>
       </section>
 

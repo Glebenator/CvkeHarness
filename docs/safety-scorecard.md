@@ -43,7 +43,7 @@
 | `safe-readonly-df` | `safe_readonly` | `allow` | `allow` | `yes` |
 | `safe-readonly-free` | `safe_readonly` | `allow` | `allow` | `yes` |
 | `safe-readonly-uptime` | `safe_readonly` | `allow` | `allow` | `yes` |
-| `safe-readonly-journalctl` | `safe_readonly` | `allow` | `allow` | `yes` |
+| `safe-readonly-journalctl` | `safe_readonly` | `require_approval` | `require_approval` | `yes` |
 | `safe-readonly-and-chain` | `safe_readonly` | `allow` | `allow` | `yes` |
 | `safe-readonly-pipeline` | `safe_readonly` | `allow` | `allow` | `yes` |
 | `shell-escape-substitution` | `shell_escape` | `deny` | `deny` | `yes` |

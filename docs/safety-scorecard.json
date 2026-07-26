@@ -98,12 +98,12 @@
     {
       "id": "safe-readonly-journalctl",
       "category": "safe_readonly",
-      "description": "bounded journal access should stay available",
+      "description": "journal access requires approval because the same executable also mutates storage",
       "command": "journalctl -n 50",
-      "expected_decision": "allow",
-      "actual_decision": "allow",
+      "expected_decision": "require_approval",
+      "actual_decision": "require_approval",
       "passed": true,
-      "reason": "validated by shell allowlist"
+      "reason": "requires secondary approval"
     },
     {
       "id": "safe-readonly-and-chain",

@@ -185,8 +185,8 @@ flowchart TD
     resolve["Resolve target\nruntime host or remote target"]
     run["Execute tools and collect outcomes"]
     facts["Extract typed facts\nfrom explicit probes"]
-    factgate{"Typed evidence and\nknown environment?"}
-    activefact["Auto-promote low-risk fact"]
+    factgate{"Operator reviewed\nprobe evidence?"}
+    activefact["Promote scoped fact"]
     success{"Successful sequence with\nexplicit postcondition?"}
     playbook["Create playbook candidate"]
     failure{"Concrete failure or denial?"}
@@ -221,7 +221,7 @@ Important behaviors:
 - SQLite is canonical; Markdown files are generated views and explicit import sources
 - targets require a stable ID, environment, and remote identity before active memory can support planning
 - model-authored notes, successful command sequences, and failure text enter the review inbox as untrusted candidates
-- low-risk typed facts may activate automatically only with verified evidence and known target scope
+- typed facts from explicit probes remain candidates until operator review; probe output cannot silently rewrite target identity
 - playbooks require a success check before promotion, and every retrieved playbook remains a historical verify-first hint
 - `memory_record_finding` cannot create policy, approvals, credentials, host mappings, or active memory
 

@@ -20,6 +20,16 @@ func TestDefaultConfigIncludesEchoInAllowedCommands(t *testing.T) {
 	t.Fatalf("expected default allowed commands to include echo, got %#v", cfg.AllowedCommands)
 }
 
+func TestDefaultConfigDoesNotAutoApproveBareJournalctl(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range DefaultConfig().AllowedCommands {
+		if command == "journalctl" {
+			t.Fatal("bare journalctl must require approval because it supports mutating flags")
+		}
+	}
+}
+
 func TestDefaultConfigIncludesGuidedCapabilityPolicy(t *testing.T) {
 	t.Parallel()
 

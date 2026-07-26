@@ -212,6 +212,9 @@ func validateShellSegment(segment ShellSegment, allowedCommands, approvedCommand
 }
 
 func safeJournalctlSegment(command string) bool {
+	if strings.ContainsAny(command, `\'"`) {
+		return false
+	}
 	lower := strings.ToLower(command)
 	for _, flag := range []string{"--rotate", "--vacuum", "--flush", "--sync", "--relinquish-var"} {
 		if strings.Contains(lower, flag) {
@@ -615,10 +618,13 @@ func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedS
 	}
 	targetID := telemetry.FieldsFromContext(ctx).TargetID
 	target, err := s.approvalStore.GetTarget(ctx, targetID)
+	now := time.Now().UTC()
 	if err != nil ||
 		target.Status != state.MemoryStatusActive ||
 		target.Environment == "" ||
 		target.Environment == state.EnvironmentUnknown ||
+		target.ExpiresAt.IsZero() ||
+		!target.ExpiresAt.After(now) ||
 		(target.Kind != "runtime" && target.RemoteIdentity == "") {
 		log.FromContext(ctx).Warn("approval was not remembered because target scope is unresolved", "target_id", targetID)
 		return
@@ -633,16 +639,17 @@ func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedS
 			continue
 		}
 		if err := s.approvalStore.SaveCommandApproval(ctx, state.CommandApproval{
-			TargetID:      target.ID,
-			Environment:   target.Environment,
-			Command:       segment.Normalized,
-			Action:        ShellSegmentAction(segment),
-			Status:        state.ApprovalStatusApproved,
-			Source:        "user_confirm",
-			Rationale:     rationale,
-			PolicyVersion: state.CommandApprovalPolicyVersion,
-			ApprovedAt:    time.Now().UTC(),
-			ExpiresAt:     time.Now().UTC().Add(time.Hour),
+			TargetID:       target.ID,
+			Environment:    target.Environment,
+			RemoteIdentity: target.RemoteIdentity,
+			Command:        segment.Normalized,
+			Action:         ShellSegmentAction(segment),
+			Status:         state.ApprovalStatusApproved,
+			Source:         "user_confirm",
+			Rationale:      rationale,
+			PolicyVersion:  state.CommandApprovalPolicyVersion,
+			ApprovedAt:     now,
+			ExpiresAt:      now.Add(time.Hour),
 		}); err != nil {
 			log.FromContext(ctx).Warn("failed to persist command approval", "command", segment.Normalized, "error", err)
 		}
@@ -659,16 +666,23 @@ func (s *ShellTool) scopedApprovedCommands(ctx context.Context, parsed ParsedShe
 		return out
 	}
 	target, err := s.approvalStore.GetTarget(ctx, targetID)
-	if err != nil || target.Status != state.MemoryStatusActive || target.Environment == state.EnvironmentUnknown {
+	now := time.Now().UTC()
+	if err != nil ||
+		target.Status != state.MemoryStatusActive ||
+		target.Environment == state.EnvironmentUnknown ||
+		target.RemoteIdentity == "" ||
+		target.ExpiresAt.IsZero() ||
+		!target.ExpiresAt.After(now) {
 		return out
 	}
-	approvals, err := s.approvalStore.ListApprovedCommandApprovals(ctx, target.ID, target.Environment, time.Now().UTC())
+	approvals, err := s.approvalStore.ListApprovedCommandApprovals(ctx, target.ID, target.Environment, now)
 	if err != nil {
 		return out
 	}
 	for _, approval := range approvals {
 		for _, segment := range parsed.Segments {
-			if segment.Normalized == approval.Command &&
+			if approval.RemoteIdentity == target.RemoteIdentity &&
+				segment.Normalized == approval.Command &&
 				ShellSegmentAction(segment) == approval.Action &&
 				ReusableShellSegment(segment) {
 				out[segment.Normalized] = true
@@ -682,7 +696,19 @@ func (s *ShellTool) scopedApprovedCommands(ctx context.Context, parsed ParsedShe
 // enough for a short-lived target-scoped approval. Runtime interpolation is
 // intentionally excluded because the same text could point at another host.
 func ReusableShellSegment(segment ShellSegment) bool {
-	return segment.Normalized != "" && !strings.ContainsAny(segment.Command, "$`")
+	if segment.Normalized == "" || strings.ContainsAny(segment.Command, "$`*?[]{}~") {
+		return false
+	}
+	fields := strings.Fields(segment.Command)
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[0] {
+	case "echo", "systemctl", "service", "docker", "podman", "apt", "apt-get", "dnf", "yum", "apk", "brew", "pacman":
+		return true
+	default:
+		return false
+	}
 }
 
 // ShellSegmentAction returns the bounded action label used by scoped approvals.
