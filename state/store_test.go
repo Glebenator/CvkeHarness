@@ -51,11 +51,18 @@ func TestSaveAndListCommandApprovals(t *testing.T) {
 		t.Fatalf("expected store to be available, got %v", store.Err())
 	}
 
+	now := time.Now().UTC()
 	if err := store.SaveCommandApproval(context.Background(), CommandApproval{
-		Command:   "echo hello",
-		Status:    "approved",
-		Source:    "llm_judge",
-		Rationale: "safe diagnostic command",
+		TargetID:      "target-1",
+		Environment:   "staging",
+		Command:       "echo hello",
+		Action:        "echo",
+		Status:        ApprovalStatusApproved,
+		Source:        "cli",
+		Rationale:     "operator-approved diagnostic command",
+		PolicyVersion: CommandApprovalPolicyVersion,
+		ApprovedAt:    now,
+		ExpiresAt:     now.Add(time.Hour),
 	}); err != nil {
 		t.Fatalf("SaveCommandApproval returned error: %v", err)
 	}
@@ -69,6 +76,46 @@ func TestSaveAndListCommandApprovals(t *testing.T) {
 	}
 	if approvals[0].Command != "echo hello" {
 		t.Fatalf("expected persisted command approval, got %#v", approvals[0])
+	}
+	reusable, err := store.ListApprovedCommandApprovals(context.Background(), "target-1", "staging", now)
+	if err != nil || len(reusable) != 1 {
+		t.Fatalf("expected one scoped reusable approval, got %#v err=%v", reusable, err)
+	}
+}
+
+func TestReusableApprovalsRejectOneOffWrongScopeAndExpiry(t *testing.T) {
+	t.Parallel()
+
+	store := Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+	now := time.Now().UTC()
+	base := CommandApproval{
+		TargetID: "target-1", Environment: "production", Command: "systemctl restart api",
+		Action: "systemctl restart", Source: "cli", Rationale: "operator approved",
+		PolicyVersion: CommandApprovalPolicyVersion, ApprovedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	oneOff := base
+	oneOff.Status = ApprovalStatusApprovedOnce
+	if err := store.SaveCommandApproval(context.Background(), oneOff); err != nil {
+		t.Fatalf("SaveCommandApproval one-off returned error: %v", err)
+	}
+	if got, err := store.ListApprovedCommandApprovals(context.Background(), "target-1", "production", now); err != nil || len(got) != 0 {
+		t.Fatalf("approved_once must not be reusable, got %#v err=%v", got, err)
+	}
+
+	active := base
+	active.Status = ApprovalStatusApproved
+	if err := store.SaveCommandApproval(context.Background(), active); err != nil {
+		t.Fatalf("SaveCommandApproval active returned error: %v", err)
+	}
+	if got, _ := store.ListApprovedCommandApprovals(context.Background(), "target-2", "production", now); len(got) != 0 {
+		t.Fatalf("wrong target must not reuse approval, got %#v", got)
+	}
+	if got, _ := store.ListApprovedCommandApprovals(context.Background(), "target-1", "staging", now); len(got) != 0 {
+		t.Fatalf("wrong environment must not reuse approval, got %#v", got)
+	}
+	if got, _ := store.ListApprovedCommandApprovals(context.Background(), "target-1", "production", now.Add(2*time.Hour)); len(got) != 0 {
+		t.Fatalf("expired approval must not be reusable, got %#v", got)
 	}
 }
 

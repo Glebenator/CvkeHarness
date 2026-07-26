@@ -21,8 +21,23 @@ type markdownRecord struct {
 	Body  string
 }
 
-// EnsureFiles creates the managed memory files when missing and imports
-// legacy memory.md content into findings.md on first structured bootstrap.
+type factFileMeta struct {
+	Key          string  `yaml:"key"`
+	Value        string  `yaml:"value"`
+	Environment  string  `yaml:"environment"`
+	Status       string  `yaml:"status"`
+	Source       string  `yaml:"source"`
+	EvidenceRef  string  `yaml:"evidence_ref"`
+	EvidenceHash string  `yaml:"evidence_hash"`
+	Trust        string  `yaml:"trust"`
+	Confidence   float64 `yaml:"confidence"`
+	ObservedAt   string  `yaml:"observed_at"`
+	VerifiedAt   string  `yaml:"verified_at"`
+	ExpiresAt    string  `yaml:"expires_at"`
+	UpdatedAt    string  `yaml:"updated_at"`
+}
+
+// EnsureFiles creates the managed memory files when missing.
 func (m *Manager) EnsureFiles() error {
 	if err := os.MkdirAll(m.dir, 0755); err != nil {
 		return err
@@ -32,8 +47,7 @@ func (m *Manager) EnsureFiles() error {
 	}
 
 	seedText := map[string]string{
-		m.managedPath(OperatorFile): defaultOperatorMarkdown(),
-		m.managedPath(SoulFile):     "# Soul\n\n",
+		m.managedPath(GuidanceFile): defaultGuidanceMarkdown(),
 	}
 	for path, content := range seedText {
 		if _, err := os.Stat(path); err == nil {
@@ -44,31 +58,45 @@ func (m *Manager) EnsureFiles() error {
 		}
 	}
 
-	needsStructuredWrite := false
-	for _, name := range structuredManagedFiles() {
-		if _, err := os.Stat(m.managedPath(name)); os.IsNotExist(err) {
-			needsStructuredWrite = true
-			break
+	if m.store != nil && m.store.Available() {
+		mem, err := m.store.LoadOperationalMemory(context.Background())
+		if err != nil {
+			return err
 		}
+		st := stateFromOperationalMemory(mem)
+		changed := m.ensureRuntimeBootstrap(&st)
+		if !changed {
+			missingView := false
+			for _, name := range structuredManagedFiles() {
+				if _, err := os.Stat(m.managedPath(name)); os.IsNotExist(err) {
+					missingView = true
+					break
+				}
+			}
+			if !missingView {
+				return nil
+			}
+		}
+		return m.writeAllState(context.Background(), st, "bootstrap SQLite-canonical memory")
 	}
 
-	state, err := m.parseManagedFiles()
-	if err != nil {
-		return err
-	}
-	changed := m.ensureRuntimeBootstrap(&state)
-	if needsStructuredWrite {
-		changed = true
-		if imported, err := m.importLegacyMemory(&state); err != nil {
+	// Setup may run before a state database exists. In that narrow case create
+	// missing read-only views, but never parse them as active memory.
+	st := fileState{}
+	m.ensureRuntimeBootstrap(&st)
+	rendered := renderedViews(st)
+	for name, content := range rendered {
+		path := m.managedPath(name)
+		if _, err := os.Stat(path); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
 			return err
-		} else if imported {
-			changed = true
+		}
+		if err := writeFileAtomic(path, content); err != nil {
+			return err
 		}
 	}
-	if !changed && !needsStructuredWrite {
-		return nil
-	}
-	return m.writeAllState(context.Background(), state, "bootstrap structured memory")
+	return nil
 }
 
 // Show returns the managed memory files as a readable string.
@@ -119,39 +147,24 @@ func (m *Manager) Rollback(ctx context.Context, snapshotID string) error {
 	return m.Reindex(ctx)
 }
 
-// Reindex rebuilds structured memory metadata from the managed markdown files.
+// Reindex performs the explicit validated import from the managed Markdown
+// views. SQLite remains canonical outside this operator-invoked boundary.
 func (m *Manager) Reindex(ctx context.Context) error {
+	if m.store == nil || !m.store.Available() {
+		return fmt.Errorf("state database unavailable; cannot import operational memory")
+	}
 	state, err := m.parseManagedFiles()
 	if err != nil {
 		return err
 	}
 	m.ensureRuntimeBootstrap(&state)
+	if err := prepareImportedState(&state, m.now()); err != nil {
+		return err
+	}
+	if err := validateImportedState(state, m.now()); err != nil {
+		return err
+	}
 	return m.writeAllState(ctx, state, "normalize structured memory")
-}
-
-// SeedRuntimeHostNotes stores operator-supplied machine notes into host.md when
-// the runtime host profile does not already contain user-authored notes.
-func (m *Manager) SeedRuntimeHostNotes(ctx context.Context, notes []string) (bool, error) {
-	notes = dedupeStrings(notes)
-	if len(notes) == 0 {
-		return false, nil
-	}
-	if err := m.EnsureFiles(); err != nil {
-		return false, err
-	}
-	st, err := m.parseManagedFiles()
-	if err != nil {
-		return false, err
-	}
-	m.ensureRuntimeBootstrap(&st)
-	if len(st.RuntimeHostNotes) > 0 {
-		return false, nil
-	}
-	st.RuntimeHostNotes = notes
-	if err := m.writeAllState(ctx, st, "bootstrap runtime host notes"); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func (m *Manager) ensureRuntimeBootstrap(st *fileState) bool {
@@ -174,26 +187,39 @@ func (m *Manager) ensureRuntimeBootstrap(st *fileState) bool {
 	if targetIdx < 0 {
 		st.Targets = append(st.Targets, targetRecord{
 			Target: state.Target{
-				ID:          runtimeHostID,
-				Kind:        TargetKindRuntime,
-				PrimaryName: m.hostname(),
-				Transport:   "local",
-				Confidence:  1,
-				Status:      "active",
-				FirstSeenAt: now,
-				LastSeenAt:  now,
+				ID:             runtimeHostID,
+				Kind:           TargetKindRuntime,
+				Environment:    state.EnvironmentRuntime,
+				PrimaryName:    m.hostname(),
+				Transport:      "local",
+				RemoteIdentity: "local:" + runtimeHostID,
+				Confidence:     1,
+				Status:         state.MemoryStatusActive,
+				FirstSeenAt:    now,
+				LastSeenAt:     now,
+				VerifiedAt:     now,
+				ExpiresAt:      now.Add(24 * time.Hour),
 			},
 			Aliases: []string{m.hostname()},
-			Facts: []state.HostFact{
-				{
-					HostID:     runtimeHostID,
-					Key:        "hostname",
-					Value:      m.hostname(),
-					Confidence: 1,
-					VerifiedAt: now,
-					UpdatedAt:  now,
-				},
-			},
+			Facts: func() []state.HostFact {
+				fact := state.HostFact{
+					HostID:      runtimeHostID,
+					Environment: state.EnvironmentRuntime,
+					Key:         "hostname",
+					Value:       m.hostname(),
+					Status:      state.MemoryStatusActive,
+					Source:      "runtime_probe",
+					EvidenceRef: "os.Hostname",
+					Trust:       state.MemoryTrustVerified,
+					Confidence:  1,
+					ObservedAt:  now,
+					VerifiedAt:  now,
+					ExpiresAt:   now.Add(24 * time.Hour),
+					UpdatedAt:   now,
+				}
+				fact.EvidenceHash = factIntegrity(fact)
+				return []state.HostFact{fact}
+			}(),
 		})
 		changed = true
 	} else {
@@ -208,6 +234,14 @@ func (m *Manager) ensureRuntimeBootstrap(st *fileState) bool {
 		}
 		if target.Target.Transport == "" {
 			target.Target.Transport = "local"
+			changed = true
+		}
+		if target.Target.Environment == "" {
+			target.Target.Environment = state.EnvironmentRuntime
+			changed = true
+		}
+		if target.Target.RemoteIdentity == "" {
+			target.Target.RemoteIdentity = "local:" + runtimeHostID
 			changed = true
 		}
 		if target.Target.Status == "" {
@@ -230,126 +264,44 @@ func (m *Manager) ensureRuntimeBootstrap(st *fileState) bool {
 			target.Aliases = append(target.Aliases, m.hostname())
 			changed = true
 		}
-		target.Facts = upsertFact(target.Facts, state.HostFact{
-			HostID:     runtimeHostID,
-			Key:        "hostname",
-			Value:      m.hostname(),
-			Confidence: 1,
-			VerifiedAt: now,
-			UpdatedAt:  now,
-		})
+		refreshRuntime := target.Target.VerifiedAt.IsZero() || target.Target.ExpiresAt.Before(now.Add(time.Hour))
+		if refreshRuntime {
+			target.Target.VerifiedAt = now
+			target.Target.ExpiresAt = now.Add(24 * time.Hour)
+			fact := state.HostFact{
+				HostID:      runtimeHostID,
+				Environment: state.EnvironmentRuntime,
+				Key:         "hostname",
+				Value:       m.hostname(),
+				Status:      state.MemoryStatusActive,
+				Source:      "runtime_probe",
+				EvidenceRef: "os.Hostname",
+				Trust:       state.MemoryTrustVerified,
+				Confidence:  1,
+				ObservedAt:  now,
+				VerifiedAt:  now,
+				ExpiresAt:   now.Add(24 * time.Hour),
+				UpdatedAt:   now,
+			}
+			fact.EvidenceHash = factIntegrity(fact)
+			target.Facts = upsertFact(target.Facts, fact)
+			changed = true
+		}
 		st.Targets[targetIdx] = target
 	}
 
-	if len(st.RuntimeHostFacts) == 0 {
-		for _, target := range st.Targets {
-			if target.Target.ID == runtimeHostID {
-				st.RuntimeHostFacts = append([]state.HostFact(nil), target.Facts...)
-				changed = true
-				break
-			}
-		}
-	}
-	st.RuntimeHostFacts = dedupeFacts(st.RuntimeHostFacts)
 	return changed
-}
-
-func (m *Manager) importLegacyMemory(st *fileState) (bool, error) {
-	legacyPath := m.managedPath(LegacyMemoryFile)
-	if _, err := os.Stat(legacyPath); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	data, err := os.ReadFile(legacyPath)
-	if err != nil {
-		return false, err
-	}
-	content := string(data)
-	if strings.TrimSpace(content) == "" {
-		return false, nil
-	}
-
-	if len(st.Findings) > 0 || len(st.Playbooks) > 0 || len(st.Cautions) > 0 {
-		return false, nil
-	}
-
-	now := m.now()
-	var findings []state.Finding
-	records, err := parseMarkdownRecords(content)
-	if err == nil && len(records) > 0 {
-		for _, record := range records {
-			body := strings.TrimSpace(record.Body)
-			if body == "" {
-				body = strings.TrimSpace(record.Title)
-			}
-			if body == "" {
-				continue
-			}
-			findings = append(findings, state.Finding{
-				ID:         findingID("legacy", body),
-				TargetID:   "unknown",
-				Intent:     IntentGeneral,
-				ToolName:   "",
-				Status:     "needs_curation",
-				Origin:     "legacy_memory",
-				Body:       body,
-				Confidence: 0.5,
-				SeenCount:  1,
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			})
-		}
-	}
-	if len(findings) == 0 {
-		for _, body := range parseLegacyListItems(content) {
-			findings = append(findings, state.Finding{
-				ID:         findingID("legacy", body),
-				TargetID:   "unknown",
-				Intent:     IntentGeneral,
-				ToolName:   "",
-				Status:     "needs_curation",
-				Origin:     "legacy_memory",
-				Body:       body,
-				Confidence: 0.5,
-				SeenCount:  1,
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			})
-		}
-	}
-	if len(findings) == 0 {
-		return false, nil
-	}
-	st.Findings = append(st.Findings, findings...)
-	return true, nil
-}
-
-func parseLegacyListItems(content string) []string {
-	var out []string
-	for _, raw := range strings.Split(content, "\n") {
-		line := strings.TrimSpace(strings.TrimPrefix(raw, "- "))
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "```") {
-			continue
-		}
-		out = append(out, line)
-	}
-	return out
 }
 
 func (m *Manager) parseManagedFiles() (fileState, error) {
 	var out fileState
 
-	targets, runtimeHostID, runtimeFacts, runtimeNotes, err := m.parseTargetsAndHostFiles()
+	targets, runtimeHostID, err := m.parseTargetsFile()
 	if err != nil {
 		return fileState{}, err
 	}
 	out.Targets = targets
 	out.RuntimeHostID = runtimeHostID
-	out.RuntimeHostFacts = runtimeFacts
-	out.RuntimeHostNotes = runtimeNotes
 
 	playbooks, err := m.parsePlaybooksFile()
 	if err != nil {
@@ -372,55 +324,29 @@ func (m *Manager) parseManagedFiles() (fileState, error) {
 	return out, nil
 }
 
-func (m *Manager) parseTargetsAndHostFiles() ([]targetRecord, string, []state.HostFact, []string, error) {
+func (m *Manager) parseTargetsFile() ([]targetRecord, string, error) {
 	var targets []targetRecord
-	byID := make(map[string]int)
 
 	targetContent, err := readOptionalFile(m.managedPath(TargetsFile))
 	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, "", err
 	}
 	records, err := parseMarkdownRecords(targetContent)
 	if err != nil {
-		return nil, "", nil, nil, err
+		return nil, "", err
 	}
+	runtimeHostID := ""
 	for _, record := range records {
 		item, err := parseTargetRecord(record)
 		if err != nil {
-			return nil, "", nil, nil, err
+			return nil, "", err
 		}
-		byID[item.Target.ID] = len(targets)
+		if item.Target.Kind == TargetKindRuntime && runtimeHostID == "" {
+			runtimeHostID = item.Target.ID
+		}
 		targets = append(targets, item)
 	}
-
-	hostContent, err := readOptionalFile(m.managedPath(HostFile))
-	if err != nil {
-		return nil, "", nil, nil, err
-	}
-	hostRecords, err := parseMarkdownRecords(hostContent)
-	if err != nil {
-		return nil, "", nil, nil, err
-	}
-
-	runtimeHostID := ""
-	var runtimeFacts []state.HostFact
-	var runtimeNotes []string
-	for _, record := range hostRecords {
-		hostID, facts, notes, err := parseHostRecord(record)
-		if err != nil {
-			return nil, "", nil, nil, err
-		}
-		if runtimeHostID == "" {
-			runtimeHostID = hostID
-			runtimeFacts = facts
-			runtimeNotes = notes
-		}
-		if idx, ok := byID[hostID]; ok {
-			targets[idx].Facts = mergeFactLists(targets[idx].Facts, facts)
-		}
-	}
-
-	return targets, runtimeHostID, runtimeFacts, runtimeNotes, nil
+	return targets, runtimeHostID, nil
 }
 
 func (m *Manager) parsePlaybooksFile() ([]state.Playbook, error) {
@@ -556,33 +482,45 @@ func splitLeadingYAML(body string) (string, string) {
 
 func parseTargetRecord(record markdownRecord) (targetRecord, error) {
 	type targetMeta struct {
-		TargetID    string   `yaml:"target_id"`
-		Kind        string   `yaml:"kind"`
-		PrimaryName string   `yaml:"primary_name"`
-		Aliases     []string `yaml:"aliases"`
-		Hostnames   []string `yaml:"hostnames"`
-		IPs         []string `yaml:"ips"`
-		Transport   string   `yaml:"transport"`
-		FirstSeenAt string   `yaml:"first_seen_at"`
-		LastSeenAt  string   `yaml:"last_seen_at"`
-		Confidence  float64  `yaml:"confidence"`
-		Status      string   `yaml:"status"`
+		TargetID       string         `yaml:"target_id"`
+		Kind           string         `yaml:"kind"`
+		Environment    string         `yaml:"environment"`
+		PrimaryName    string         `yaml:"primary_name"`
+		Aliases        []string       `yaml:"aliases"`
+		Hostnames      []string       `yaml:"hostnames"`
+		IPs            []string       `yaml:"ips"`
+		Transport      string         `yaml:"transport"`
+		RemoteIdentity string         `yaml:"remote_identity"`
+		FirstSeenAt    string         `yaml:"first_seen_at"`
+		LastSeenAt     string         `yaml:"last_seen_at"`
+		VerifiedAt     string         `yaml:"verified_at"`
+		ExpiresAt      string         `yaml:"expires_at"`
+		Confidence     float64        `yaml:"confidence"`
+		Status         string         `yaml:"status"`
+		Facts          []factFileMeta `yaml:"facts"`
 	}
 	var meta targetMeta
 	if err := yaml.Unmarshal([]byte(record.Meta), &meta); err != nil {
 		return targetRecord{}, err
 	}
-	facts := parseFactsSection(record.Body, meta.TargetID)
+	facts := factsFromFileMeta(meta.TargetID, meta.Environment, meta.Facts)
+	if len(facts) == 0 {
+		facts = parseFactsSection(record.Body, meta.TargetID, meta.Environment)
+	}
 	return targetRecord{
 		Target: state.Target{
-			ID:          strings.TrimSpace(meta.TargetID),
-			Kind:        strings.TrimSpace(meta.Kind),
-			PrimaryName: firstNonEmpty(meta.PrimaryName, record.Title),
-			Transport:   strings.TrimSpace(meta.Transport),
-			Confidence:  meta.Confidence,
-			Status:      strings.TrimSpace(meta.Status),
-			FirstSeenAt: parseTime(meta.FirstSeenAt),
-			LastSeenAt:  parseTime(meta.LastSeenAt),
+			ID:             strings.TrimSpace(meta.TargetID),
+			Kind:           strings.TrimSpace(meta.Kind),
+			Environment:    strings.TrimSpace(meta.Environment),
+			PrimaryName:    firstNonEmpty(meta.PrimaryName, record.Title),
+			Transport:      strings.TrimSpace(meta.Transport),
+			RemoteIdentity: strings.TrimSpace(meta.RemoteIdentity),
+			Confidence:     meta.Confidence,
+			Status:         strings.TrimSpace(meta.Status),
+			FirstSeenAt:    parseTime(meta.FirstSeenAt),
+			LastSeenAt:     parseTime(meta.LastSeenAt),
+			VerifiedAt:     parseTime(meta.VerifiedAt),
+			ExpiresAt:      parseTime(meta.ExpiresAt),
 		},
 		Aliases:   dedupeStrings(meta.Aliases),
 		Hostnames: dedupeStrings(meta.Hostnames),
@@ -591,46 +529,26 @@ func parseTargetRecord(record markdownRecord) (targetRecord, error) {
 	}, nil
 }
 
-func parseHostRecord(record markdownRecord) (string, []state.HostFact, []string, error) {
-	type hostMeta struct {
-		RuntimeHostID string  `yaml:"runtime_host_id"`
-		PrimaryName   string  `yaml:"primary_name"`
-		VerifiedAt    string  `yaml:"verified_at"`
-		Confidence    float64 `yaml:"confidence"`
-		Status        string  `yaml:"status"`
-	}
-	var meta hostMeta
-	if err := yaml.Unmarshal([]byte(record.Meta), &meta); err != nil {
-		return "", nil, nil, err
-	}
-	facts := parseFactsSection(record.Body, meta.RuntimeHostID)
-	notes := parseNotesSection(record.Body)
-	verifiedAt := parseTime(meta.VerifiedAt)
-	if verifiedAt.IsZero() {
-		verifiedAt = time.Now().UTC()
-	}
-	facts = upsertFact(facts, state.HostFact{
-		HostID:     meta.RuntimeHostID,
-		Key:        "primary_name",
-		Value:      firstNonEmpty(meta.PrimaryName, record.Title),
-		Confidence: maxFloat(meta.Confidence, 1),
-		VerifiedAt: verifiedAt,
-		UpdatedAt:  verifiedAt,
-	})
-	return strings.TrimSpace(meta.RuntimeHostID), facts, notes, nil
-}
-
 func parsePlaybookRecord(record markdownRecord) (state.Playbook, error) {
 	type playbookMeta struct {
 		PlaybookID     string   `yaml:"playbook_id"`
 		TargetID       string   `yaml:"target_id"`
+		Environment    string   `yaml:"environment"`
 		Intent         string   `yaml:"intent"`
 		ToolName       string   `yaml:"tool_name"`
+		Source         string   `yaml:"source"`
+		EvidenceRef    string   `yaml:"evidence_ref"`
+		EvidenceHash   string   `yaml:"evidence_hash"`
+		Trust          string   `yaml:"trust"`
 		Confidence     float64  `yaml:"confidence"`
 		SuccessCount   int      `yaml:"success_count"`
 		FailureCount   int      `yaml:"failure_count"`
+		ObservedAt     string   `yaml:"observed_at"`
 		LastVerifiedAt string   `yaml:"last_verified_at"`
+		ExpiresAt      string   `yaml:"expires_at"`
 		LastUsedAt     string   `yaml:"last_used_at"`
+		CreatedAt      string   `yaml:"created_at"`
+		UpdatedAt      string   `yaml:"updated_at"`
 		MatchTerms     []string `yaml:"match_terms"`
 		Preconditions  []string `yaml:"preconditions"`
 		Status         string   `yaml:"status"`
@@ -643,15 +561,24 @@ func parsePlaybookRecord(record markdownRecord) (state.Playbook, error) {
 	return state.Playbook{
 		ID:             strings.TrimSpace(meta.PlaybookID),
 		TargetID:       strings.TrimSpace(meta.TargetID),
+		Environment:    strings.TrimSpace(meta.Environment),
 		Intent:         firstNonEmpty(strings.TrimSpace(meta.Intent), IntentGeneral),
 		ToolName:       strings.TrimSpace(meta.ToolName),
 		Status:         strings.TrimSpace(meta.Status),
+		Source:         strings.TrimSpace(meta.Source),
+		EvidenceRef:    strings.TrimSpace(meta.EvidenceRef),
+		EvidenceHash:   strings.TrimSpace(meta.EvidenceHash),
+		Trust:          strings.TrimSpace(meta.Trust),
 		Title:          firstNonEmpty(record.Title, strings.TrimSpace(meta.Intent)),
 		Confidence:     meta.Confidence,
 		SuccessCount:   meta.SuccessCount,
 		FailureCount:   meta.FailureCount,
+		ObservedAt:     parseTime(meta.ObservedAt),
 		LastVerifiedAt: parseTime(meta.LastVerifiedAt),
+		ExpiresAt:      parseTime(meta.ExpiresAt),
 		LastUsedAt:     parseTime(meta.LastUsedAt),
+		CreatedAt:      parseTime(meta.CreatedAt),
+		UpdatedAt:      parseTime(meta.UpdatedAt),
 		MatchTerms:     dedupeStrings(meta.MatchTerms),
 		Preconditions:  dedupeStrings(meta.Preconditions),
 		VerifySteps:    parseListSection(sections["Verify"]),
@@ -663,33 +590,49 @@ func parsePlaybookRecord(record markdownRecord) (state.Playbook, error) {
 
 func parseFindingRecord(record markdownRecord) (state.Finding, error) {
 	type findingMeta struct {
-		FindingID  string  `yaml:"finding_id"`
-		TargetID   string  `yaml:"target_id"`
-		Intent     string  `yaml:"intent"`
-		ToolName   string  `yaml:"tool_name"`
-		Confidence float64 `yaml:"confidence"`
-		SeenCount  int     `yaml:"seen_count"`
-		Origin     string  `yaml:"origin"`
-		CreatedAt  string  `yaml:"created_at"`
-		UpdatedAt  string  `yaml:"updated_at"`
-		Status     string  `yaml:"status"`
+		FindingID    string  `yaml:"finding_id"`
+		TargetID     string  `yaml:"target_id"`
+		Environment  string  `yaml:"environment"`
+		Intent       string  `yaml:"intent"`
+		ToolName     string  `yaml:"tool_name"`
+		Confidence   float64 `yaml:"confidence"`
+		SeenCount    int     `yaml:"seen_count"`
+		Origin       string  `yaml:"origin"`
+		Source       string  `yaml:"source"`
+		EvidenceRef  string  `yaml:"evidence_ref"`
+		EvidenceHash string  `yaml:"evidence_hash"`
+		Trust        string  `yaml:"trust"`
+		ObservedAt   string  `yaml:"observed_at"`
+		VerifiedAt   string  `yaml:"verified_at"`
+		ExpiresAt    string  `yaml:"expires_at"`
+		CreatedAt    string  `yaml:"created_at"`
+		UpdatedAt    string  `yaml:"updated_at"`
+		Status       string  `yaml:"status"`
 	}
 	var meta findingMeta
 	if err := yaml.Unmarshal([]byte(record.Meta), &meta); err != nil {
 		return state.Finding{}, err
 	}
 	return state.Finding{
-		ID:         strings.TrimSpace(meta.FindingID),
-		TargetID:   strings.TrimSpace(meta.TargetID),
-		Intent:     firstNonEmpty(strings.TrimSpace(meta.Intent), IntentGeneral),
-		ToolName:   strings.TrimSpace(meta.ToolName),
-		Status:     strings.TrimSpace(meta.Status),
-		Origin:     strings.TrimSpace(meta.Origin),
-		Body:       strings.TrimSpace(record.Body),
-		Confidence: meta.Confidence,
-		SeenCount:  meta.SeenCount,
-		CreatedAt:  parseTime(meta.CreatedAt),
-		UpdatedAt:  parseTime(meta.UpdatedAt),
+		ID:           strings.TrimSpace(meta.FindingID),
+		TargetID:     strings.TrimSpace(meta.TargetID),
+		Environment:  strings.TrimSpace(meta.Environment),
+		Intent:       firstNonEmpty(strings.TrimSpace(meta.Intent), IntentGeneral),
+		ToolName:     strings.TrimSpace(meta.ToolName),
+		Status:       strings.TrimSpace(meta.Status),
+		Origin:       strings.TrimSpace(meta.Origin),
+		Source:       strings.TrimSpace(meta.Source),
+		EvidenceRef:  strings.TrimSpace(meta.EvidenceRef),
+		EvidenceHash: strings.TrimSpace(meta.EvidenceHash),
+		Trust:        strings.TrimSpace(meta.Trust),
+		Body:         strings.TrimSpace(record.Body),
+		Confidence:   meta.Confidence,
+		SeenCount:    meta.SeenCount,
+		ObservedAt:   parseTime(meta.ObservedAt),
+		VerifiedAt:   parseTime(meta.VerifiedAt),
+		ExpiresAt:    parseTime(meta.ExpiresAt),
+		CreatedAt:    parseTime(meta.CreatedAt),
+		UpdatedAt:    parseTime(meta.UpdatedAt),
 	}, nil
 }
 
@@ -697,10 +640,18 @@ func parseCautionRecord(record markdownRecord) (state.Caution, error) {
 	type cautionMeta struct {
 		CautionID    string  `yaml:"caution_id"`
 		TargetID     string  `yaml:"target_id"`
+		Environment  string  `yaml:"environment"`
 		Intent       string  `yaml:"intent"`
 		ToolName     string  `yaml:"tool_name"`
+		Source       string  `yaml:"source"`
+		EvidenceRef  string  `yaml:"evidence_ref"`
+		EvidenceHash string  `yaml:"evidence_hash"`
+		Trust        string  `yaml:"trust"`
 		Confidence   float64 `yaml:"confidence"`
 		FailureCount int     `yaml:"failure_count"`
+		ObservedAt   string  `yaml:"observed_at"`
+		VerifiedAt   string  `yaml:"verified_at"`
+		ExpiresAt    string  `yaml:"expires_at"`
 		LastSeenAt   string  `yaml:"last_seen_at"`
 		Status       string  `yaml:"status"`
 		CreatedAt    string  `yaml:"created_at"`
@@ -713,21 +664,29 @@ func parseCautionRecord(record markdownRecord) (state.Caution, error) {
 	return state.Caution{
 		ID:           strings.TrimSpace(meta.CautionID),
 		TargetID:     strings.TrimSpace(meta.TargetID),
+		Environment:  strings.TrimSpace(meta.Environment),
 		Intent:       firstNonEmpty(strings.TrimSpace(meta.Intent), IntentGeneral),
 		ToolName:     strings.TrimSpace(meta.ToolName),
 		Status:       strings.TrimSpace(meta.Status),
+		Source:       strings.TrimSpace(meta.Source),
+		EvidenceRef:  strings.TrimSpace(meta.EvidenceRef),
+		EvidenceHash: strings.TrimSpace(meta.EvidenceHash),
+		Trust:        strings.TrimSpace(meta.Trust),
 		Body:         strings.TrimSpace(record.Body),
 		Confidence:   meta.Confidence,
 		FailureCount: meta.FailureCount,
+		ObservedAt:   parseTime(meta.ObservedAt),
+		VerifiedAt:   parseTime(meta.VerifiedAt),
+		ExpiresAt:    parseTime(meta.ExpiresAt),
 		LastSeenAt:   parseTime(meta.LastSeenAt),
 		CreatedAt:    parseTime(meta.CreatedAt),
 		UpdatedAt:    parseTime(meta.UpdatedAt),
 	}, nil
 }
 
-func parseFactsSection(body, hostID string) []state.HostFact {
+func parseFactsSection(body, hostID, environment string) []state.HostFact {
 	sections := splitSections(body)
-	return parseFactLines(hostID, sections["Facts"])
+	return parseFactLines(hostID, environment, sections["Facts"])
 }
 
 func parseNotesSection(body string) []string {
@@ -735,7 +694,7 @@ func parseNotesSection(body string) []string {
 	return parseNotesBody(sections["Notes"])
 }
 
-func parseFactLines(hostID, body string) []state.HostFact {
+func parseFactLines(hostID, environment, body string) []state.HostFact {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return nil
@@ -752,15 +711,68 @@ func parseFactLines(hostID, body string) []state.HostFact {
 			continue
 		}
 		facts = append(facts, state.HostFact{
-			HostID:     hostID,
-			Key:        slugify(parts[0]),
-			Value:      strings.TrimSpace(parts[1]),
-			Confidence: 1,
-			VerifiedAt: now,
-			UpdatedAt:  now,
+			HostID:       hostID,
+			Environment:  firstNonEmpty(environment, state.EnvironmentUnknown),
+			Key:          slugify(parts[0]),
+			Value:        strings.TrimSpace(parts[1]),
+			Status:       state.MemoryStatusCandidate,
+			Source:       "markdown_import",
+			EvidenceRef:  "manual Markdown import",
+			EvidenceHash: evidenceHash("markdown_import", hostID, firstNonEmpty(environment, state.EnvironmentUnknown), slugify(parts[0]), strings.TrimSpace(parts[1]), "manual Markdown import"),
+			Trust:        state.MemoryTrustOperator,
+			Confidence:   0.5,
+			ObservedAt:   now,
+			VerifiedAt:   now,
+			ExpiresAt:    now.Add(7 * 24 * time.Hour),
+			UpdatedAt:    now,
 		})
 	}
 	return dedupeFacts(facts)
+}
+
+func factsFromFileMeta(hostID, environment string, items []factFileMeta) []state.HostFact {
+	out := make([]state.HostFact, 0, len(items))
+	for _, item := range items {
+		out = append(out, state.HostFact{
+			HostID:       hostID,
+			Environment:  firstNonEmpty(item.Environment, environment),
+			Key:          strings.TrimSpace(item.Key),
+			Value:        strings.TrimSpace(item.Value),
+			Status:       strings.TrimSpace(item.Status),
+			Source:       strings.TrimSpace(item.Source),
+			EvidenceRef:  strings.TrimSpace(item.EvidenceRef),
+			EvidenceHash: strings.TrimSpace(item.EvidenceHash),
+			Trust:        strings.TrimSpace(item.Trust),
+			Confidence:   item.Confidence,
+			ObservedAt:   parseTime(item.ObservedAt),
+			VerifiedAt:   parseTime(item.VerifiedAt),
+			ExpiresAt:    parseTime(item.ExpiresAt),
+			UpdatedAt:    parseTime(item.UpdatedAt),
+		})
+	}
+	return dedupeFacts(out)
+}
+
+func factsToFileMeta(items []state.HostFact) []factFileMeta {
+	out := make([]factFileMeta, 0, len(items))
+	for _, item := range dedupeFacts(items) {
+		out = append(out, factFileMeta{
+			Key:          item.Key,
+			Value:        item.Value,
+			Environment:  item.Environment,
+			Status:       item.Status,
+			Source:       item.Source,
+			EvidenceRef:  item.EvidenceRef,
+			EvidenceHash: item.EvidenceHash,
+			Trust:        item.Trust,
+			Confidence:   item.Confidence,
+			ObservedAt:   formatTime(item.ObservedAt),
+			VerifiedAt:   formatTime(item.VerifiedAt),
+			ExpiresAt:    formatTime(item.ExpiresAt),
+			UpdatedAt:    formatTime(item.UpdatedAt),
+		})
+	}
+	return out
 }
 
 func parseNotesBody(body string) []string {
@@ -861,22 +873,28 @@ func parseListSection(body string) []string {
 
 func (m *Manager) writeAllState(ctx context.Context, st fileState, reason string) error {
 	st = normalizeState(st)
-	rendered := map[string]string{
-		TargetsFile:   renderTargetsFile(st),
-		HostFile:      renderHostFile(st),
-		PlaybooksFile: renderPlaybooksFile(st.Playbooks),
-		FindingsFile:  renderFindingsFile(st.Findings),
-		CautionsFile:  renderCautionsFile(st.Cautions),
+	if m.store == nil || !m.store.Available() {
+		return fmt.Errorf("SQLite state is unavailable; operational memory write refused")
 	}
+	if err := m.store.ReplaceOperationalMemory(ctx, operationalMemoryFromState(st)); err != nil {
+		return err
+	}
+	rendered := renderedViews(st)
 	for name, content := range rendered {
 		if err := m.writeManagedFile(ctx, name, m.managedPath(name), content, reason); err != nil {
 			return err
 		}
 	}
-	if m.store != nil && m.store.Available() {
-		return m.store.ReplaceOperationalMemory(ctx, operationalMemoryFromState(st))
-	}
 	return nil
+}
+
+func renderedViews(st fileState) map[string]string {
+	return map[string]string{
+		TargetsFile:   renderTargetsFile(st),
+		PlaybooksFile: renderPlaybooksFile(st.Playbooks),
+		FindingsFile:  renderFindingsFile(st.Findings),
+		CautionsFile:  renderCautionsFile(st.Cautions),
+	}
 }
 
 func (m *Manager) writeManagedFile(ctx context.Context, sourceName, path, rendered, reason string) error {
@@ -892,7 +910,32 @@ func (m *Manager) writeManagedFile(ctx context.Context, sourceName, path, render
 			return err
 		}
 	}
-	return os.WriteFile(path, []byte(rendered), 0644)
+	return writeFileAtomic(path, rendered)
+}
+
+func writeFileAtomic(path, content string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0644); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func (m *Manager) snapshotFile(ctx context.Context, sourceName, path, reason string) (string, error) {
@@ -939,8 +982,6 @@ func normalizeState(st fileState) fileState {
 		st.Targets[i].IPs = dedupeStrings(st.Targets[i].IPs)
 		st.Targets[i].Facts = dedupeFacts(st.Targets[i].Facts)
 	}
-	st.RuntimeHostFacts = dedupeFacts(st.RuntimeHostFacts)
-	st.RuntimeHostNotes = dedupeStrings(st.RuntimeHostNotes)
 	return st
 }
 
@@ -952,17 +993,22 @@ func renderTargetsFile(st fileState) string {
 			b.WriteString("\n")
 		}
 		meta := map[string]any{
-			"target_id":     target.Target.ID,
-			"kind":          target.Target.Kind,
-			"primary_name":  target.Target.PrimaryName,
-			"aliases":       dedupeStrings(target.Aliases),
-			"hostnames":     dedupeStrings(target.Hostnames),
-			"ips":           dedupeStrings(target.IPs),
-			"transport":     target.Target.Transport,
-			"first_seen_at": formatTime(target.Target.FirstSeenAt),
-			"last_seen_at":  formatTime(target.Target.LastSeenAt),
-			"confidence":    target.Target.Confidence,
-			"status":        target.Target.Status,
+			"target_id":       target.Target.ID,
+			"kind":            target.Target.Kind,
+			"environment":     target.Target.Environment,
+			"primary_name":    target.Target.PrimaryName,
+			"aliases":         dedupeStrings(target.Aliases),
+			"hostnames":       dedupeStrings(target.Hostnames),
+			"ips":             dedupeStrings(target.IPs),
+			"transport":       target.Target.Transport,
+			"remote_identity": target.Target.RemoteIdentity,
+			"first_seen_at":   formatTime(target.Target.FirstSeenAt),
+			"last_seen_at":    formatTime(target.Target.LastSeenAt),
+			"verified_at":     formatTime(target.Target.VerifiedAt),
+			"expires_at":      formatTime(target.Target.ExpiresAt),
+			"confidence":      target.Target.Confidence,
+			"status":          target.Target.Status,
+			"facts":           factsToFileMeta(target.Facts),
 		}
 		b.WriteString("## ")
 		b.WriteString(firstNonEmpty(target.Target.PrimaryName, target.Target.ID))
@@ -988,37 +1034,6 @@ func renderTargetsFile(st fileState) string {
 	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
-func renderHostFile(st fileState) string {
-	var b strings.Builder
-	b.WriteString("# Host\n\n")
-	meta := map[string]any{
-		"runtime_host_id": st.RuntimeHostID,
-		"primary_name":    runtimePrimaryName(st),
-		"verified_at":     formatTime(latestFactTime(st.RuntimeHostFacts)),
-		"confidence":      1,
-		"status":          "active",
-	}
-	b.WriteString("## ")
-	b.WriteString(runtimePrimaryName(st))
-	b.WriteString("\n")
-	b.WriteString(renderYAML(meta))
-	if len(st.RuntimeHostFacts) > 0 {
-		b.WriteString("\n### Facts\n")
-		for _, fact := range dedupeFacts(st.RuntimeHostFacts) {
-			if fact.Key == "primary_name" {
-				continue
-			}
-			b.WriteString("- ")
-			b.WriteString(fact.Key)
-			b.WriteString(": ")
-			b.WriteString(fact.Value)
-			b.WriteString("\n")
-		}
-	}
-	renderListSection(&b, "Notes", st.RuntimeHostNotes)
-	return strings.TrimRight(b.String(), "\n") + "\n"
-}
-
 func renderPlaybooksFile(playbooks []state.Playbook) string {
 	var b strings.Builder
 	b.WriteString("# Playbooks\n\n")
@@ -1029,13 +1044,22 @@ func renderPlaybooksFile(playbooks []state.Playbook) string {
 		meta := map[string]any{
 			"playbook_id":      playbook.ID,
 			"target_id":        playbook.TargetID,
+			"environment":      playbook.Environment,
 			"intent":           playbook.Intent,
 			"tool_name":        playbook.ToolName,
+			"source":           playbook.Source,
+			"evidence_ref":     playbook.EvidenceRef,
+			"evidence_hash":    playbook.EvidenceHash,
+			"trust":            playbook.Trust,
 			"confidence":       playbook.Confidence,
 			"success_count":    playbook.SuccessCount,
 			"failure_count":    playbook.FailureCount,
+			"observed_at":      formatTime(playbook.ObservedAt),
 			"last_verified_at": formatTime(playbook.LastVerifiedAt),
+			"expires_at":       formatTime(playbook.ExpiresAt),
 			"last_used_at":     formatTime(playbook.LastUsedAt),
+			"created_at":       formatTime(playbook.CreatedAt),
+			"updated_at":       formatTime(playbook.UpdatedAt),
 			"match_terms":      dedupeStrings(playbook.MatchTerms),
 			"preconditions":    dedupeStrings(playbook.Preconditions),
 			"status":           playbook.Status,
@@ -1067,16 +1091,24 @@ func renderFindingsFile(findings []state.Finding) string {
 			b.WriteString("\n")
 		}
 		meta := map[string]any{
-			"finding_id": finding.ID,
-			"target_id":  finding.TargetID,
-			"intent":     finding.Intent,
-			"tool_name":  finding.ToolName,
-			"confidence": finding.Confidence,
-			"seen_count": finding.SeenCount,
-			"origin":     finding.Origin,
-			"created_at": formatTime(finding.CreatedAt),
-			"updated_at": formatTime(finding.UpdatedAt),
-			"status":     finding.Status,
+			"finding_id":    finding.ID,
+			"target_id":     finding.TargetID,
+			"environment":   finding.Environment,
+			"intent":        finding.Intent,
+			"tool_name":     finding.ToolName,
+			"confidence":    finding.Confidence,
+			"seen_count":    finding.SeenCount,
+			"origin":        finding.Origin,
+			"source":        finding.Source,
+			"evidence_ref":  finding.EvidenceRef,
+			"evidence_hash": finding.EvidenceHash,
+			"trust":         finding.Trust,
+			"observed_at":   formatTime(finding.ObservedAt),
+			"verified_at":   formatTime(finding.VerifiedAt),
+			"expires_at":    formatTime(finding.ExpiresAt),
+			"created_at":    formatTime(finding.CreatedAt),
+			"updated_at":    formatTime(finding.UpdatedAt),
+			"status":        finding.Status,
 		}
 		b.WriteString("## ")
 		b.WriteString(findingTitle(finding.Body))
@@ -1104,10 +1136,18 @@ func renderCautionsFile(cautions []state.Caution) string {
 		meta := map[string]any{
 			"caution_id":    caution.ID,
 			"target_id":     caution.TargetID,
+			"environment":   caution.Environment,
 			"intent":        caution.Intent,
 			"tool_name":     caution.ToolName,
+			"source":        caution.Source,
+			"evidence_ref":  caution.EvidenceRef,
+			"evidence_hash": caution.EvidenceHash,
+			"trust":         caution.Trust,
 			"confidence":    caution.Confidence,
 			"failure_count": caution.FailureCount,
+			"observed_at":   formatTime(caution.ObservedAt),
+			"verified_at":   formatTime(caution.VerifiedAt),
+			"expires_at":    formatTime(caution.ExpiresAt),
 			"last_seen_at":  formatTime(caution.LastSeenAt),
 			"created_at":    formatTime(caution.CreatedAt),
 			"updated_at":    formatTime(caution.UpdatedAt),
@@ -1153,9 +1193,7 @@ func operationalMemoryFromState(st fileState) state.OperationalMemory {
 		Playbooks: st.Playbooks,
 		Findings:  st.Findings,
 		Cautions:  st.Cautions,
-		HostFacts: dedupeFacts(st.RuntimeHostFacts),
 	}
-	mem.HostFacts = mergeFactLists(mem.HostFacts, encodeRuntimeHostNotes(st))
 	for _, target := range st.Targets {
 		mem.Targets = append(mem.Targets, target.Target)
 		mem.HostFacts = mergeFactLists(mem.HostFacts, target.Facts)
@@ -1220,15 +1258,6 @@ func stateFromOperationalMemory(mem state.OperationalMemory) fileState {
 		}
 	}
 	for _, fact := range mem.HostFacts {
-		if isRuntimeHostNoteFact(fact.Key) {
-			if fact.HostID == st.RuntimeHostID {
-				st.RuntimeHostNotes = append(st.RuntimeHostNotes, fact.Value)
-			}
-			continue
-		}
-		if fact.HostID == st.RuntimeHostID {
-			st.RuntimeHostFacts = append(st.RuntimeHostFacts, fact)
-		}
 		if idx, ok := targetByID[fact.HostID]; ok {
 			st.Targets[idx].Facts = append(st.Targets[idx].Facts, fact)
 		}
@@ -1258,29 +1287,25 @@ func latestFactTime(facts []state.HostFact) time.Time {
 	return latest
 }
 
-func defaultOperatorMarkdown() string {
-	return `# Operator Guide
+func defaultGuidanceMarkdown() string {
+	return `# Guidance
 
-Stable runtime guidance for CvkeHarness memory, target identity, and safety boundaries.
+Stable user-authored runtime guidance for CvkeHarness behavior, target identity, and safety boundaries.
 
 ## Prompt Stack
 
 Every run receives instructions in this order:
 
 1. Built-in runtime rules
-2. operator.md
-3. soul.md
-4. runtime-host summary from host.md
-5. a compact retrieved brief from targets.md, playbooks.md, cautions.md, and findings.md
+2. guidance.md
+3. a compact host-target-memory brief from targets.md, playbooks.md, cautions.md, and findings.md
 
 ## Managed Files
 
-- operator.md: Stable harness rules and memory boundaries. User-editable.
-- soul.md: Persona and tone only. User-editable and never auto-edited by the harness.
-- targets.md: Target registry, aliases, and concise verified target facts.
-- host.md: Concise verified profile of the runtime host plus operator-supplied machine notes.
+- guidance.md: User-authored operating guidance and collaboration style.
+- targets.md: Target registry, aliases, and concise verified target facts, including the runtime host.
 - playbooks.md: Durable target-specific procedures with verify/action/success-check sections.
-- findings.md: Provisional observations awaiting promotion.
+- findings.md: Manual or ad hoc observations only.
 - cautions.md: Target-specific negative memory for bad or unreliable approaches.
 
 ## Memory Boundaries
@@ -1298,7 +1323,7 @@ Only a small rendered brief may be loaded:
 
 The model may suggest what is worth remembering, but the harness owns ids, timestamps, dedupe, freshness, file layout, and structured persistence.
 
-The execution phase should not dump freeform notes into managed files.
+The execution phase must not dump freeform run summaries into managed files.
 If a concise verified ad hoc note is worth preserving mid-run, use the memory_record_finding tool.
 
 ## Dependency Handling
@@ -1395,36 +1420,6 @@ func dedupeFacts(items []state.HostFact) []state.HostFact {
 		return out[i].HostID < out[j].HostID
 	})
 	return out
-}
-
-const runtimeHostNoteKeyPrefix = "__runtime_host_note__"
-
-func encodeRuntimeHostNotes(st fileState) []state.HostFact {
-	hostID := strings.TrimSpace(st.RuntimeHostID)
-	if hostID == "" || len(st.RuntimeHostNotes) == 0 {
-		return nil
-	}
-	ts := latestFactTime(st.RuntimeHostFacts)
-	var out []state.HostFact
-	for _, note := range dedupeStrings(st.RuntimeHostNotes) {
-		out = append(out, state.HostFact{
-			HostID:     hostID,
-			Key:        runtimeHostNoteKey(note),
-			Value:      note,
-			Confidence: 0.8,
-			VerifiedAt: ts,
-			UpdatedAt:  ts,
-		})
-	}
-	return out
-}
-
-func runtimeHostNoteKey(note string) string {
-	return runtimeHostNoteKeyPrefix + shortHash(strings.ToLower(strings.TrimSpace(note)))
-}
-
-func isRuntimeHostNoteFact(key string) bool {
-	return strings.HasPrefix(strings.TrimSpace(key), runtimeHostNoteKeyPrefix)
 }
 
 func mergeFactLists(existing, additions []state.HostFact) []state.HostFact {

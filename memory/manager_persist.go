@@ -33,18 +33,25 @@ func (m *Manager) PersistLessons(ctx context.Context, lessons []Lesson) error {
 			confidence = 0.65
 		}
 		finding := state.Finding{
-			ID:         findingID(mem.RuntimeHostID+"|ad_hoc", body),
-			TargetID:   mem.RuntimeHostID,
-			Intent:     IntentGeneral,
-			ToolName:   strings.TrimSpace(lesson.ToolName),
-			Status:     "active",
-			Origin:     "ad_hoc",
-			Body:       body,
-			Confidence: confidence,
-			SeenCount:  1,
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			ID:          findingID(mem.RuntimeHostID+"|model_candidate", body),
+			TargetID:    mem.RuntimeHostID,
+			Environment: targetEnvironment(mem, mem.RuntimeHostID),
+			Intent:      IntentGeneral,
+			ToolName:    strings.TrimSpace(lesson.ToolName),
+			Status:      state.MemoryStatusCandidate,
+			Origin:      "model_suggestion",
+			Source:      "memory_record_finding",
+			EvidenceRef: "model-authored candidate",
+			Trust:       state.MemoryTrustUntrusted,
+			Body:        redactSensitiveText(body),
+			Confidence:  confidence,
+			SeenCount:   1,
+			ObservedAt:  now,
+			ExpiresAt:   now.Add(candidateTTL),
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}
+		finding.EvidenceHash = findingIntegrity(finding)
 		mem.Findings, changed = upsertFinding(mem.Findings, finding)
 	}
 	if !changed {
@@ -101,9 +108,7 @@ func (m *Manager) CurateRunOutcome(ctx context.Context, outcome RunOutcome) erro
 			resolution = callResolution
 		}
 		changed = m.applyObservedFacts(&mem, callTargetID, call, now) || changed
-		if call.Success {
-			changed = markTargetVerified(&mem, callTargetID, now) || changed
-		} else {
+		if !call.Success {
 			changed = applyPlaybookFailure(&mem, callTargetID, intent, call, now) || changed
 			changed = applyCaution(&mem, callTargetID, intent, call, now) || changed
 		}
@@ -111,42 +116,13 @@ func (m *Manager) CurateRunOutcome(ctx context.Context, outcome RunOutcome) erro
 
 	successfulCommands := successfulShellCommands(outcome.ToolCalls, targetID)
 	if len(successfulCommands) > 0 && strings.TrimSpace(outcome.ExecutionError) == "" {
-		changed = applyPlaybook(&mem, targetID, intent, successfulCommands, outcome.Task, now) || changed
-	}
-
-	if len(successfulCommands) == 0 && !hasWebResearchTool(outcome.ToolCalls) && strings.TrimSpace(outcome.ExecutionError) == "" && targetID != "" {
-		summary := strings.TrimSpace(outcome.Output)
-		if summary != "" {
-			finding := state.Finding{
-				ID:         findingID(targetID+"|run", summary),
-				TargetID:   targetID,
-				Intent:     intent,
-				ToolName:   "",
-				Status:     "active",
-				Origin:     "run_outcome",
-				Body:       oneSentence(summary),
-				Confidence: 0.65,
-				SeenCount:  1,
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			}
-			mem.Findings, changed = upsertFinding(mem.Findings, finding)
-		}
+		changed = applyPlaybook(&mem, targetID, intent, successfulCommands, outcome.Task, outcome.VerifiedOutcome, outcome.VerificationEvidence, now) || changed
 	}
 
 	if !changed {
 		return nil
 	}
 	return m.writeAllState(ctx, mem, "curate run outcome")
-}
-
-func hasWebResearchTool(calls []ObservedToolCall) bool {
-	for _, call := range calls {
-		if isWebResearchTool(call.ToolName) {
-			return true
-		}
-	}
-	return false
 }
 
 func isWebResearchTool(name string) bool {
@@ -183,33 +159,46 @@ func successfulShellCommands(calls []ObservedToolCall, targetID string) []Observ
 	return out
 }
 
-func applyPlaybook(mem *fileState, targetID, intent string, calls []ObservedToolCall, task string, now time.Time) bool {
-	if targetID == "" {
+func applyPlaybook(mem *fileState, targetID, intent string, calls []ObservedToolCall, task string, verifiedOutcome bool, verificationEvidence string, now time.Time) bool {
+	if targetID == "" || containsSensitiveCalls(calls) {
 		return false
 	}
 	verifySteps, actionSteps, successChecks := splitPlaybookSteps(calls)
+	if len(actionSteps) == 0 {
+		return false
+	}
 	preconditions := inferredPreconditions(*mem, targetID)
 	playbook := state.Playbook{
-		ID:             playbookID(targetID, intent, "shell_execute"),
-		TargetID:       targetID,
-		Intent:         intent,
-		ToolName:       "shell_execute",
-		Status:         "active",
-		Title:          playbookTitle(intent, targetName(*mem, targetID)),
-		Confidence:     0.82,
-		SuccessCount:   1,
-		FailureCount:   0,
-		LastVerifiedAt: now,
-		LastUsedAt:     now,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-		MatchTerms:     matchTerms(intent, task),
-		Preconditions:  preconditions,
-		VerifySteps:    verifySteps,
-		ActionSteps:    actionSteps,
-		SuccessChecks:  successChecks,
-		Notes:          "",
+		ID:            playbookID(targetID, intent, "shell_execute"),
+		TargetID:      targetID,
+		Environment:   targetEnvironment(*mem, targetID),
+		Intent:        intent,
+		ToolName:      "shell_execute",
+		Status:        state.MemoryStatusCandidate,
+		Source:        "verified_run_observation",
+		EvidenceRef:   redactSensitiveText(strings.TrimSpace(verificationEvidence)),
+		Trust:         state.MemoryTrustUntrusted,
+		Title:         playbookTitle(intent, targetName(*mem, targetID)),
+		Confidence:    0.65,
+		SuccessCount:  1,
+		FailureCount:  0,
+		ObservedAt:    now,
+		LastUsedAt:    now,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		MatchTerms:    matchTerms(intent, task),
+		Preconditions: preconditions,
+		VerifySteps:   verifySteps,
+		ActionSteps:   actionSteps,
+		SuccessChecks: successChecks,
+		Notes:         "",
 	}
+	if verifiedOutcome && len(successChecks) > 0 {
+		playbook.LastVerifiedAt = now
+		playbook.Confidence = 0.75
+	}
+	playbook.ExpiresAt = now.Add(candidateTTL)
+	playbook.EvidenceHash = playbookIntegrity(playbook)
 
 	changed := false
 	for i, existing := range mem.Playbooks {
@@ -219,7 +208,7 @@ func applyPlaybook(mem *fileState, targetID, intent string, calls []ObservedTool
 		playbook.CreatedAt = existing.CreatedAt
 		playbook.SuccessCount = existing.SuccessCount + 1
 		playbook.FailureCount = existing.FailureCount
-		playbook.Confidence = minFloat(0.97, maxFloat(existing.Confidence, 0.82)+0.05)
+		playbook.Confidence = minFloat(0.85, maxFloat(existing.Confidence, playbook.Confidence)+0.03)
 		if len(playbook.VerifySteps) == 0 {
 			playbook.VerifySteps = existing.VerifySteps
 		}
@@ -229,6 +218,7 @@ func applyPlaybook(mem *fileState, targetID, intent string, calls []ObservedTool
 		if len(playbook.SuccessChecks) == 0 {
 			playbook.SuccessChecks = existing.SuccessChecks
 		}
+		playbook.EvidenceHash = playbookIntegrity(playbook)
 		mem.Playbooks[i] = playbook
 		return true
 	}
@@ -267,23 +257,31 @@ func applyCaution(mem *fileState, targetID, intent string, call ObservedToolCall
 	caution := state.Caution{
 		ID:           cautionID(targetID, intent, call.ToolName),
 		TargetID:     targetID,
+		Environment:  targetEnvironment(*mem, targetID),
 		Intent:       intent,
 		ToolName:     call.ToolName,
-		Status:       "active",
+		Status:       state.MemoryStatusCandidate,
+		Source:       "failed_tool_observation",
+		EvidenceRef:  firstNonEmpty(call.DenialClass, "tool failure"),
+		Trust:        state.MemoryTrustUntrusted,
 		Body:         body,
-		Confidence:   0.78,
+		Confidence:   0.55,
 		FailureCount: 1,
+		ObservedAt:   now,
+		ExpiresAt:    now.Add(7 * 24 * time.Hour),
 		LastSeenAt:   now,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
+	caution.EvidenceHash = cautionIntegrity(caution)
 	for i, existing := range mem.Cautions {
 		if existing.ID != caution.ID {
 			continue
 		}
 		caution.CreatedAt = existing.CreatedAt
 		caution.FailureCount = existing.FailureCount + 1
-		caution.Confidence = minFloat(0.95, maxFloat(existing.Confidence, 0.78)+0.03)
+		caution.Confidence = minFloat(0.75, maxFloat(existing.Confidence, 0.55)+0.03)
+		caution.EvidenceHash = cautionIntegrity(caution)
 		mem.Cautions[i] = caution
 		return true
 	}
@@ -294,19 +292,20 @@ func applyCaution(mem *fileState, targetID, intent string, call ObservedToolCall
 func cautionBody(call ObservedToolCall) string {
 	switch {
 	case call.PolicyDenied:
-		return "This command path was denied by policy or approval gates; verify approval before retrying. Last command: " + strings.TrimSpace(call.Command)
+		return "A command path was denied by policy or approval gates. Review policy before retrying: " + redactSensitiveText(strings.TrimSpace(call.Command))
 	case strings.TrimSpace(call.Result) != "":
-		return "A recent attempt failed: " + oneSentence(call.Result)
+		return "A recent attempt failed: " + redactSensitiveText(oneSentence(call.Result))
 	default:
 		return ""
 	}
 }
 
 func (m *Manager) applyObservedFacts(mem *fileState, targetID string, call ObservedToolCall, now time.Time) bool {
-	if targetID == "" || call.ToolName != "shell_execute" || !call.Success {
+	if targetID == "" || call.ToolName != "shell_execute" || !call.Success || containsSensitiveCommand(call.Command) {
 		return false
 	}
-	facts := extractFacts(call.Command, call.Result, targetID, now)
+	environment := targetEnvironment(*mem, targetID)
+	facts := extractFacts(call.Command, call.Result, targetID, environment, now)
 	if len(facts) == 0 {
 		return false
 	}
@@ -329,33 +328,7 @@ func (m *Manager) applyObservedFacts(mem *fileState, targetID string, call Obser
 	target.Facts = dedupeFacts(target.Facts)
 	target.Hostnames = dedupeStrings(target.Hostnames)
 	mem.Targets[idx] = target
-	if targetID == mem.RuntimeHostID {
-		mem.RuntimeHostFacts = mergeFactLists(mem.RuntimeHostFacts, facts)
-	}
 	return len(target.Facts) != before || len(facts) > 0
-}
-
-func markTargetVerified(mem *fileState, targetID string, now time.Time) bool {
-	idx := targetIndex(*mem, targetID)
-	if idx < 0 {
-		return false
-	}
-	target := mem.Targets[idx]
-	changed := false
-	if target.Target.Status != "active" {
-		target.Target.Status = "active"
-		changed = true
-	}
-	if target.Target.Confidence < 0.85 {
-		target.Target.Confidence = 0.85
-		changed = true
-	}
-	if target.Target.LastSeenAt.Before(now) {
-		target.Target.LastSeenAt = now
-		changed = true
-	}
-	mem.Targets[idx] = target
-	return changed
 }
 
 func targetIndex(mem fileState, targetID string) int {
@@ -468,7 +441,7 @@ func playbookTitle(intent, target string) string {
 	}
 }
 
-func extractFacts(command, result, targetID string, now time.Time) []state.HostFact {
+func extractFacts(command, result, targetID, environment string, now time.Time) []state.HostFact {
 	commandLower := strings.ToLower(command)
 	result = strings.TrimSpace(result)
 	var out []state.HostFact
@@ -477,14 +450,31 @@ func extractFacts(command, result, targetID string, now time.Time) []state.HostF
 		if value == "" {
 			return
 		}
-		out = append(out, state.HostFact{
-			HostID:     targetID,
-			Key:        key,
-			Value:      value,
-			Confidence: 1,
-			VerifiedAt: now,
-			UpdatedAt:  now,
-		})
+		status := state.MemoryStatusCandidate
+		trust := state.MemoryTrustUntrusted
+		expiresAt := now.Add(candidateTTL)
+		if environment != "" && environment != state.EnvironmentUnknown {
+			status = state.MemoryStatusActive
+			trust = state.MemoryTrustVerified
+			expiresAt = now.Add(activeTTL)
+		}
+		item := state.HostFact{
+			HostID:      targetID,
+			Environment: firstNonEmpty(environment, state.EnvironmentUnknown),
+			Key:         key,
+			Value:       value,
+			Status:      status,
+			Source:      "typed_shell_probe",
+			EvidenceRef: redactSensitiveText(command),
+			Trust:       trust,
+			Confidence:  1,
+			ObservedAt:  now,
+			VerifiedAt:  now,
+			ExpiresAt:   expiresAt,
+			UpdatedAt:   now,
+		}
+		item.EvidenceHash = factIntegrity(item)
+		out = append(out, item)
 	}
 
 	if strings.Contains(commandLower, "hostname") || strings.Contains(commandLower, "uname -n") {
@@ -504,17 +494,17 @@ func extractFacts(command, result, targetID string, now time.Time) []state.HostF
 		}
 	}
 	switch {
-	case strings.Contains(commandLower, "apt-get") || strings.Contains(commandLower, " apt "):
+	case isToolProbe(commandLower, "apt") || isToolProbe(commandLower, "apt-get"):
 		add("package_manager", "apt")
-	case strings.Contains(commandLower, "dnf"):
+	case isToolProbe(commandLower, "dnf"):
 		add("package_manager", "dnf")
-	case strings.Contains(commandLower, "yum"):
+	case isToolProbe(commandLower, "yum"):
 		add("package_manager", "yum")
-	case strings.Contains(commandLower, "apk"):
+	case isToolProbe(commandLower, "apk"):
 		add("package_manager", "apk")
-	case strings.Contains(commandLower, "brew"):
+	case isToolProbe(commandLower, "brew"):
 		add("package_manager", "brew")
-	case strings.Contains(commandLower, "pacman"):
+	case isToolProbe(commandLower, "pacman"):
 		add("package_manager", "pacman")
 	}
 	if strings.Contains(commandLower, "systemctl") {
