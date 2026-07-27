@@ -113,6 +113,14 @@ func (s *Service) ScheduledJobRuns(ctx context.Context, jobID string, limit int)
 	return s.store.ListScheduledJobRuns(ctx, jobID, limit)
 }
 
+// SchedulerHealth returns telemetry-derived scheduler health rows.
+func (s *Service) SchedulerHealth(ctx context.Context) ([]state.SchedulerHealth, error) {
+	if s.store == nil || !s.store.Available() {
+		return nil, nil
+	}
+	return s.store.ListSchedulerHealth(ctx)
+}
+
 // CronEntries returns system crontab entries.
 func (s *Service) CronEntries(ctx context.Context) ([]systemcron.Entry, error) {
 	if s.cron == nil {

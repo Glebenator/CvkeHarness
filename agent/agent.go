@@ -50,6 +50,12 @@ type RunRecorder interface {
 	RecordRun(ctx context.Context, record state.RunRecord) error
 }
 
+// BlockedWorkStore persists resumable user-action waits.
+type BlockedWorkStore interface {
+	SaveBlockedWork(ctx context.Context, work state.BlockedWork) (string, error)
+	ResolveBlockedWork(ctx context.Context, id string, nextState state.TaskState) error
+}
+
 // Options configures a new agent.
 type Options struct {
 	Provider         provider.Provider
@@ -65,7 +71,9 @@ type Options struct {
 	MemoryRetriever  MemoryRetriever
 	MemoryCurator    MemoryCurator
 	RunRecorder      RunRecorder
+	BlockedWorkStore BlockedWorkStore
 	PromptDumper     *promptdump.Dumper
+	TelemetryWriter  *telemetry.Writer
 	// DisableCompletionVerification is intended for focused tests and special
 	// harnesses that already evaluate completion externally.
 	DisableCompletionVerification bool
@@ -92,12 +100,11 @@ func New(opts Options) *Agent {
 // Run executes the harness loop for a given prompt.
 func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err error) {
 	logger := log.FromContext(ctx)
+	ctx = a.withRunTelemetry(ctx)
 	ctx = tools.WithEventObserver(ctx, a.opts.EventObserver)
 	taskClass := core.ClassifyTask(prompt)
-	toolNames := []string{}
-	if a.opts.ToolRegistry != nil {
-		toolNames = a.opts.ToolRegistry.Names()
-	}
+	toolDefs := a.toolDefinitionsForTask(taskClass, prompt)
+	toolNames := toolNamesFromDefs(toolDefs)
 
 	startedAt := time.Now().UTC()
 	runRecord := state.RunRecord{
@@ -105,12 +112,14 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 		Provider:       a.opts.ProviderName,
 		Task:           prompt,
 		TaskClass:      taskClass,
+		TaskState:      state.TaskStateRunning,
 		RoutingEnabled: a.opts.RoutingConfig.Enabled,
 	}
 
 	defer func() {
 		runRecord.FinishedAt = time.Now().UTC()
-		runRecord.Success = err == nil
+		runRecord.TaskState = taskStateForError(err)
+		runRecord.Success = runRecord.TaskState == state.TaskStateCompleted
 		if err != nil {
 			runRecord.ErrorMessage = err.Error()
 		}
@@ -120,6 +129,10 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 				logger.Warn("failed to record run", "error", recErr)
 			}
 		}
+		_ = telemetry.Record(telemetry.WithFields(ctx, telemetry.Fields{TaskState: string(runRecord.TaskState)}), telemetry.Event{
+			Type:      telemetry.EventTaskCompleted,
+			TaskState: string(runRecord.TaskState),
+		})
 	}()
 
 	logger.Info("CvkeHarness starting task", "task", prompt, "task_class", taskClass)
@@ -152,7 +165,7 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 	}
 	routingSelections = append(routingSelections, execSelection)
 
-	output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, execErr := a.runExecutionPhase(ctx, prompt, taskClass, toolNames, planningNotes, execSelection)
+	output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, execErr := a.runExecutionPhase(ctx, prompt, taskClass, toolDefs, toolNames, planningNotes, execSelection)
 	runRecord.Phases = append(runRecord.Phases, phaseRecord)
 	if verificationRecord.Provider != "" {
 		runRecord.Phases = append(runRecord.Phases, verificationRecord)
@@ -175,7 +188,7 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 		err = execErr
 	}
 
-	if a.opts.MemoryCurator != nil {
+	if a.opts.MemoryCurator != nil && !isBlockedTaskError(execErr) {
 		if curator, ok := a.opts.MemoryCurator.(structuredMemoryCurator); ok {
 			if curErr := curator.CurateRunOutcome(ctx, memory.RunOutcome{
 				Task:                 prompt,
@@ -213,6 +226,26 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 	return result, err
 }
 
+// ResumeBlockedWork retries the stored task after the required user action has occurred.
+func (a *Agent) ResumeBlockedWork(ctx context.Context, work state.BlockedWork) (RunResult, error) {
+	if a.opts.BlockedWorkStore != nil {
+		if err := a.opts.BlockedWorkStore.ResolveBlockedWork(ctx, work.ID, state.TaskStateRunning); err != nil {
+			return RunResult{}, err
+		}
+	}
+	resumeCtx := ctx
+	if a.opts.TelemetryWriter != nil {
+		resumeCtx = telemetry.WithWriter(resumeCtx, a.opts.TelemetryWriter)
+	}
+	payload, _ := json.Marshal(map[string]any{"blocked_work_id": work.ID})
+	_ = telemetry.Record(resumeCtx, telemetry.Event{
+		Type:      telemetry.EventTaskResumed,
+		TaskState: string(state.TaskStateRunning),
+		Payload:   payload,
+	})
+	return a.Run(ctx, work.Task)
+}
+
 func (a *Agent) runPlanningPhase(ctx context.Context, prompt string, taskClass core.TaskClass, toolNames []string) (core.RoutingSelection, state.PhaseRecord, string, error) {
 	selection, err := a.opts.Router.Select(ctx, core.PhasePlanning, prompt, taskClass, nil)
 	if err != nil {
@@ -227,7 +260,7 @@ func (a *Agent) runPlanningPhase(ctx context.Context, prompt string, taskClass c
 	return selection, record, strings.TrimSpace(content), nil
 }
 
-func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass core.TaskClass, toolNames []string, planningNotes string, selection core.RoutingSelection) (string, state.PhaseRecord, state.PhaseRecord, CompletionVerification, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, error) {
+func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass core.TaskClass, toolDefs []provider.ToolDef, toolNames []string, planningNotes string, selection core.RoutingSelection) (string, state.PhaseRecord, state.PhaseRecord, CompletionVerification, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, error) {
 	logger := log.FromContext(ctx)
 	targetResolution := a.resolveTarget(ctx, memory.TargetResolutionInput{Task: prompt})
 	execCtx := core.RetrievalContext{
@@ -246,9 +279,9 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	}
 	emitMemoryInjection(ctx, core.PhaseExecution, retrieved)
 
-	systemMessages := initialSystemMessages(retrieved, planningNotes)
-	chat := NewChatState(append(systemMessages, provider.Message{Role: "user", Content: prompt})...)
-	toolDefs := a.opts.ToolRegistry.Definitions()
+	volatileMessages := []provider.Message{{Role: "user", Content: prompt}}
+	plan := buildPromptPlan(retrieved, planningNotes, volatileMessages, toolDefs)
+	chat := NewChatState(append(append([]provider.Message(nil), plan.SystemMessages...), volatileMessages...)...)
 
 	phaseRecord := state.PhaseRecord{
 		Phase:          core.PhaseExecution,
@@ -282,6 +315,9 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 			Temperature: 0.2,
 			MaxTokens:   a.opts.MaxTokens,
 		}
+		iterPlan := plan
+		iterPlan.PromptHash = hashJSON([]any{req.Messages, req.Tools})
+		emitPromptPlanned(iterCtx, core.PhaseExecution, iter, selection.Requested.Provider, selection.Requested.Model, iterPlan, len(req.Messages))
 		dump := a.dumpPrompt(iterCtx, promptdump.Metadata{
 			Phase:     core.PhaseExecution,
 			Provider:  selection.Requested.Provider,
@@ -295,6 +331,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 		resp, err := execProvider.ChatCompletion(iterCtx, req)
 		a.finishPromptDump(dump, resp, err)
 		duration := time.Since(start)
+		emitModelCallCompleted(iterCtx, core.PhaseExecution, iter, selection.Requested.Provider, selection.Requested.Model, resp, duration.Milliseconds(), err)
 		phaseRecord.LatencyMs += duration.Milliseconds()
 		if resp != nil {
 			phaseRecord.PromptTokens += resp.Usage.PromptTokens
@@ -307,13 +344,6 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 		}
 
 		if err != nil {
-			_ = telemetry.RecordEvent(telemetry.TelemetryEvent{
-				Timestamp:    start.UTC(),
-				Model:        selection.Requested.String(),
-				Success:      false,
-				DurationMs:   duration.Milliseconds(),
-				ErrorMessage: err.Error(),
-			})
 			return "", phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
 		}
 
@@ -363,10 +393,20 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				})
 			}
 			toolStart := time.Now()
-			toolCtx := tools.WithToolCallContext(telemetry.WithModel(iterCtx, actualModel), call.ID, call.Function.Name)
+			toolCtx := tools.WithToolCallContext(telemetry.WithFields(telemetry.WithModel(iterCtx, actualModel), telemetry.Fields{
+				ToolCallID: call.ID,
+				TargetID:   targetResolution.TargetID,
+			}), call.ID, call.Function.Name)
 			tools.EmitEvent(toolCtx, tools.Event{
 				Type:    tools.EventToolCallStarted,
 				Success: true,
+			})
+			payload, _ := json.Marshal(map[string]any{"tool_name": call.Function.Name})
+			_ = telemetry.Record(toolCtx, telemetry.Event{
+				Type:       telemetry.EventToolStarted,
+				ToolCallID: call.ID,
+				TargetID:   targetResolution.TargetID,
+				Payload:    payload,
 			})
 			resultStr, toolErr := a.opts.ToolRegistry.ExecuteTool(toolCtx, call)
 			durationMs := time.Since(toolStart).Milliseconds()
@@ -388,6 +428,23 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				outcome.ErrorMessage = toolErr.Error()
 				outcome.PolicyDenied, outcome.DenialClass = classifyPolicyDenial(toolErr)
 				resultStr = fmt.Sprintf("Error executing tool: %v", toolErr)
+
+				if approvalErr, ok := tools.IsApprovalRequired(toolErr); ok {
+					phaseRecord.Success = false
+					workID, persistErr := a.persistBlockedWork(iterCtx, prompt, taskClass, targetResolution, chat.Messages(), call, approvalErr)
+					if persistErr != nil {
+						return output, phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, persistErr
+					}
+					_ = telemetry.Record(telemetry.WithFields(iterCtx, telemetry.Fields{TaskState: string(state.TaskStateBlockedWaitingUser)}), telemetry.Event{
+						Type:      telemetry.EventTaskBlocked,
+						TaskState: string(state.TaskStateBlockedWaitingUser),
+					})
+					return output, phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, blockedTaskError{
+						workID:  workID,
+						reason:  toolErr.Error(),
+						request: approvalErr.Request,
+					}
+				}
 
 				if !refreshed && (outcome.PolicyDenied || failuresByTool[call.Function.Name] >= 2) {
 					refreshed = true
@@ -422,6 +479,19 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				Duration:     time.Duration(durationMs) * time.Millisecond,
 				ErrorMessage: outcome.ErrorMessage,
 			})
+			payload, _ = json.Marshal(map[string]any{
+				"tool_name":   call.Function.Name,
+				"command":     command,
+				"success":     toolErr == nil,
+				"duration_ms": durationMs,
+				"error":       outcome.ErrorMessage,
+			})
+			_ = telemetry.Record(toolCtx, telemetry.Event{
+				Type:       telemetry.EventToolFinished,
+				ToolCallID: call.ID,
+				TargetID:   targetResolution.TargetID,
+				Payload:    payload,
+			})
 			toolOutcomes = append(toolOutcomes, outcome)
 			observedCalls = append(observedCalls, memory.ObservedToolCall{
 				ToolName:     call.Function.Name,
@@ -438,6 +508,41 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	}
 
 	return output, phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("agent exceeded max iterations (%d) without completing the task", a.opts.MaxIterations)
+}
+
+func (a *Agent) withRunTelemetry(ctx context.Context) context.Context {
+	if a == nil || a.opts.TelemetryWriter == nil {
+		return ctx
+	}
+	runID, err := newRunCorrelationID()
+	if err != nil {
+		return telemetry.WithWriter(ctx, a.opts.TelemetryWriter)
+	}
+	ctx = telemetry.WithWriter(ctx, a.opts.TelemetryWriter)
+	return telemetry.WithFields(ctx, telemetry.Fields{RunID: runID, JobID: scheduledJobIDFromContext(ctx)})
+}
+
+func (a *Agent) persistBlockedWork(ctx context.Context, prompt string, taskClass core.TaskClass, target memory.TargetResolution, messages []provider.Message, call provider.ToolCall, approvalErr tools.ApprovalRequiredError) (string, error) {
+	if a.opts.BlockedWorkStore == nil {
+		return "", nil
+	}
+	snapshot, _ := json.Marshal(messages)
+	continuation, _ := json.Marshal(map[string]any{
+		"target":    target,
+		"tool_call": call,
+	})
+	work := state.BlockedWork{
+		Task:                   prompt,
+		TaskClass:              taskClass,
+		TaskState:              state.TaskStateBlockedWaitingUser,
+		BlockedReason:          approvalErr.Error(),
+		PendingApprovalType:    "shell_command",
+		PendingApprovalPayload: strings.TrimSpace(approvalErr.Request.Command),
+		ConversationSnapshot:   string(snapshot),
+		ContinuationData:       string(continuation),
+		ScheduledJobID:         scheduledJobIDFromContext(ctx),
+	}
+	return a.opts.BlockedWorkStore.SaveBlockedWork(ctx, work)
 }
 
 func (a *Agent) runCurationPhase(ctx context.Context, prompt string, taskClass core.TaskClass, output string, tools []state.ToolOutcome, execErr error) (core.RoutingSelection, state.PhaseRecord, []memory.Lesson, error) {
@@ -516,13 +621,17 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 
 	req := &provider.ChatRequest{
 		Model: selection.Requested.Model,
-		Messages: append(initialSystemMessages(retrieved, ""), provider.Message{
-			Role:    "user",
-			Content: userPrompt,
-		}),
+		Messages: func() []provider.Message {
+			volatile := []provider.Message{{Role: "user", Content: userPrompt}}
+			plan := buildPromptPlan(retrieved, "", volatile, nil)
+			return append(append([]provider.Message(nil), plan.SystemMessages...), volatile...)
+		}(),
 		Temperature: 0.1,
 		MaxTokens:   minInt(a.opts.MaxTokens, 1024),
 	}
+	singlePlan := buildPromptPlan(retrieved, "", []provider.Message{{Role: "user", Content: userPrompt}}, nil)
+	singlePlan.PromptHash = hashJSON([]any{req.Messages, req.Tools})
+	emitPromptPlanned(ctx, phase, 0, selection.Requested.Provider, selection.Requested.Model, singlePlan, len(req.Messages))
 	dump := a.dumpPrompt(ctx, promptdump.Metadata{
 		Phase:     phase,
 		Provider:  selection.Requested.Provider,
@@ -543,6 +652,7 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 	resp, err := p.ChatCompletion(ctx, req)
 	a.finishPromptDump(dump, resp, err)
 	record.LatencyMs = time.Since(start).Milliseconds()
+	emitModelCallCompleted(ctx, phase, 0, selection.Requested.Provider, selection.Requested.Model, resp, record.LatencyMs, err)
 	if err != nil {
 		return "", record, "", err
 	}
@@ -595,11 +705,18 @@ If you encounter an error using a tool, read the error message carefully and try
 			RuntimeHostSummary: hostSummary,
 			Sources: []memory.InjectionSource{
 				{Name: "built-in rules", Origin: "harness fallback", Chars: len([]rune(rules)), Preview: compactMemoryPreview(rules)},
-				{Name: memory.HostFile, Origin: "runtime host summary", Chars: len([]rune(hostSummary)), Preview: compactMemoryPreview(hostSummary)},
+				{Name: memory.TargetsFile, Origin: "runtime host summary", Chars: len([]rune(hostSummary)), Preview: compactMemoryPreview(hostSummary)},
 			},
 		}, nil
 	}
 	return a.opts.MemoryRetriever.Retrieve(ctx, input)
+}
+
+func (a *Agent) toolDefinitionsForTask(taskClass core.TaskClass, task string) []provider.ToolDef {
+	if a == nil || a.opts.ToolRegistry == nil {
+		return nil
+	}
+	return a.opts.ToolRegistry.DefinitionsForTask(taskClass, task)
 }
 
 func emitMemoryInjection(ctx context.Context, phase core.Phase, retrieved memory.RetrievalResult) {
@@ -626,6 +743,16 @@ func emitMemoryInjection(ctx context.Context, phase core.Phase, retrieved memory
 		Type:   tools.EventMemoryInjected,
 		Output: summary,
 	})
+	payload, _ := json.Marshal(map[string]any{
+		"sections": len(sources),
+		"chars":    total,
+		"summary":  summary,
+	})
+	_ = telemetry.Record(telemetry.WithFields(ctx, telemetry.Fields{Phase: string(phase)}), telemetry.Event{
+		Type:    telemetry.EventMemoryRetrieved,
+		Phase:   string(phase),
+		Payload: payload,
+	})
 }
 
 func memorySourcesFromResult(result memory.RetrievalResult) []memory.InjectionSource {
@@ -635,9 +762,8 @@ func memorySourcesFromResult(result memory.RetrievalResult) []memory.InjectionSo
 		text   string
 	}{
 		{name: "built-in rules", origin: "harness", text: result.BuiltInRules},
-		{name: memory.OperatorFile, origin: "memory file", text: result.Operator},
-		{name: memory.SoulFile, origin: "memory file", text: result.Soul},
-		{name: memory.HostFile, origin: "runtime host summary", text: result.RuntimeHostSummary},
+		{name: memory.GuidanceFile, origin: "memory file", text: result.Guidance},
+		{name: memory.TargetsFile, origin: "runtime host summary", text: result.RuntimeHostSummary},
 		{name: memory.TargetsFile, origin: "target summary", text: result.TargetSummary},
 		{name: memory.PlaybooksFile, origin: "playbook match", text: result.PlaybookBrief},
 		{name: memory.CautionsFile, origin: "caution match", text: result.CautionBrief},
@@ -666,29 +792,6 @@ func compactMemoryPreview(text string) string {
 		return text
 	}
 	return strings.TrimSpace(string(runes[:159])) + "…"
-}
-
-func initialSystemMessages(retrieved memory.RetrievalResult, planningNotes string) []provider.Message {
-	var parts []string
-	if strings.TrimSpace(retrieved.BuiltInRules) != "" {
-		parts = append(parts, strings.TrimSpace(retrieved.BuiltInRules))
-	}
-	if strings.TrimSpace(retrieved.Operator) != "" {
-		parts = append(parts, strings.TrimSpace(retrieved.Operator))
-	}
-	if strings.TrimSpace(retrieved.Soul) != "" {
-		parts = append(parts, strings.TrimSpace(retrieved.Soul))
-	}
-	if text := retrievedBrief(retrieved); strings.TrimSpace(text) != "" {
-		parts = append(parts, text)
-	}
-	if strings.TrimSpace(planningNotes) != "" {
-		parts = append(parts, "Planning notes:\n"+strings.TrimSpace(planningNotes))
-	}
-	if len(parts) == 0 {
-		return nil
-	}
-	return []provider.Message{{Role: "system", Content: strings.Join(parts, "\n\n")}}
 }
 
 func (a *Agent) resolveProvider(providerName string) (provider.Provider, error) {

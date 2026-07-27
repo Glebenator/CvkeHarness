@@ -9,6 +9,7 @@ import (
 
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/promptdump"
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/state"
@@ -96,6 +97,11 @@ func (a *Agent) verifyCompletion(ctx context.Context, selection core.RoutingSele
 		Temperature: 0,
 		MaxTokens:   minInt(a.opts.MaxTokens, 1024),
 	}
+	verificationPlan := promptPlan{
+		PrefixHash: hashJSON([]any{req.Messages[:1]}),
+		PromptHash: hashJSON([]any{req.Messages, req.Tools}),
+	}
+	emitPromptPlanned(ctx, core.PhaseVerification, 0, selection.Requested.Provider, selection.Requested.Model, verificationPlan, len(req.Messages))
 	dump := a.dumpPrompt(ctx, promptdump.Metadata{
 		Phase:     core.PhaseVerification,
 		Provider:  selection.Requested.Provider,
@@ -134,6 +140,26 @@ func (a *Agent) verifyCompletion(ctx context.Context, selection core.RoutingSele
 		}
 	}
 	record.Success = decision.satisfied()
+	payload, _ := json.Marshal(map[string]any{
+		"status":             decision.Status,
+		"reason":             decision.Reason,
+		"missing_actions":    decision.MissingActions,
+		"repair_triggered":   decision.RepairTriggered,
+		"malformed_response": decision.MalformedVerifierJSON,
+	})
+	_ = telemetry.Record(telemetry.WithFields(ctx, telemetry.Fields{
+		Phase:          string(core.PhaseVerification),
+		Provider:       selection.Requested.Provider,
+		RequestedModel: selection.Requested.Model,
+		ActualModel:    record.ActualModel,
+	}), telemetry.Event{
+		Type:           telemetry.EventVerificationCompleted,
+		Phase:          string(core.PhaseVerification),
+		Provider:       selection.Requested.Provider,
+		RequestedModel: selection.Requested.Model,
+		ActualModel:    record.ActualModel,
+		Payload:        payload,
+	})
 	return decision, record, nil
 }
 

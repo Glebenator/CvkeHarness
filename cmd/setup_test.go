@@ -360,7 +360,7 @@ func TestSettingsMenuEntriesReflectOpenAIProvider(t *testing.T) {
 	}
 }
 
-func TestSoulSummaryTracksBootstrapState(t *testing.T) {
+func TestSoulSummaryTracksGuidanceBootstrapState(t *testing.T) {
 	t.Parallel()
 
 	memoryDir := t.TempDir()
@@ -368,22 +368,22 @@ func TestSoulSummaryTracksBootstrapState(t *testing.T) {
 
 	summary, editable := soulSummary(&config.Config{MemoryDir: memoryDir}, profile)
 	if !editable {
-		t.Fatal("expected missing soul file to be editable")
+		t.Fatal("expected missing guidance file to be editable")
 	}
 	if !strings.Contains(summary, "Mentor") {
 		t.Fatalf("expected bootstrap summary to mention profile, got %q", summary)
 	}
 
-	if err := os.WriteFile(filepath.Join(memoryDir, "soul.md"), []byte("# existing soul"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(memoryDir, "guidance.md"), []byte("# existing guidance"), 0644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
 	summary, editable = soulSummary(&config.Config{MemoryDir: memoryDir}, profile)
 	if editable {
-		t.Fatal("expected existing soul file to be preserved")
+		t.Fatal("expected existing guidance file to be preserved")
 	}
-	if summary != "Existing soul.md is preserved" {
-		t.Fatalf("unexpected preserved soul summary %q", summary)
+	if summary != "Existing guidance.md is preserved" {
+		t.Fatalf("unexpected preserved guidance summary %q", summary)
 	}
 }
 

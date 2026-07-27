@@ -1323,7 +1323,7 @@ func wizardLogLevel(cfg *config.Config) bool {
 
 func wizardSoulProfile(cfg *config.Config, profile *soulProfile) bool {
 	renderHeader()
-	renderStep(9, totalSteps, "Agent Soul")
+	renderStep(9, totalSteps, "Guidance")
 
 	needsBootstrap, err := soulBootstrapRequired(cfg.MemoryDir)
 	if err != nil {
@@ -1332,16 +1332,16 @@ func wizardSoulProfile(cfg *config.Config, profile *soulProfile) bool {
 	}
 
 	if !needsBootstrap {
-		fmt.Printf("  %sAn existing %s will be preserved.%s\n", fgGray, fgAccent+ansiBold+"soul.md"+ansiReset+fgGray, ansiReset)
-		fmt.Printf("  %sSetup will still ensure the other memory files exist, but it will not overwrite your current soul.%s\n\n", fgMuted+ansiDim, ansiReset)
+		fmt.Printf("  %sAn existing %s will be preserved.%s\n", fgGray, fgAccent+ansiBold+"guidance.md"+ansiReset+fgGray, ansiReset)
+		fmt.Printf("  %sSetup will still ensure the other memory files exist, but it will not overwrite your current guidance.%s\n\n", fgMuted+ansiDim, ansiReset)
 
 		choices := [][2]string{
-			{"Keep existing soul.md", "User-owned file preserved as-is"},
+			{"Keep existing guidance.md", "User-owned file preserved as-is"},
 		}
 		return selectList(choices, 0, true) != goBack
 	}
 
-	fmt.Printf("  %sChoose the starting voice and working style for the generated %s.%s\n", fgGray, fgAccent+ansiBold+"soul.md"+ansiReset+fgGray, ansiReset)
+	fmt.Printf("  %sChoose the starting voice and working style for the generated %s.%s\n", fgGray, fgAccent+ansiBold+"guidance.md"+ansiReset+fgGray, ansiReset)
 	fmt.Printf("  %sThis mainly tunes tone, autonomy, risk posture, and explanation depth.%s\n\n", fgMuted+ansiDim, ansiReset)
 
 	idx := selectList(soulProfileItems(), soulProfileIndexByID(profile.ID), true)
@@ -1360,11 +1360,11 @@ func wizardMachineNotes(cfg *config.Config, notes *[]string) bool {
 	existingNotes, err := loadSetupHostNotes(cfg.MemoryDir)
 	if err == nil && len(existingNotes) > 0 {
 		*notes = existingNotes
-		fmt.Printf("  %sExisting runtime-host notes were found in %s and will be preserved.%s\n", fgGray, fgAccent+ansiBold+"host.md"+ansiReset+fgGray, ansiReset)
+		fmt.Printf("  %sExisting runtime-host notes were found in %s and will be preserved.%s\n", fgGray, fgAccent+ansiBold+"guidance.md"+ansiReset+fgGray, ansiReset)
 		fmt.Printf("  %sThese notes already participate in the runtime-host summary, so setup will leave them alone.%s\n\n", fgMuted+ansiDim, ansiReset)
 
 		choices := [][2]string{
-			{"Keep existing host.md notes", "Preserve the current machine guidance"},
+			{"Keep existing guidance notes", "Preserve the current machine guidance"},
 		}
 		return selectList(choices, 0, true) != goBack
 	}
@@ -1373,8 +1373,8 @@ func wizardMachineNotes(cfg *config.Config, notes *[]string) bool {
 	fmt.Printf("  %sExamples: Docker requires sudo, Homebrew lives in /opt/homebrew, VPN/DNS rewrites hostnames, or services are managed in a nonstandard way.%s\n\n", fgMuted+ansiDim, ansiReset)
 
 	choices := [][2]string{
-		{"Add machine notes", "Write operator-authored quirks into host.md and include them in runtime-host retrieval"},
-		{"Skip for now", "Leave host.md facts-only; you can edit it later"},
+		{"Add machine notes", "Write operator-authored quirks into guidance.md"},
+		{"Skip for now", "Leave guidance.md unchanged; you can edit it later"},
 	}
 	initial := 1
 	if len(*notes) > 0 {
@@ -1411,7 +1411,7 @@ func wizardConfirm(cfg *config.Config, profile soulProfile, hostNotes []string) 
 
 	renderReview(cfg)
 	fmt.Println()
-	fmt.Printf("  %sSoul profile:%s  %s%s%s\n\n", fgMuted, ansiReset, ansiBold, fgWhite, profile.Label+ansiReset)
+	fmt.Printf("  %sGuidance profile:%s  %s%s%s\n\n", fgMuted, ansiReset, ansiBold, fgWhite, profile.Label+ansiReset)
 	if len(hostNotes) > 0 {
 		fmt.Printf("  %sRuntime host notes:%s  %s%s%s\n\n", fgMuted, ansiReset, ansiBold, fgWhite, summarizeReviewNotes(hostNotes, 92)+ansiReset)
 	}
@@ -1610,10 +1610,10 @@ func routingSummary(cfg *config.Config) string {
 func soulSummary(cfg *config.Config, profile soulProfile) (string, bool) {
 	needsBootstrap, err := soulBootstrapRequired(cfg.MemoryDir)
 	if err != nil {
-		return "Soul file needs review", true
+		return "Guidance file needs review", true
 	}
 	if !needsBootstrap {
-		return "Existing soul.md is preserved", false
+		return "Existing guidance.md is preserved", false
 	}
 	return "Bootstrap with " + profile.Label + " profile", true
 }
@@ -1664,7 +1664,7 @@ func settingsMenuEntries(cfg *config.Config, profile soulProfile) []settingsMenu
 
 	if summary, editable := soulSummary(cfg, profile); editable {
 		entries = append(entries, settingsMenuEntry{
-			Label:       "Agent Soul",
+			Label:       "Guidance",
 			Description: summary,
 			Action:      settingsEditSoul,
 		})
@@ -1798,7 +1798,7 @@ func reviewSettingsChanges(cfg *config.Config, profile soulProfile, dirty bool) 
 	fmt.Println()
 
 	if summary, editable := soulSummary(cfg, profile); editable {
-		fmt.Printf("  %sSoul:%s  %s%s%s\n\n", fgMuted, ansiReset, ansiBold, fgWhite, summary+ansiReset)
+		fmt.Printf("  %sGuidance:%s  %s%s%s\n\n", fgMuted, ansiReset, ansiBold, fgWhite, summary+ansiReset)
 	}
 
 	choices := [][2]string{
@@ -1867,9 +1867,6 @@ func loadWizardConfig() *config.Config {
 	}
 	if existingCfg.StateDBPath != "" {
 		cfg.StateDBPath = existingCfg.StateDBPath
-	}
-	if existingCfg.MemoryMaxSnippets > 0 {
-		cfg.MemoryMaxSnippets = existingCfg.MemoryMaxSnippets
 	}
 	if existingCfg.RoutingMinConfidence > 0 {
 		cfg.RoutingMinConfidence = existingCfg.RoutingMinConfidence
@@ -1943,13 +1940,13 @@ func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProf
 		os.Exit(1)
 	}
 
-	wroteSoul, err := writeSetupSoul(cfg.MemoryDir, cfg.MemoryMaxSnippets, selectedSoulProfile)
+	wroteSoul, err := writeSetupSoul(cfg.MemoryDir, selectedSoulProfile)
 	if err != nil {
 		fmt.Printf("\n  %s%s✗  Failed to prepare memory files: %v%s\n\n",
 			ansiBold, fgRed, err, ansiReset)
 		os.Exit(1)
 	}
-	hostNotesStatus, err := writeSetupHostNotes(cfg.MemoryDir, cfg.MemoryMaxSnippets, hostNotes)
+	hostNotesStatus, err := writeSetupHostNotes(cfg.MemoryDir, hostNotes)
 	if err != nil {
 		fmt.Printf("\n  %s%s✗  Failed to update runtime host notes: %v%s\n\n",
 			ansiBold, fgRed, err, ansiReset)
@@ -1976,13 +1973,13 @@ func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProf
 	fmt.Printf("  %s%s  cvkeharness run \"list all running docker containers\"%s\n\n",
 		ansiBold, fgAccent, ansiReset)
 	if wroteSoul {
-		fmt.Printf("  %s%s generated %s~/.cvkeharness/soul.md%s and prepared the structured memory files in %s~/.cvkeharness/%s: operator.md, targets.md, host.md, playbooks.md, findings.md, cautions.md.%s\n",
+		fmt.Printf("  %s%s generated %s~/.cvkeharness/guidance.md%s and prepared the structured memory files in %s~/.cvkeharness/%s: targets.md, playbooks.md, findings.md, cautions.md.%s\n",
 			fgGray, actionLabel,
 			fgAccent+ansiBold, ansiReset+fgGray,
 			fgAccent+ansiBold, ansiReset+fgGray,
 			ansiReset)
 	} else {
-		fmt.Printf("  %s%s preserved your existing %s~/.cvkeharness/soul.md%s and confirmed the structured memory files in %s~/.cvkeharness/%s: operator.md, targets.md, host.md, playbooks.md, findings.md, cautions.md.%s\n",
+		fmt.Printf("  %s%s preserved your existing %s~/.cvkeharness/guidance.md%s and confirmed the structured memory files in %s~/.cvkeharness/%s: targets.md, playbooks.md, findings.md, cautions.md.%s\n",
 			fgGray, actionLabel,
 			fgAccent+ansiBold, ansiReset+fgGray,
 			fgAccent+ansiBold, ansiReset+fgGray,
@@ -1992,10 +1989,10 @@ func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProf
 		fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
 	switch hostNotesStatus {
 	case setupHostNotesWritten:
-		fmt.Printf("  %sSaved your runtime-host notes into %s~/.cvkeharness/host.md%s so machine quirks are part of retrieval from the first run.%s\n\n",
+		fmt.Printf("  %sSaved your runtime-host notes into %s~/.cvkeharness/guidance.md%s.%s\n\n",
 			fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
 	case setupHostNotesPreserved:
-		fmt.Printf("  %sPreserved the existing runtime-host notes in %s~/.cvkeharness/host.md%s.%s\n\n",
+		fmt.Printf("  %sPreserved the existing runtime-host notes in %s~/.cvkeharness/guidance.md%s.%s\n\n",
 			fgGray, fgAccent+ansiBold, ansiReset+fgGray, ansiReset)
 	}
 }
