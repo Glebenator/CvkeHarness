@@ -12,15 +12,16 @@ import (
 
 // DefaultRegistryOptions collects the standard runtime tool dependencies.
 type DefaultRegistryOptions struct {
-	AllowedCommands []string
-	Store           *state.Store
-	Memory          *memory.Manager
-	Judge           provider.Provider
-	SafetyMode      string
-	SafetyModel     string
-	PrimaryModel    string
-	PromptDumper    *promptdump.Dumper
-	WebSearch       WebSearchOptions
+	AllowedCommands      []string
+	Store                *state.Store
+	Memory               *memory.Manager
+	Judge                provider.Provider
+	SafetyMode           string
+	SafetyModel          string
+	PrimaryModel         string
+	PromptDumper         *promptdump.Dumper
+	WebSearch            WebSearchOptions
+	BlockManualApprovals bool
 }
 
 // NewDefaultRegistry creates the standard tool registry used by the CLI.
@@ -66,9 +67,17 @@ func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, erro
 	case "", SafetyModeLLMJudge:
 		approver = NewLLMJudgeApproverWithPromptDumper(opts.Judge, opts.SafetyModel, opts.PromptDumper)
 	case SafetyModeUserConfirm:
-		approver = NewUserPromptApprover(os.Stdin, os.Stdout)
+		if opts.BlockManualApprovals {
+			approver = NewBlockingApprover()
+		} else {
+			approver = NewUserPromptApprover(os.Stdin, os.Stdout)
+		}
 	case SafetyModeUserConfirmAll:
-		approver = NewUserPromptApprover(os.Stdin, os.Stdout)
+		if opts.BlockManualApprovals {
+			approver = NewBlockingApprover()
+		} else {
+			approver = NewUserPromptApprover(os.Stdin, os.Stdout)
+		}
 	}
 
 	var approvedCommands []string

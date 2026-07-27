@@ -16,7 +16,7 @@ func TestEnsureFilesCreatesStructuredMemoryAndStableRuntimeHost(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	manager := NewManager(dir, state.Open(""), 3)
+	manager := NewManager(dir, state.Open(""))
 	manager.hostname = func() string { return "builder.local" }
 
 	if err := manager.EnsureFiles(); err != nil {
@@ -24,10 +24,8 @@ func TestEnsureFilesCreatesStructuredMemoryAndStableRuntimeHost(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		OperatorFile,
-		SoulFile,
+		GuidanceFile,
 		TargetsFile,
-		HostFile,
 		PlaybooksFile,
 		FindingsFile,
 		CautionsFile,
@@ -64,7 +62,7 @@ func TestResolveTargetCreatesProvisionalSSHRecordAndMergesHostname(t *testing.T)
 	store := state.Open(filepath.Join(dir, "state.db"))
 	defer store.Close()
 
-	manager := NewManager(dir, store, 3)
+	manager := NewManager(dir, store)
 	manager.hostname = func() string { return "runtime.local" }
 
 	ctx := context.Background()
@@ -100,6 +98,60 @@ func TestResolveTargetCreatesProvisionalSSHRecordAndMergesHostname(t *testing.T)
 	}
 }
 
+func TestResolveTargetDoesNotCreateTargetsFromFillerProse(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	manager := NewManager(dir, state.Open(""))
+	manager.hostname = func() string { return "runtime.local" }
+
+	resolution, err := manager.ResolveTarget(context.Background(), TargetResolutionInput{
+		Task: "ssh into the container and inspect logs from the service",
+	})
+	if err != nil {
+		t.Fatalf("ResolveTarget returned error: %v", err)
+	}
+	if resolution.TargetID != resolution.RuntimeHostID || resolution.TargetKind != TargetKindRuntime {
+		t.Fatalf("expected filler prose to stay on runtime host, got %#v", resolution)
+	}
+
+	memState, err := manager.loadState(context.Background())
+	if err != nil {
+		t.Fatalf("loadState returned error: %v", err)
+	}
+	if len(memState.Targets) != 1 {
+		t.Fatalf("expected only the runtime target, got %#v", memState.Targets)
+	}
+}
+
+func TestResolveTargetInfersStrongProseSignalsOnly(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	manager := NewManager(dir, state.Open(""))
+	manager.hostname = func() string { return "runtime.local" }
+
+	userHost, err := manager.ResolveTarget(context.Background(), TargetResolutionInput{
+		Task: "inspect root@127.0.0.1 before restarting the service",
+	})
+	if err != nil {
+		t.Fatalf("ResolveTarget user@host returned error: %v", err)
+	}
+	if userHost.TargetID == userHost.RuntimeHostID || userHost.TargetKind != TargetKindSSH {
+		t.Fatalf("expected user@host prose to resolve an ssh target, got %#v", userHost)
+	}
+
+	host, err := manager.ResolveTarget(context.Background(), TargetResolutionInput{
+		Task: "check web-01.internal for the latest logs",
+	})
+	if err != nil {
+		t.Fatalf("ResolveTarget hostname returned error: %v", err)
+	}
+	if host.TargetID == host.RuntimeHostID || host.PrimaryName != "web-01.internal" {
+		t.Fatalf("expected explicit hostname prose to resolve a target, got %#v", host)
+	}
+}
+
 func TestCurateRunOutcomeCreatesDirectUsePlaybook(t *testing.T) {
 	t.Parallel()
 
@@ -107,7 +159,7 @@ func TestCurateRunOutcomeCreatesDirectUsePlaybook(t *testing.T) {
 	store := state.Open(filepath.Join(dir, "state.db"))
 	defer store.Close()
 
-	manager := NewManager(dir, store, 3)
+	manager := NewManager(dir, store)
 	manager.hostname = func() string { return "runtime.local" }
 
 	ctx := context.Background()
@@ -156,7 +208,7 @@ func TestStaleOrFailedPlaybookRendersVerifyFirst(t *testing.T) {
 	store := state.Open(filepath.Join(dir, "state.db"))
 	defer store.Close()
 
-	manager := NewManager(dir, store, 3)
+	manager := NewManager(dir, store)
 	manager.hostname = func() string { return "runtime.local" }
 
 	ctx := context.Background()
@@ -232,31 +284,55 @@ func TestStaleOrFailedPlaybookRendersVerifyFirst(t *testing.T) {
 	}
 }
 
-func TestLegacyMemoryImportsIntoFindingsNeedsCuration(t *testing.T) {
+func TestCurateRunOutcomeDoesNotCreateFindingsFromAssistantSummary(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, LegacyMemoryFile), []byte("# Memory\n\n- Old durable note\n"), 0644); err != nil {
-		t.Fatalf("WriteFile returned error: %v", err)
-	}
-
-	manager := NewManager(dir, state.Open(""), 3)
+	manager := NewManager(dir, state.Open(""))
 	manager.hostname = func() string { return "runtime.local" }
 
-	if err := manager.EnsureFiles(); err != nil {
-		t.Fatalf("EnsureFiles returned error: %v", err)
+	if err := manager.CurateRunOutcome(context.Background(), RunOutcome{
+		Task:   "summarize the current state",
+		Output: "Everything looks healthy and no action is required.",
+	}); err != nil {
+		t.Fatalf("CurateRunOutcome returned error: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, FindingsFile))
+	memState, err := manager.loadState(context.Background())
 	if err != nil {
-		t.Fatalf("ReadFile returned error: %v", err)
+		t.Fatalf("loadState returned error: %v", err)
 	}
-	content := string(data)
-	if !strings.Contains(content, "origin: legacy_memory") {
-		t.Fatalf("expected legacy import origin metadata, got %q", content)
+	if len(memState.Findings) != 0 {
+		t.Fatalf("expected no automatic findings from assistant output, got %#v", memState.Findings)
 	}
-	if !strings.Contains(content, "status: needs_curation") {
-		t.Fatalf("expected needs_curation status, got %q", content)
+}
+
+func TestCompileGuidanceMarkdownProducesCompactDirectives(t *testing.T) {
+	t.Parallel()
+
+	got := compileGuidanceMarkdown(`# Guidance
+
+Stable prose paragraph that should be preserved compactly.
+
+## Rules
+
+1. Confirm before mutating the system.
+2. Verify after action.
+
+- Keep findings manual.
+`)
+	for _, want := range []string{
+		"- Stable prose paragraph that should be preserved compactly.",
+		"- Confirm before mutating the system.",
+		"- Verify after action.",
+		"- Keep findings manual.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected compiled guidance to contain %q, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "# Guidance") || strings.Contains(got, "## Rules") {
+		t.Fatalf("expected headings to be removed from compiled guidance, got:\n%s", got)
 	}
 }
 
@@ -264,7 +340,7 @@ func TestFileFallbackWorksWithoutSQLite(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	manager := NewManager(dir, state.Open(""), 3)
+	manager := NewManager(dir, state.Open(""))
 	manager.hostname = func() string { return "runtime.local" }
 
 	ctx := context.Background()
@@ -301,38 +377,29 @@ func TestFileFallbackWorksWithoutSQLite(t *testing.T) {
 	}
 }
 
-func TestSeedRuntimeHostNotesRoundTripsThroughStoreAndRetrieval(t *testing.T) {
+func TestRuntimeHostLivesInsideTargetsFileAndRetrieval(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	store := state.Open(filepath.Join(dir, "state.db"))
 	defer store.Close()
 
-	manager := NewManager(dir, store, 3)
+	manager := NewManager(dir, store)
 	manager.hostname = func() string { return "builder.local" }
 
-	ctx := context.Background()
 	if err := manager.EnsureFiles(); err != nil {
 		t.Fatalf("EnsureFiles returned error: %v", err)
 	}
-
-	wrote, err := manager.SeedRuntimeHostNotes(ctx, []string{
-		"Docker requires sudo",
-		"Homebrew lives in /opt/homebrew",
-	})
-	if err != nil {
-		t.Fatalf("SeedRuntimeHostNotes returned error: %v", err)
-	}
-	if !wrote {
-		t.Fatal("expected SeedRuntimeHostNotes to write the initial notes")
-	}
-
+	ctx := context.Background()
 	memState, err := manager.loadState(ctx)
 	if err != nil {
 		t.Fatalf("loadState returned error: %v", err)
 	}
-	if len(memState.RuntimeHostNotes) != 2 {
-		t.Fatalf("expected two runtime host notes after store round-trip, got %d", len(memState.RuntimeHostNotes))
+	if memState.RuntimeHostID == "" {
+		t.Fatal("expected runtime host id to be present")
+	}
+	if len(memState.Targets) == 0 || memState.Targets[0].Target.Kind != TargetKindRuntime {
+		t.Fatalf("expected runtime host target in targets state, got %#v", memState.Targets)
 	}
 
 	retrieved, err := manager.Retrieve(ctx, core.RetrievalContext{
@@ -344,14 +411,8 @@ func TestSeedRuntimeHostNotesRoundTripsThroughStoreAndRetrieval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Retrieve returned error: %v", err)
 	}
-	if !strings.Contains(retrieved.RuntimeHostSummary, "quirks:") {
-		t.Fatalf("expected runtime host summary to include machine quirks, got %q", retrieved.RuntimeHostSummary)
-	}
-	if !strings.Contains(retrieved.RuntimeHostSummary, "Docker requires sudo") {
-		t.Fatalf("expected runtime host summary to include Docker note, got %q", retrieved.RuntimeHostSummary)
-	}
-	if !strings.Contains(retrieved.RuntimeHostSummary, "Homebrew lives in /opt/homebrew") {
-		t.Fatalf("expected runtime host summary to include Homebrew note, got %q", retrieved.RuntimeHostSummary)
+	if !strings.Contains(retrieved.RuntimeHostSummary, "builder.local") {
+		t.Fatalf("expected runtime host summary to come from the runtime target, got %q", retrieved.RuntimeHostSummary)
 	}
 }
 
@@ -463,7 +524,7 @@ func TestCurateRunOutcomeSkipsWebOnlyFindings(t *testing.T) {
 	store := state.Open(filepath.Join(dir, "state.db"))
 	defer store.Close()
 
-	manager := NewManager(dir, store, 3)
+	manager := NewManager(dir, store)
 	manager.hostname = func() string { return "runtime.local" }
 
 	ctx := context.Background()
@@ -500,7 +561,7 @@ func TestRollbackRestoresFindingsAndReindexes(t *testing.T) {
 	store := state.Open(filepath.Join(dir, "state.db"))
 	defer store.Close()
 
-	manager := NewManager(dir, store, 3)
+	manager := NewManager(dir, store)
 	manager.hostname = func() string { return "runtime.local" }
 
 	ctx := context.Background()

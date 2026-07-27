@@ -11,14 +11,11 @@ import (
 )
 
 const (
-	OperatorFile     = "operator.md"
-	SoulFile         = "soul.md"
-	TargetsFile      = "targets.md"
-	HostFile         = "host.md"
-	PlaybooksFile    = "playbooks.md"
-	FindingsFile     = "findings.md"
-	CautionsFile     = "cautions.md"
-	LegacyMemoryFile = "memory.md"
+	GuidanceFile  = "guidance.md"
+	TargetsFile   = "targets.md"
+	PlaybooksFile = "playbooks.md"
+	FindingsFile  = "findings.md"
+	CautionsFile  = "cautions.md"
 )
 
 const (
@@ -46,8 +43,7 @@ const (
 // RetrievalResult contains the compact prompt-ready memory brief.
 type RetrievalResult struct {
 	BuiltInRules       string
-	Operator           string
-	Soul               string
+	Guidance           string
 	RuntimeHostSummary string
 	TargetSummary      string
 	PlaybookBrief      string
@@ -114,13 +110,11 @@ type RunOutcome struct {
 }
 
 type fileState struct {
-	Targets          []targetRecord
-	RuntimeHostID    string
-	RuntimeHostFacts []state.HostFact
-	RuntimeHostNotes []string
-	Playbooks        []state.Playbook
-	Findings         []state.Finding
-	Cautions         []state.Caution
+	Targets       []targetRecord
+	RuntimeHostID string
+	Playbooks     []state.Playbook
+	Findings      []state.Finding
+	Cautions      []state.Caution
 }
 
 type targetRecord struct {
@@ -133,22 +127,17 @@ type targetRecord struct {
 
 // Manager handles target-aware readable memory files plus structured state.
 type Manager struct {
-	dir         string
-	store       *state.Store
-	maxSnippets int
-	now         func() time.Time
-	hostname    func() string
+	dir      string
+	store    *state.Store
+	now      func() time.Time
+	hostname func() string
 }
 
 // NewManager creates a new memory manager.
-func NewManager(dir string, store *state.Store, maxSnippets int) *Manager {
-	if maxSnippets <= 0 {
-		maxSnippets = 3
-	}
+func NewManager(dir string, store *state.Store) *Manager {
 	return &Manager{
-		dir:         dir,
-		store:       store,
-		maxSnippets: maxSnippets,
+		dir:   dir,
+		store: store,
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
@@ -172,11 +161,11 @@ func (m *Manager) managedPath(name string) string {
 }
 
 func structuredManagedFiles() []string {
-	return []string{TargetsFile, HostFile, PlaybooksFile, FindingsFile, CautionsFile}
+	return []string{TargetsFile, PlaybooksFile, FindingsFile, CautionsFile}
 }
 
 func allManagedFiles() []string {
-	return []string{OperatorFile, SoulFile, TargetsFile, HostFile, PlaybooksFile, FindingsFile, CautionsFile}
+	return []string{GuidanceFile, TargetsFile, PlaybooksFile, FindingsFile, CautionsFile}
 }
 
 func (m *Manager) loadState(ctx context.Context) (fileState, error) {

@@ -65,7 +65,7 @@ var stepLabels = map[step]string{
 	stepCapabilities:    "Capabilities",
 	stepWebSearch:       "Web Search",
 	stepRecommendations: "Guided Review",
-	stepSoul:            "Agent Soul",
+	stepSoul:            "Guidance",
 	stepNotes:           "Machine Notes",
 	stepReview:          "Review",
 }

@@ -14,7 +14,8 @@ import (
 // ── messages ────────────────────────────────────────────────────────
 
 type jobsDataMsg struct {
-	jobs []state.ScheduledJob
+	jobs   []state.ScheduledJob
+	health []state.SchedulerHealth
 }
 
 type jobRunsDataMsg struct {
@@ -62,11 +63,12 @@ var createStepLabels = [createStepCount]string{
 // ── tab model ───────────────────────────────────────────────────────
 
 type jobsTab struct {
-	jobs    []state.ScheduledJob
-	cursor  int
-	mode    jobsMode
-	loaded  bool
-	message string // Transient feedback message
+	jobs        []state.ScheduledJob
+	healthByJob map[string]state.SchedulerHealth
+	cursor      int
+	mode        jobsMode
+	loaded      bool
+	message     string // Transient feedback message
 
 	// Detail mode
 	detailRuns   []state.ScheduledJobRun
@@ -143,6 +145,10 @@ func (t *jobsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 	switch msg := msg.(type) {
 	case jobsDataMsg:
 		t.jobs = msg.jobs
+		t.healthByJob = make(map[string]state.SchedulerHealth, len(msg.health))
+		for _, item := range msg.health {
+			t.healthByJob[item.JobID] = item
+		}
 		t.loaded = true
 		if t.cursor >= len(t.jobs) && len(t.jobs) > 0 {
 			t.cursor = len(t.jobs) - 1
@@ -488,9 +494,16 @@ func (t *jobsTab) renderJobRow(job state.ScheduledJob, col, nameCol int, selecte
 	name := padRight(truncate(job.Name, nameCol), nameCol)
 	sched := padRight(truncate(job.ScheduleKind+" "+job.ScheduleSpec, 22), 22)
 
+	health := t.healthByJob[job.ID]
 	status := styleMuted.Render(padRight("—", 10))
 	if !job.Enabled {
 		status = styleWarning.Render(padRight("paused", 10))
+	} else if job.Blocked || health.Blocked {
+		status = styleWarning.Render(padRight("blocked", 10))
+	} else if health.Overdue {
+		status = styleError.Render(padRight("overdue", 10))
+	} else if health.StaleClaim {
+		status = styleError.Render(padRight("stale", 10))
 	} else {
 		status = styleSuccess.Render(padRight("active", 10))
 	}
@@ -523,6 +536,17 @@ func (t *jobsTab) viewDetail(width, height int) string {
 		return styleWarning.Render("paused")
 	}()))
 	lines = append(lines, "  "+renderKeyValue("Next Run", fmtTime(job.NextRunAt)))
+	if health, ok := t.healthByJob[job.ID]; ok {
+		lastStatus := health.LastStatus
+		if lastStatus == "" {
+			lastStatus = "—"
+		}
+		lines = append(lines, "  "+renderKeyValue("Last Run Status", lastStatus))
+		lines = append(lines, "  "+renderKeyValue("Blocked", fmt.Sprintf("%t", health.Blocked)))
+		lines = append(lines, "  "+renderKeyValue("Overdue", fmt.Sprintf("%t", health.Overdue)))
+		lines = append(lines, "  "+renderKeyValue("Claim", schedulerClaimSummary(health)))
+		lines = append(lines, "  "+renderKeyValue("Heartbeat", schedulerHeartbeatSummary(health)))
+	}
 	lines = append(lines, "  "+renderKeyValue("Prompt", truncate(job.Prompt, width-22)))
 	lines = append(lines, "")
 	lines = append(lines, "  "+styleSectionTitle.Render("Run History"))
@@ -564,6 +588,28 @@ func (t *jobsTab) viewDetail(width, height int) string {
 	}
 
 	return header + b.String()
+}
+
+func schedulerClaimSummary(health state.SchedulerHealth) string {
+	switch {
+	case health.StaleClaim:
+		return "stale"
+	case health.Claimed:
+		return "active"
+	default:
+		return "none"
+	}
+}
+
+func schedulerHeartbeatSummary(health state.SchedulerHealth) string {
+	if health.LastHeartbeatAt.IsZero() {
+		return "none"
+	}
+	freshness := "stale"
+	if health.HeartbeatFresh {
+		freshness = "fresh"
+	}
+	return fmt.Sprintf("%s (%s)", fmtTime(health.LastHeartbeatAt), freshness)
 }
 
 // ── create wizard view ──────────────────────────────────────────────

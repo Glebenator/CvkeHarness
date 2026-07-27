@@ -456,8 +456,6 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	cmdStr := strings.TrimSpace(parsedArgs.Command)
 
 	start := time.Now()
-	approvedByJudge := false
-	approvedByUser := false
 	approvalMode := "allowlist"
 	historyNote := ""
 	exitCode := 0
@@ -483,34 +481,6 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		}()
 	}
 
-	defer func() {
-		model := telemetry.ModelFromContext(ctx)
-		if model == "" {
-			model = s.primaryModel
-		}
-
-		baseCmd := "unknown"
-		if parsed, err := ParseShellCommand(cmdStr); err == nil && len(parsed.Segments) > 0 {
-			fields := strings.Fields(parsed.Segments[0].Command)
-			if len(fields) > 0 {
-				baseCmd = fields[0]
-			}
-		}
-
-		_ = telemetry.RecordEvent(telemetry.TelemetryEvent{
-			Timestamp:       start.UTC(),
-			Model:           model,
-			ToolName:        "shell_execute",
-			BaseCommand:     baseCmd,
-			FullCommand:     cmdStr,
-			ApprovedByJudge: approvedByJudge,
-			ApprovedByUser:  approvedByUser,
-			ApprovalMode:    approvalMode,
-			Success:         execErr == nil,
-			DurationMs:      time.Since(start).Milliseconds(),
-		})
-	}()
-
 	parsedCommand, err := ParseShellCommand(cmdStr)
 	if err != nil {
 		return "", fmt.Errorf("security violation: %w", err)
@@ -527,6 +497,15 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 			validationMessage = err.Error()
 		}
 		logger.Warn("command not in auto-approved command list, asking approval gate", "command", cmdStr)
+		payload, _ := json.Marshal(map[string]any{
+			"tool_name": "shell_execute",
+			"command":   cmdStr,
+			"reason":    validationMessage,
+		})
+		_ = telemetry.Record(ctx, telemetry.Event{
+			Type:    telemetry.EventApprovalRequested,
+			Payload: payload,
+		})
 		if s.approver == nil {
 			if err != nil {
 				return "", fmt.Errorf("security violation: %w (and no approval path is configured)", err)
@@ -543,8 +522,6 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		}
 		approvalMode = decision.Mode
 		historyNote = strings.TrimSpace(decision.HistoryNote)
-		approvedByJudge = decision.Mode == SafetyModeLLMJudge
-		approvedByUser = decision.Mode == SafetyModeUserConfirm || decision.Mode == SafetyModeUserConfirmAll
 		logger.Info("command approved by secondary gate", "command", cmdStr, "mode", decision.Mode, "remember", decision.Remember)
 		if decision.Remember && !s.approvalRequired {
 			s.rememberApprovedSegments(ctx, parsedCommand, decision)
@@ -555,6 +532,15 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		Command:      cmdStr,
 		ApprovalMode: approvalMode,
 		Success:      true,
+	})
+	payload, _ := json.Marshal(map[string]any{
+		"tool_name":     "shell_execute",
+		"command":       cmdStr,
+		"approval_mode": approvalMode,
+	})
+	_ = telemetry.Record(ctx, telemetry.Event{
+		Type:    telemetry.EventApprovalResolved,
+		Payload: payload,
 	})
 
 	logger.Info("executing shell command", "command", cmdStr)

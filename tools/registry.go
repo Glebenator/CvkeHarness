@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
+	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/provider"
 )
 
@@ -42,8 +44,28 @@ func (r *Registry) Get(name string) (Tool, bool) {
 
 // Definitions returns the provider format for sharing available tools with an LLM.
 func (r *Registry) Definitions() []provider.ToolDef {
+	return r.definitionsForNames(r.Names())
+}
+
+// DefinitionsForTask returns only the tools relevant to one task turn.
+func (r *Registry) DefinitionsForTask(taskClass core.TaskClass, task string) []provider.ToolDef {
+	var names []string
+	lower := strings.ToLower(task)
+	for _, name := range r.Names() {
+		if toolRelevantForTask(name, taskClass, lower) {
+			names = append(names, name)
+		}
+	}
+	return r.definitionsForNames(names)
+}
+
+func (r *Registry) definitionsForNames(names []string) []provider.ToolDef {
 	var defs []provider.ToolDef
-	for _, t := range r.tools {
+	for _, name := range names {
+		t, ok := r.tools[name]
+		if !ok {
+			continue
+		}
 		defs = append(defs, provider.ToolDef{
 			Type: "function",
 			Function: provider.ToolFuncDef{
@@ -78,4 +100,37 @@ func (r *Registry) ExecuteTool(ctx context.Context, call provider.ToolCall) (str
 	}
 
 	return t.Execute(WithToolCallContext(ctx, call.ID, call.Function.Name), json.RawMessage(call.Function.Arguments))
+}
+
+func toolRelevantForTask(name string, taskClass core.TaskClass, lower string) bool {
+	switch name {
+	case "shell_execute":
+		if taskClass == core.TaskClassSummarization {
+			return false
+		}
+		return taskClass != core.TaskClassGeneral || containsAny(lower,
+			"shell", "bash", "command", "run ", "execute", "inspect", "status", "check ",
+			"debug", "fix", "restart", "deploy", "install", "docker", "service", "ssh ",
+			"log", "disk", "cpu", "memory", "file", "process", "port", "container",
+		)
+	case "memory_record_finding":
+		return containsAny(lower, "remember", "record finding", "note this", "save this", "memory")
+	case "schedule_manage":
+		return containsAny(lower, "schedule", "remind", "recurring", "every ", "daily", "weekly", "job", "health check")
+	case "system_cron_manage":
+		return containsAny(lower, "system cron", "user cron", "os cron", "crontab")
+	case "web_search", "web_fetch":
+		return containsAny(lower, "web", "url", "http", "https", "docs", "documentation", "release note", "latest", "current ", "search online", "website", "github issue")
+	default:
+		return true
+	}
+}
+
+func containsAny(s string, terms ...string) bool {
+	for _, term := range terms {
+		if strings.Contains(s, term) {
+			return true
+		}
+	}
+	return false
 }

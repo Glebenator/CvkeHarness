@@ -21,6 +21,12 @@ func (r fakeRunner) RunScheduledJob(context.Context, state.ScheduledJob) (string
 	return "ok", 42, nil
 }
 
+type blockedRunnerError struct{}
+
+func (blockedRunnerError) Error() string              { return "waiting for approval" }
+func (blockedRunnerError) TaskState() state.TaskState { return state.TaskStateBlockedWaitingUser }
+func (blockedRunnerError) WorkID() string             { return "blocked_work_1" }
+
 func TestServiceLifecycle(t *testing.T) {
 	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
 	if !store.Available() {
@@ -166,5 +172,48 @@ func TestManualRunRefusesActivelyClaimedJob(t *testing.T) {
 	_, err = svc.RunNow(context.Background(), fakeRunner{}, job.ID, true)
 	if err == nil {
 		t.Fatal("expected manual run to refuse an actively claimed job")
+	}
+}
+
+func TestRunDueRecordsBlockedJobWithoutRetryingUntilUserAction(t *testing.T) {
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	if !store.Available() {
+		t.Fatalf("store unavailable: %v", store.Err())
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 27, 10, 0, 0, 0, time.UTC)
+	svc := New(store)
+	svc.now = func() time.Time { return now }
+	job, err := svc.Create(context.Background(), "health", KindEvery, "5m", "check health")
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	job.NextRunAt = now.Add(-time.Minute)
+	if err := store.SaveScheduledJob(context.Background(), job); err != nil {
+		t.Fatalf("SaveScheduledJob returned error: %v", err)
+	}
+
+	runs, err := svc.RunDue(context.Background(), fakeRunner{err: blockedRunnerError{}})
+	if err != nil {
+		t.Fatalf("RunDue returned unexpected error for blocked work: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Status != RunStatusBlocked {
+		t.Fatalf("expected one blocked run, got %#v", runs)
+	}
+	blocked, err := store.GetScheduledJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("GetScheduledJob returned error: %v", err)
+	}
+	if !blocked.Blocked || blocked.BlockedWorkID != "blocked_work_1" {
+		t.Fatalf("expected blocked scheduler metadata, got %#v", blocked)
+	}
+
+	retries, err := svc.RunDue(context.Background(), fakeRunner{})
+	if err != nil {
+		t.Fatalf("second RunDue returned error: %v", err)
+	}
+	if len(retries) != 0 {
+		t.Fatalf("expected blocked job to avoid noisy retries, got %#v", retries)
 	}
 }

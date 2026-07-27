@@ -424,7 +424,7 @@ func (m setupModel) viewRecommendations() string {
 	return paragraph("Choose what to do with these recommendations. Accepting appends them to machine notes; skipping leaves them out.") + "\n" +
 		paragraph(m.recommendations...) + "\n" +
 		m.renderList([]row{
-			{"Accept into notes", "Save these recommendations in host.md"},
+			{"Accept into notes", "Save these recommendations in guidance.md"},
 			{"Edit before saving", "Open the machine notes editor with these prefilled"},
 			{"Regenerate", "Ask the model again"},
 			{"Skip", "Do not save these recommendations"},
@@ -480,10 +480,10 @@ func (m setupModel) viewDone() string {
 		lines = append(lines, "Host profile: "+m.saveResult.HostProfilePath)
 	}
 	if m.saveResult.SoulWritten {
-		lines = append(lines, "Prepared soul.md.")
+		lines = append(lines, "Prepared guidance.md.")
 	}
 	if m.saveResult.HostNotesWritten {
-		lines = append(lines, "Updated host.md.")
+		lines = append(lines, "Updated guidance.md.")
 	}
 	for _, out := range m.saveResult.ActionOutput {
 		if strings.TrimSpace(out) != "" {

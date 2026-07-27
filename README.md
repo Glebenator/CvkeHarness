@@ -31,9 +31,8 @@ For each run, the harness:
 3. Resolves the active target identity from the prompt and later from observed tool calls such as `ssh host ...`
 4. Loads:
    - built-in runtime rules
-   - `operator.md`
-   - `soul.md`
-   - a tiny runtime-host summary from `host.md`
+   - compact compiled guidance from `guidance.md`
+   - a tiny runtime-host summary from `targets.md`
    - at most one target summary
    - at most one primary playbook
    - at most one caution
@@ -63,25 +62,17 @@ If no remote context is present, the target defaults to the runtime host. When S
 
 These live under `~/.cvkeharness/`:
 
-- `operator.md`
-  Stable harness rules, memory boundaries, and dependency/install behavior. User-editable.
-- `soul.md`
-  Persona and tone only. User-editable and never auto-edited by the harness.
+- `guidance.md`
+  User-authored operating guidance, collaboration style, and durable runtime boundaries.
 - `targets.md`
-  Target registry plus alias mapping and concise target facts.
-- `host.md`
-  Concise verified profile of the runtime host plus operator-authored machine quirks and environment caveats.
+  Target registry plus alias mapping and concise target facts, including the runtime host.
 - `playbooks.md`
   Durable target-specific procedures with `Verify`, `Action`, and `Success Checks` sections.
 - `findings.md`
-  Provisional observations awaiting promotion or future reuse.
+  Manual or ad hoc observations only; assistant final-output summaries are never added automatically.
 - `cautions.md`
   Target-specific negative memory for bad or unreliable approaches.
 
-Legacy handling:
-
-- if `memory.md` still exists and the new structured files are missing, the harness imports its entries into `findings.md`
-- imported legacy records are tagged with `origin=legacy_memory`, `target_id=unknown`, and `status=needs_curation`
 
 ### Retrieval Policy
 
@@ -90,9 +81,8 @@ The runtime never injects whole memory files into the prompt.
 Structured retrieval always loads:
 
 1. built-in runtime rules
-2. `operator.md`
-3. `soul.md`
-4. one small runtime-host summary
+2. compiled `guidance.md`
+3. one small runtime-host summary
 
 Structured retrieval may additionally load:
 
@@ -208,7 +198,7 @@ The setup wizard configures:
 - token limit
 - iteration limit
 - log level
-- initial `soul.md` profile
+- initial `guidance.md` profile
 - optional runtime-host machine notes for stable local quirks
 - optional Tavily-backed public web search tools
 - bootstrap of the structured memory files
@@ -247,7 +237,7 @@ Show why routing chose a model:
 ### Memory commands
 
 - `cvkeharness memory show`
-  Show `operator.md`, `soul.md`, `targets.md`, `host.md`, `playbooks.md`, `findings.md`, `cautions.md`, and snapshot summary
+  Show `guidance.md`, `targets.md`, `playbooks.md`, `findings.md`, `cautions.md`, and snapshot summary
 - `cvkeharness memory rollback <snapshot>`
   Restore a managed memory file from a snapshot and reindex state
 - `cvkeharness memory reindex`
@@ -304,8 +294,8 @@ Important fields:
   When true, every model call writes a full prompt dump as Markdown and HTML for debugging.
 - `prompt_dump_dir`
   Directory for prompt dump artifacts, grouped by date and run. Each run folder includes an `index.html` master page linking the individual Markdown and HTML dumps. The index starts with estimated prompt tokens and is updated with actual prompt, completion, total, and cached token counts when providers return usage. Defaults to `~/.cvkeharness/prompt_dumps`.
-- `memory_max_snippets`
-  Retained for compatibility; structured retrieval now uses fixed brief caps in code
+- `prompt_dump_retention_days`
+  Retention window for debug prompt dumps. Dumps are pruned automatically and secret-looking values are redacted before persistence.
 - `routing_min_confidence`
 - `safety_mode`
 - `safety_model`
@@ -327,16 +317,12 @@ Important fields:
 
 For execution runs, the system prompt is layered in this order:
 
-1. built-in runtime rules
-2. `operator.md`
-3. `soul.md`
-4. runtime-host summary from `host.md`
-5. retrieved brief from `targets.md`, `playbooks.md`, `cautions.md`, and `findings.md`
-6. optional planning notes
+1. compiled guidance prefix from built-in rules plus `guidance.md`
+2. stable per-turn tool policy and schemas
+3. compact host-target-memory brief from `targets.md`, `playbooks.md`, `cautions.md`, and `findings.md`
+4. volatile turn context, conversation history, and optional planning notes
 
-Use `operator.md` for durable harness-operating instructions such as approval expectations, memory ownership boundaries, and how the agent should respond to missing dependencies.
-
-Use `soul.md` for the human-facing collaboration layer only.
+Each model call records a stable-prefix hash, full prompt hash, cached-token count, and cache-hit ratio so provider-side cache behavior is measurable without opening raw prompt dumps.
 
 ## Tooling Model
 
@@ -423,7 +409,7 @@ If you are reading the code for the first time, these are the best entry points:
 - `memory/manager_persist.go`
   Deterministic curation of playbooks, findings, cautions, and host facts
 - `memory/manager_files.go`
-  Managed file parsing, rendering, snapshots, rollback, and legacy import
+  Managed file parsing, rendering, snapshots, and rollback
 - `state/store.go`
   The SQLite schema and persistence layer
 - `state/store_operational_memory.go`
@@ -460,7 +446,7 @@ gofmt -w .
 - Keep the runtime provider-agnostic at the core.
 - Store normalized operational facts rather than provider-specific lore.
 - Prefer deterministic local heuristics over hidden autonomy.
-- Treat `soul.md` as user-owned and never auto-edit it.
+- Treat `guidance.md` as user-owned and never auto-edit it.
 - When changing memory behavior, keep file readability and DB consistency aligned.
 - When changing routing behavior, preserve the approval boundary.
 - When retrieval is uncertain, prefer retrieving less, not more.

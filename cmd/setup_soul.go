@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,16 +90,12 @@ func soulProfileIndexByID(id string) int {
 	return 0
 }
 
-func soulFilePath(memoryDir string) string {
-	return filepath.Join(memoryDir, memory.SoulFile)
-}
-
-func hostFilePath(memoryDir string) string {
-	return filepath.Join(memoryDir, memory.HostFile)
+func guidanceFilePath(memoryDir string) string {
+	return filepath.Join(memoryDir, memory.GuidanceFile)
 }
 
 func soulBootstrapRequired(memoryDir string) (bool, error) {
-	data, err := os.ReadFile(soulFilePath(memoryDir))
+	data, err := os.ReadFile(guidanceFilePath(memoryDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return true, nil
@@ -109,11 +104,11 @@ func soulBootstrapRequired(memoryDir string) (bool, error) {
 	}
 
 	trimmed := strings.TrimSpace(string(data))
-	return trimmed == "" || trimmed == "# Soul", nil
+	return trimmed == "" || trimmed == "# Guidance", nil
 }
 
-func ensureSetupMemoryFiles(memoryDir string, maxSnippets int) error {
-	return memory.NewManager(memoryDir, nil, maxSnippets).EnsureFiles()
+func ensureSetupMemoryFiles(memoryDir string) error {
+	return memory.NewManager(memoryDir, nil).EnsureFiles()
 }
 
 type setupHostNotesStatus int
@@ -124,8 +119,8 @@ const (
 	setupHostNotesPreserved
 )
 
-func writeSetupSoul(memoryDir string, maxSnippets int, profile soulProfile) (bool, error) {
-	if err := ensureSetupMemoryFiles(memoryDir, maxSnippets); err != nil {
+func writeSetupSoul(memoryDir string, profile soulProfile) (bool, error) {
+	if err := ensureSetupMemoryFiles(memoryDir); err != nil {
 		return false, err
 	}
 
@@ -138,30 +133,45 @@ func writeSetupSoul(memoryDir string, maxSnippets int, profile soulProfile) (boo
 	}
 
 	content := buildSoulMarkdown(profile)
-	if err := os.WriteFile(soulFilePath(memoryDir), []byte(content), 0644); err != nil {
+	if err := os.WriteFile(guidanceFilePath(memoryDir), []byte(content), 0644); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func writeSetupHostNotes(memoryDir string, maxSnippets int, notes []string) (setupHostNotesStatus, error) {
+func writeSetupHostNotes(memoryDir string, notes []string) (setupHostNotesStatus, error) {
 	notes = dedupeSetupNotes(notes)
 	if len(notes) == 0 {
 		return setupHostNotesSkipped, nil
 	}
-	manager := memory.NewManager(memoryDir, nil, maxSnippets)
-	wrote, err := manager.SeedRuntimeHostNotes(context.Background(), notes)
+	if err := ensureSetupMemoryFiles(memoryDir); err != nil {
+		return setupHostNotesSkipped, err
+	}
+	path := guidanceFilePath(memoryDir)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return setupHostNotesSkipped, err
 	}
-	if wrote {
-		return setupHostNotesWritten, nil
+	content := string(data)
+	if len(splitSetupNotes(extractSetupSection(content, "Runtime Host Notes"))) > 0 {
+		return setupHostNotesPreserved, nil
 	}
-	return setupHostNotesPreserved, nil
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(content, "\n"))
+	b.WriteString("\n\n## Runtime Host Notes\n\n")
+	for _, note := range notes {
+		b.WriteString("- ")
+		b.WriteString(note)
+		b.WriteString("\n")
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0644); err != nil {
+		return setupHostNotesSkipped, err
+	}
+	return setupHostNotesWritten, nil
 }
 
 func loadSetupHostNotes(memoryDir string) ([]string, error) {
-	data, err := os.ReadFile(hostFilePath(memoryDir))
+	data, err := os.ReadFile(guidanceFilePath(memoryDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -176,11 +186,12 @@ func extractSetupSection(content, heading string) string {
 	inSection := false
 	for _, raw := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
 		line := strings.TrimRight(raw, "\r")
-		if strings.HasPrefix(line, "### ") {
+		if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "### ") {
 			if inSection {
 				break
 			}
-			inSection = strings.TrimSpace(strings.TrimPrefix(line, "### ")) == heading
+			section := strings.TrimSpace(strings.TrimLeft(line, "#"))
+			inSection = section == heading
 			continue
 		}
 		if inSection {
@@ -253,7 +264,7 @@ func dedupeSetupNotes(notes []string) []string {
 }
 
 func buildSoulMarkdown(profile soulProfile) string {
-	return fmt.Sprintf(`# Soul
+	return fmt.Sprintf(`# Guidance
 
 You are CvkeHarness, a local-first engineering agent for coding, debugging, systems work, and DevOps-style workflows.
 

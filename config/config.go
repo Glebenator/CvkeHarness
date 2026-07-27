@@ -15,32 +15,32 @@ type Config struct {
 	// APIKeys stores credentials keyed by provider name (e.g. "openrouter",
 	// "anthropic"). All providers are preserved so a user switching providers
 	// never has to re-enter a key they already validated.
-	APIKeys              map[string]string `yaml:"api_keys,omitempty"`
-	BaseURL              string            `yaml:"base_url,omitempty"` // Used for local providers (e.g. LM Studio)
-	Model                string            `yaml:"model,omitempty"`    // legacy read compatibility only
-	DefaultModel         string            `yaml:"default_model,omitempty"`
-	PlanningModel        string            `yaml:"planning_model,omitempty"`
-	ExecutionModel       string            `yaml:"execution_model,omitempty"`
-	CurationModel        string            `yaml:"curation_model,omitempty"`
-	SafetyMode           string            `yaml:"safety_mode,omitempty"`
-	SafetyModel          string            `yaml:"safety_model"`
-	MaxTokens            int               `yaml:"max_tokens"`
-	MaxIterations        int               `yaml:"max_iterations"`
-	LogLevel             string            `yaml:"log_level"`
-	AllowedCommands      []string          `yaml:"allowed_commands"`
-	RoutingEnabled       bool              `yaml:"routing_enabled,omitempty"`
-	RoutingMode          string            `yaml:"routing_mode,omitempty"`
-	ApprovedModels       []string          `yaml:"approved_models,omitempty"`
-	FavoriteModels       []string          `yaml:"favorite_models,omitempty"`
-	MemoryDir            string            `yaml:"memory_dir,omitempty"`
-	StateDBPath          string            `yaml:"state_db_path,omitempty"`
-	DebugPromptDumps     bool              `yaml:"debug_prompt_dumps,omitempty"`
-	PromptDumpDir        string            `yaml:"prompt_dump_dir,omitempty"`
-	MemoryMaxSnippets    int               `yaml:"memory_max_snippets,omitempty"`
-	RoutingMinConfidence float64           `yaml:"routing_min_confidence,omitempty"`
-	SetupAgentMode       string            `yaml:"setup_agent_mode,omitempty"`
-	CapabilityPolicy     CapabilityPolicy  `yaml:"capability_policy,omitempty"`
-	WebSearch            WebSearchConfig   `yaml:"web_search,omitempty"`
+	APIKeys                 map[string]string `yaml:"api_keys,omitempty"`
+	BaseURL                 string            `yaml:"base_url,omitempty"` // Used for local providers (e.g. LM Studio)
+	Model                   string            `yaml:"model,omitempty"`    // legacy read compatibility only
+	DefaultModel            string            `yaml:"default_model,omitempty"`
+	PlanningModel           string            `yaml:"planning_model,omitempty"`
+	ExecutionModel          string            `yaml:"execution_model,omitempty"`
+	CurationModel           string            `yaml:"curation_model,omitempty"`
+	SafetyMode              string            `yaml:"safety_mode,omitempty"`
+	SafetyModel             string            `yaml:"safety_model"`
+	MaxTokens               int               `yaml:"max_tokens"`
+	MaxIterations           int               `yaml:"max_iterations"`
+	LogLevel                string            `yaml:"log_level"`
+	AllowedCommands         []string          `yaml:"allowed_commands"`
+	RoutingEnabled          bool              `yaml:"routing_enabled,omitempty"`
+	RoutingMode             string            `yaml:"routing_mode,omitempty"`
+	ApprovedModels          []string          `yaml:"approved_models,omitempty"`
+	FavoriteModels          []string          `yaml:"favorite_models,omitempty"`
+	MemoryDir               string            `yaml:"memory_dir,omitempty"`
+	StateDBPath             string            `yaml:"state_db_path,omitempty"`
+	DebugPromptDumps        bool              `yaml:"debug_prompt_dumps,omitempty"`
+	PromptDumpDir           string            `yaml:"prompt_dump_dir,omitempty"`
+	PromptDumpRetentionDays int               `yaml:"prompt_dump_retention_days,omitempty"`
+	RoutingMinConfidence    float64           `yaml:"routing_min_confidence,omitempty"`
+	SetupAgentMode          string            `yaml:"setup_agent_mode,omitempty"`
+	CapabilityPolicy        CapabilityPolicy  `yaml:"capability_policy,omitempty"`
+	WebSearch               WebSearchConfig   `yaml:"web_search,omitempty"`
 }
 
 // CapabilityPolicy captures durable user preferences collected during setup.
@@ -141,9 +141,6 @@ func (c *Config) Normalize() {
 	if c.RoutingMode == "" {
 		c.RoutingMode = "auto_within_policy"
 	}
-	if c.MemoryMaxSnippets <= 0 {
-		c.MemoryMaxSnippets = 3
-	}
 	if c.RoutingMinConfidence <= 0 {
 		c.RoutingMinConfidence = 0.55
 	}
@@ -158,6 +155,9 @@ func (c *Config) Normalize() {
 	}
 	if c.PromptDumpDir == "" {
 		c.PromptDumpDir = defaultHarnessPath("prompt_dumps")
+	}
+	if c.PromptDumpRetentionDays <= 0 {
+		c.PromptDumpRetentionDays = 7
 	}
 	if c.CapabilityPolicy.PythonScripts == "" {
 		c.CapabilityPolicy.PythonScripts = "ask"
@@ -253,20 +253,20 @@ func (c *Config) Save() error {
 // DefaultConfig provides sensible defaults for a new setup.
 func DefaultConfig() *Config {
 	return &Config{
-		Provider:             "openrouter",
-		DefaultModel:         "anthropic/claude-sonnet-4.6",
-		SafetyMode:           "llm_judge",
-		SafetyModel:          "x-ai/grok-4.1-fast",
-		MaxTokens:            4096,
-		MaxIterations:        25,
-		LogLevel:             "off",
-		RoutingMode:          "auto_within_policy",
-		MemoryDir:            defaultHarnessPath(""),
-		StateDBPath:          defaultHarnessPath("state.db"),
-		PromptDumpDir:        defaultHarnessPath("prompt_dumps"),
-		MemoryMaxSnippets:    3,
-		RoutingMinConfidence: 0.55,
-		SetupAgentMode:       "guided",
+		Provider:                "openrouter",
+		DefaultModel:            "anthropic/claude-sonnet-4.6",
+		SafetyMode:              "llm_judge",
+		SafetyModel:             "x-ai/grok-4.1-fast",
+		MaxTokens:               4096,
+		MaxIterations:           25,
+		LogLevel:                "off",
+		RoutingMode:             "auto_within_policy",
+		MemoryDir:               defaultHarnessPath(""),
+		StateDBPath:             defaultHarnessPath("state.db"),
+		PromptDumpDir:           defaultHarnessPath("prompt_dumps"),
+		PromptDumpRetentionDays: 7,
+		RoutingMinConfidence:    0.55,
+		SetupAgentMode:          "guided",
 		CapabilityPolicy: CapabilityPolicy{
 			PythonScripts:         "ask",
 			ScriptWriteDir:        defaultHarnessPath("scripts"),

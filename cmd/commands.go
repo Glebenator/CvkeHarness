@@ -100,6 +100,9 @@ var commandsApproveCmd = &cobra.Command{
 			}); err != nil {
 				return err
 			}
+			if _, err := store.ResolveBlockedShellCommand(context.Background(), segment.Normalized); err != nil {
+				return err
+			}
 		}
 
 		if len(parsed.Segments) == 1 {

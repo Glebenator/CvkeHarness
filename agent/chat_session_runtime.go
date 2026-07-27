@@ -22,13 +22,12 @@ type ChatConversation struct {
 	agent     *Agent
 	selection core.RoutingSelection
 	history   *ChatState
-	seed      []provider.Message
-	toolNames []string
 }
 
 // ChatTurnResult contains one assistant turn plus transcript and stats.
 type ChatTurnResult struct {
 	Output            string
+	TaskState         state.TaskState
 	TaskClass         core.TaskClass
 	Phase             state.PhaseRecord
 	VerificationPhase state.PhaseRecord
@@ -66,40 +65,24 @@ func (a *Agent) StartChat(ctx context.Context) (*ChatConversation, core.RoutingS
 		}
 	}
 
-	targetResolution := a.resolveTarget(ctx, memory.TargetResolutionInput{Task: "interactive chat session"})
-	retrieved, err := a.retrieveMemory(ctx, core.RetrievalContext{
-		Task:          "interactive chat session",
-		TaskClass:     core.TaskClassGeneral,
-		Phase:         core.PhaseChat,
-		ActiveModel:   selection.Requested,
-		RuntimeHostID: targetResolution.RuntimeHostID,
-		TargetID:      targetResolution.TargetID,
-		TargetKind:    targetResolution.TargetKind,
-		ToolNames:     toolNames,
-	})
-	if err != nil {
-		return nil, core.RoutingSelection{}, err
-	}
-	emitMemoryInjection(ctx, core.PhaseChat, retrieved)
-
 	return &ChatConversation{
 		agent:     a,
 		selection: selection,
 		history:   NewChatState(),
-		seed:      initialSystemMessages(retrieved, ""),
-		toolNames: toolNames,
 	}, selection, nil
 }
 
 // Turn executes one user prompt inside the active chat session.
 func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnResult, error) {
 	logger := log.FromContext(ctx)
+	ctx = c.agent.withRunTelemetry(ctx)
 	ctx = tools.WithEventObserver(ctx, c.agent.opts.EventObserver)
 
 	taskClass := core.ClassifyTask(prompt)
 	phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, execErr := c.runChatTurn(ctx, prompt, taskClass)
 	result := ChatTurnResult{
 		Output:            output,
+		TaskState:         taskStateForError(execErr),
 		TaskClass:         taskClass,
 		Phase:             phaseRecord,
 		VerificationPhase: verificationRecord,
@@ -111,8 +94,18 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 		Verification:      verification,
 		ExecutionErr:      execErr,
 	}
+	if isBlockedTaskError(execErr) {
+		_ = telemetry.Record(telemetry.WithFields(ctx, telemetry.Fields{TaskState: string(state.TaskStateBlockedWaitingUser)}), telemetry.Event{
+			Type:      telemetry.EventTaskBlocked,
+			TaskState: string(state.TaskStateBlockedWaitingUser),
+		})
+	}
+	_ = telemetry.Record(telemetry.WithFields(ctx, telemetry.Fields{TaskState: string(result.TaskState)}), telemetry.Event{
+		Type:      telemetry.EventTaskCompleted,
+		TaskState: string(result.TaskState),
+	})
 
-	if c.agent.opts.MemoryCurator != nil {
+	if c.agent.opts.MemoryCurator != nil && !isBlockedTaskError(execErr) {
 		if curator, ok := c.agent.opts.MemoryCurator.(structuredMemoryCurator); ok {
 			curErr := curator.CurateRunOutcome(ctx, memory.RunOutcome{
 				Task:           prompt,
@@ -144,6 +137,8 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskClass core.TaskClass) (state.PhaseRecord, state.PhaseRecord, CompletionVerification, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, []provider.Message, string, error) {
 	logger := log.FromContext(ctx)
 	targetResolution := c.agent.resolveTarget(ctx, memory.TargetResolutionInput{Task: prompt})
+	toolDefs := c.agent.toolDefinitionsForTask(taskClass, prompt)
+	toolNames := toolNamesFromDefs(toolDefs)
 	retrieved, err := c.agent.retrieveMemory(ctx, core.RetrievalContext{
 		Task:          prompt,
 		TaskClass:     taskClass,
@@ -152,7 +147,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		RuntimeHostID: targetResolution.RuntimeHostID,
 		TargetID:      targetResolution.TargetID,
 		TargetKind:    targetResolution.TargetKind,
-		ToolNames:     c.toolNames,
+		ToolNames:     toolNames,
 	})
 	if err != nil {
 		return state.PhaseRecord{}, state.PhaseRecord{}, CompletionVerification{}, nil, nil, targetResolution, nil, "", err
@@ -168,10 +163,9 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 	c.history.Add(userMessage)
 	transcript := []provider.Message{userMessage}
 
-	systemMessages := append([]provider.Message(nil), c.seed...)
-
-	turnChat := NewChatState(append(systemMessages, c.history.Messages()...)...)
-	toolDefs := c.agent.opts.ToolRegistry.Definitions()
+	volatileMessages := c.history.Messages()
+	plan := buildPromptPlan(retrieved, "", volatileMessages, toolDefs)
+	turnChat := NewChatState(append(append([]provider.Message(nil), plan.SystemMessages...), volatileMessages...)...)
 
 	phaseRecord := state.PhaseRecord{
 		Phase:          core.PhaseChat,
@@ -199,6 +193,9 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 			Temperature: 0.2,
 			MaxTokens:   c.agent.opts.MaxTokens,
 		}
+		iterPlan := plan
+		iterPlan.PromptHash = hashJSON([]any{req.Messages, req.Tools})
+		emitPromptPlanned(iterCtx, core.PhaseChat, iter, c.selection.Requested.Provider, c.selection.Requested.Model, iterPlan, len(req.Messages))
 		dump := c.agent.dumpPrompt(iterCtx, promptdump.Metadata{
 			Phase:     core.PhaseChat,
 			Provider:  c.selection.Requested.Provider,
@@ -212,6 +209,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		resp, err := execProvider.ChatCompletion(iterCtx, req)
 		c.agent.finishPromptDump(dump, resp, err)
 		duration := time.Since(start)
+		emitModelCallCompleted(iterCtx, core.PhaseChat, iter, c.selection.Requested.Provider, c.selection.Requested.Model, resp, duration.Milliseconds(), err)
 		phaseRecord.LatencyMs += duration.Milliseconds()
 		if resp != nil {
 			phaseRecord.PromptTokens += resp.Usage.PromptTokens
@@ -224,13 +222,6 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		}
 
 		if err != nil {
-			_ = telemetry.RecordEvent(telemetry.TelemetryEvent{
-				Timestamp:    start.UTC(),
-				Model:        c.selection.Requested.String(),
-				Success:      false,
-				DurationMs:   duration.Milliseconds(),
-				ErrorMessage: err.Error(),
-			})
 			return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", fmt.Errorf("LLM API error on iteration %d: %w", iter, err)
 		}
 
@@ -282,10 +273,20 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				})
 			}
 			toolStart := time.Now()
-			toolCtx := tools.WithToolCallContext(telemetry.WithModel(iterCtx, actualModel), call.ID, call.Function.Name)
+			toolCtx := tools.WithToolCallContext(telemetry.WithFields(telemetry.WithModel(iterCtx, actualModel), telemetry.Fields{
+				ToolCallID: call.ID,
+				TargetID:   targetResolution.TargetID,
+			}), call.ID, call.Function.Name)
 			tools.EmitEvent(toolCtx, tools.Event{
 				Type:    tools.EventToolCallStarted,
 				Success: true,
+			})
+			payload, _ := json.Marshal(map[string]any{"tool_name": call.Function.Name})
+			_ = telemetry.Record(toolCtx, telemetry.Event{
+				Type:       telemetry.EventToolStarted,
+				ToolCallID: call.ID,
+				TargetID:   targetResolution.TargetID,
+				Payload:    payload,
 			})
 			resultStr, toolErr := c.agent.opts.ToolRegistry.ExecuteTool(toolCtx, call)
 			durationMs := time.Since(toolStart).Milliseconds()
@@ -295,7 +296,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				Provider:   c.selection.Requested.Provider,
 				Model:      actualModel,
 				ToolName:   call.Function.Name,
-				Toolset:    core.ToolsetKey(c.toolNames),
+				Toolset:    core.ToolsetKey(toolNames),
 				Arguments:  call.Function.Arguments,
 				Command:    command,
 				Success:    toolErr == nil,
@@ -308,6 +309,19 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				outcome.PolicyDenied, outcome.DenialClass = classifyPolicyDenial(toolErr)
 				resultStr = fmt.Sprintf("Error executing tool: %v", toolErr)
 
+				if approvalErr, ok := tools.IsApprovalRequired(toolErr); ok {
+					phaseRecord.Success = false
+					workID, persistErr := c.agent.persistBlockedWork(iterCtx, prompt, taskClass, targetResolution, turnChat.Messages(), call, approvalErr)
+					if persistErr != nil {
+						return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", persistErr
+					}
+					return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", blockedTaskError{
+						workID:  workID,
+						reason:  toolErr.Error(),
+						request: approvalErr.Request,
+					}
+				}
+
 				if !refreshed && (outcome.PolicyDenied || failuresByTool[call.Function.Name] >= 2) {
 					refreshed = true
 					refresh, refreshErr := c.agent.retrieveMemory(ctx, core.RetrievalContext{
@@ -319,7 +333,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 						RuntimeHostID: targetResolution.RuntimeHostID,
 						TargetID:      targetResolution.TargetID,
 						TargetKind:    targetResolution.TargetKind,
-						ToolNames:     c.toolNames,
+						ToolNames:     toolNames,
 						Trouble: &core.ToolTrouble{
 							Tool:        call.Function.Name,
 							DenialClass: outcome.DenialClass,
@@ -340,6 +354,19 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				Success:      toolErr == nil,
 				Duration:     time.Duration(durationMs) * time.Millisecond,
 				ErrorMessage: outcome.ErrorMessage,
+			})
+			payload, _ = json.Marshal(map[string]any{
+				"tool_name":   call.Function.Name,
+				"command":     command,
+				"success":     toolErr == nil,
+				"duration_ms": durationMs,
+				"error":       outcome.ErrorMessage,
+			})
+			_ = telemetry.Record(toolCtx, telemetry.Event{
+				Type:       telemetry.EventToolFinished,
+				ToolCallID: call.ID,
+				TargetID:   targetResolution.TargetID,
+				Payload:    payload,
 			})
 
 			toolOutcomes = append(toolOutcomes, outcome)

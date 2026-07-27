@@ -83,7 +83,7 @@ func TestDefaultRegistryFromConfigIncludesWebToolsWhenEnabled(t *testing.T) {
 	cfg.SetAPIKey("tavily", "tvly-test-key")
 
 	store := state.Open("")
-	registry, err := defaultRegistryFromConfig(cfg, store, memory.NewManager(t.TempDir(), store, 3), nil, nil)
+	registry, err := defaultRegistryFromConfig(cfg, store, memory.NewManager(t.TempDir(), store), nil, nil, false)
 	if err != nil {
 		t.Fatalf("defaultRegistryFromConfig returned error: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestDefaultRegistryFromConfigErrorsWhenWebSearchEnabledWithoutCredentials(t
 	cfg := config.DefaultConfig()
 	cfg.WebSearch.Enabled = true
 
-	_, err := defaultRegistryFromConfig(cfg, state.Open(""), nil, nil, nil)
+	_, err := defaultRegistryFromConfig(cfg, state.Open(""), nil, nil, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "Tavily API key is missing") {
 		t.Fatalf("expected missing Tavily key error, got %v", err)
 	}

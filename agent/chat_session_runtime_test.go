@@ -33,8 +33,7 @@ func (m *memoryStub) Retrieve(_ context.Context, input core.RetrievalContext) (m
 	}
 	return memory.RetrievalResult{
 		BuiltInRules:       "Be helpful.",
-		Operator:           "operator context",
-		Soul:               "soul context",
+		Guidance:           "guidance context",
 		RuntimeHostSummary: "Runtime host summary:\n- name: runtime",
 		FallbackBrief:      "Fallback finding for runtime: baseline learned",
 	}, nil
@@ -389,8 +388,7 @@ func TestChatConversationRefreshesLearnedContextAfterRepeatedToolFailure(t *test
 		resultFn: func(input core.RetrievalContext) memory.RetrievalResult {
 			result := memory.RetrievalResult{
 				BuiltInRules:       "Be helpful.",
-				Operator:           "operator context",
-				Soul:               "soul context",
+				Guidance:           "guidance context",
 				RuntimeHostSummary: "Runtime host summary:\n- name: runtime",
 				FallbackBrief:      "Fallback finding for runtime: baseline learned",
 			}
