@@ -24,6 +24,7 @@ func (r *chatRouterStub) Select(context.Context, core.Phase, string, core.TaskCl
 type memoryStub struct {
 	retrievals []core.RetrievalContext
 	resultFn   func(input core.RetrievalContext) memory.RetrievalResult
+	resolution memory.TargetResolution
 }
 
 func (m *memoryStub) Retrieve(_ context.Context, input core.RetrievalContext) (memory.RetrievalResult, error) {
@@ -33,11 +34,14 @@ func (m *memoryStub) Retrieve(_ context.Context, input core.RetrievalContext) (m
 	}
 	return memory.RetrievalResult{
 		BuiltInRules:       "Be helpful.",
-		Operator:           "operator context",
-		Soul:               "soul context",
+		Guidance:           "guidance context",
 		RuntimeHostSummary: "Runtime host summary:\n- name: runtime",
 		FallbackBrief:      "Fallback finding for runtime: baseline learned",
 	}, nil
+}
+
+func (m *memoryStub) ResolveTarget(_ context.Context, _ memory.TargetResolutionInput) (memory.TargetResolution, error) {
+	return m.resolution, nil
 }
 
 type sequenceProvider struct {
@@ -389,8 +393,7 @@ func TestChatConversationRefreshesLearnedContextAfterRepeatedToolFailure(t *test
 		resultFn: func(input core.RetrievalContext) memory.RetrievalResult {
 			result := memory.RetrievalResult{
 				BuiltInRules:       "Be helpful.",
-				Operator:           "operator context",
-				Soul:               "soul context",
+				Guidance:           "guidance context",
 				RuntimeHostSummary: "Runtime host summary:\n- name: runtime",
 				FallbackBrief:      "Fallback finding for runtime: baseline learned",
 			}

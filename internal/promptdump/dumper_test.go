@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/provider"
@@ -21,7 +22,7 @@ func TestDumperWritesMarkdownAndHTML(t *testing.T) {
 		Temperature: 0.2,
 		MaxTokens:   512,
 		Messages: []provider.Message{
-			{Role: "system", Content: "memory from operator.md\nfull prompt content"},
+			{Role: "system", Content: "memory from guidance.md\nfull prompt content"},
 			{Role: "user", Content: "do the thing"},
 		},
 		Tools: []provider.ToolDef{{
@@ -77,7 +78,7 @@ func TestDumperWritesMarkdownAndHTML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(html) returned error: %v", err)
 	}
-	for _, want := range []string{"memory from operator.md", "shell_execute", "Raw Request", "execution-loop", "Estimated prompt tokens"} {
+	for _, want := range []string{"memory from guidance.md", "shell_execute", "Raw Request", "execution-loop", "Estimated prompt tokens"} {
 		if !strings.Contains(string(md), want) {
 			t.Fatalf("expected markdown dump to contain %q, got:\n%s", want, string(md))
 		}
@@ -196,5 +197,71 @@ func TestDisabledDumperSkipsWrites(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("expected disabled dumper to skip writes, got %#v", entries)
+	}
+}
+
+func TestDumperRedactsSecretsBeforePersistence(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dumper := New(true, dir)
+	err := dumper.Dump(context.Background(), Metadata{
+		Phase:    core.PhaseExecution,
+		Provider: "codex",
+		Model:    "test-model",
+		Label:    "secret-test",
+	}, &provider.ChatRequest{
+		Model: "test-model",
+		Messages: []provider.Message{{
+			Role:    "user",
+			Content: "Authorization: Bearer abcdefghijklmnop",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Dump returned error: %v", err)
+	}
+
+	var markdownPath string
+	if err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if strings.HasSuffix(path, ".md") {
+			markdownPath = path
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WalkDir returned error: %v", err)
+	}
+	data, err := os.ReadFile(markdownPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if strings.Contains(string(data), "abcdefghijklmnop") || !strings.Contains(string(data), "[REDACTED]") {
+		t.Fatalf("expected persisted dump to redact secret-looking values, got:\n%s", string(data))
+	}
+}
+
+func TestDumperPrunesExpiredDayDirectories(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	expiredDir := filepath.Join(dir, "2026-05-01")
+	freshDir := filepath.Join(dir, "2026-05-14")
+	if err := os.MkdirAll(expiredDir, 0700); err != nil {
+		t.Fatalf("MkdirAll expired returned error: %v", err)
+	}
+	if err := os.MkdirAll(freshDir, 0700); err != nil {
+		t.Fatalf("MkdirAll fresh returned error: %v", err)
+	}
+	dumper := NewWithRetentionDays(true, dir, 7)
+	if err := dumper.pruneExpired(time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("pruneExpired returned error: %v", err)
+	}
+	if _, err := os.Stat(expiredDir); !os.IsNotExist(err) {
+		t.Fatalf("expected expired directory to be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(freshDir); err != nil {
+		t.Fatalf("expected fresh directory to remain, stat err=%v", err)
 	}
 }

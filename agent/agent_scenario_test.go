@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
@@ -88,6 +91,132 @@ func TestRunScenarioNormalToolCallThenFinalAnswer(t *testing.T) {
 	if len(recorder.records) != 1 || !recorder.records[0].Success {
 		t.Fatalf("expected run recorder to capture success, got %#v", recorder.records)
 	}
+}
+
+func TestRunScenarioApprovalWaitBecomesBlockedStateWithoutVerifierLoop(t *testing.T) {
+	t.Parallel()
+
+	provider := newScriptedProvider(t,
+		scriptedProviderStep{
+			name:   "request shell command",
+			expect: expectToolNames("shell_execute"),
+			resp:   assistantToolCall("call-1", "shell_execute", `{"command":"echo hello"}`),
+		},
+	)
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+	registry := tools.NewRegistry()
+	registry.Register(tools.NewShellToolWithApprover([]string{"ps"}, tools.NewBlockingApprover(), "primary"))
+
+	result, err := New(Options{
+		Provider:                      provider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  registry,
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		MemoryRetriever:               &memoryStub{},
+		BlockedWorkStore:              store,
+	}).Run(context.Background(), "run echo")
+	if err == nil {
+		t.Fatal("expected approval wait to return a blocked error")
+	}
+	if result.Run.TaskState != state.TaskStateBlockedWaitingUser || result.Run.Success {
+		t.Fatalf("expected blocked task state, got %#v", result.Run)
+	}
+	provider.AssertComplete(t)
+
+	pending, listErr := store.ListBlockedWork(context.Background())
+	if listErr != nil {
+		t.Fatalf("ListBlockedWork returned error: %v", listErr)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("expected one persisted blocked work item, got %#v", pending)
+	}
+	if pending[0].PendingApprovalPayload != "echo hello" || pending[0].ConversationSnapshot == "" || pending[0].ContinuationData == "" {
+		t.Fatalf("expected resumable approval context to persist, got %#v", pending[0])
+	}
+}
+
+func TestResumeBlockedWorkCompletesAfterApproval(t *testing.T) {
+	t.Parallel()
+
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+	now := time.Now().UTC()
+	target := state.Target{
+		ID: "runtime-1", Kind: memory.TargetKindRuntime, Environment: state.EnvironmentRuntime,
+		PrimaryName: "runtime.local", Transport: "local", RemoteIdentity: "local:runtime-1",
+		Status: state.MemoryStatusActive, FirstSeenAt: now, LastSeenAt: now, VerifiedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	if err := store.ReplaceOperationalMemory(context.Background(), state.OperationalMemory{Targets: []state.Target{target}}); err != nil {
+		t.Fatalf("ReplaceOperationalMemory returned error: %v", err)
+	}
+	targetMemory := &memoryStub{resolution: memory.TargetResolution{
+		RuntimeHostID: target.ID, TargetID: target.ID, TargetKind: target.Kind, Environment: target.Environment,
+	}}
+	blockingProvider := newScriptedProvider(t,
+		scriptedProviderStep{
+			name: "request shell command",
+			resp: assistantToolCall("call-1", "shell_execute", `{"command":"echo hello"}`),
+		},
+	)
+	blockingRegistry := tools.NewRegistry()
+	blockingRegistry.Register(tools.NewShellToolWithApprover([]string{"ps"}, tools.NewBlockingApprover(), "primary"))
+	blockingAgent := New(Options{
+		Provider:                      blockingProvider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  blockingRegistry,
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		MemoryRetriever:               targetMemory,
+		BlockedWorkStore:              store,
+	})
+	if _, err := blockingAgent.Run(context.Background(), "run echo"); err == nil {
+		t.Fatal("expected initial run to block")
+	}
+
+	pending, err := store.ListBlockedWork(context.Background())
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("expected one pending work item, got pending=%#v err=%v", pending, err)
+	}
+	if err := store.SaveCommandApproval(context.Background(), state.CommandApproval{
+		TargetID: target.ID, Environment: target.Environment, RemoteIdentity: target.RemoteIdentity,
+		Command: "echo hello", Action: "echo",
+		Status: state.ApprovalStatusApproved, Source: "cli_policy", Rationale: "operator approved resumed action",
+		PolicyVersion: state.CommandApprovalPolicyVersion, ApprovedAt: now, ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("SaveCommandApproval returned error: %v", err)
+	}
+	resumeProvider := newScriptedProvider(t,
+		scriptedProviderStep{name: "request shell command again", resp: assistantToolCall("call-1", "shell_execute", `{"command":"echo hello"}`)},
+		scriptedProviderStep{name: "final after approved command", expect: expectLastMessage("tool", "hello"), resp: assistantText("done")},
+	)
+	resumeRegistry := tools.NewRegistry()
+	resumeRegistry.Register(tools.NewShellToolWithApprovalStore([]string{"ps"}, tools.NewBlockingApprover(), "primary", store))
+	resumeAgent := New(Options{
+		Provider:                      resumeProvider,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  resumeRegistry,
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		DisableCompletionVerification: true,
+		MemoryRetriever:               targetMemory,
+		BlockedWorkStore:              store,
+	})
+
+	result, err := resumeAgent.ResumeBlockedWork(context.Background(), pending[0])
+	if err != nil {
+		t.Fatalf("ResumeBlockedWork returned error: %v", err)
+	}
+	if result.Run.TaskState != state.TaskStateCompleted || !result.Run.Success {
+		t.Fatalf("expected resumed run to complete, got %#v", result.Run)
+	}
+	resumeProvider.AssertComplete(t)
 }
 
 func TestRunScenarioVerificationSatisfied(t *testing.T) {

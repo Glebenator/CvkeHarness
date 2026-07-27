@@ -57,6 +57,13 @@ func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTu
 	if !s.Available() {
 		return 0, s.Err()
 	}
+	if turn.TaskState == "" {
+		if turn.Success {
+			turn.TaskState = TaskStateCompleted
+		} else {
+			turn.TaskState = TaskStateFailed
+		}
+	}
 	if turn.CreatedAt.IsZero() {
 		turn.CreatedAt = time.Now().UTC()
 	}
@@ -79,16 +86,17 @@ func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTu
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO chat_turns (
 			session_id, turn_index, user_input, task_class, requested_model, actual_model,
-			success, error_message, latency_ms, prompt_tokens, completion_tokens, total_tokens,
+			task_state, success, error_message, latency_ms, prompt_tokens, completion_tokens, total_tokens,
 			final_output, verification_status, verification_reason, verification_missing_actions,
 			verification_repair_triggered, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sessionID,
 		turnIndex,
 		turn.UserInput,
 		string(turn.TaskClass),
 		turn.RequestedModel,
 		turn.ActualModel,
+		string(turn.TaskState),
 		boolToInt(turn.Success),
 		turn.ErrorMessage,
 		turn.LatencyMs,

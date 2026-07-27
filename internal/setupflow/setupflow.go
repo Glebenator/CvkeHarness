@@ -199,7 +199,6 @@ func LoadWizardConfig() *config.Config {
 	clone.StateDBPath = firstNonEmpty(existing.StateDBPath, cfg.StateDBPath)
 	clone.DebugPromptDumps = existing.DebugPromptDumps
 	clone.PromptDumpDir = firstNonEmpty(existing.PromptDumpDir, cfg.PromptDumpDir)
-	clone.MemoryMaxSnippets = existing.MemoryMaxSnippets
 	clone.RoutingMinConfidence = existing.RoutingMinConfidence
 	clone.SetupAgentMode = firstNonEmpty(existing.SetupAgentMode, cfg.SetupAgentMode)
 	clone.CapabilityPolicy = existing.CapabilityPolicy
@@ -557,12 +556,12 @@ func Finalize(ctx context.Context, opts FinalizeOptions) (FinalizeResult, error)
 		return result, err
 	}
 	result.HostProfilePath = hostPath
-	wroteSoul, err := WriteSoul(cfg.MemoryDir, cfg.MemoryMaxSnippets, opts.SoulProfile)
+	wroteSoul, err := WriteSoul(cfg.MemoryDir, opts.SoulProfile)
 	if err != nil {
 		return result, err
 	}
 	result.SoulWritten = wroteSoul
-	wroteHost, err := WriteHostNotes(cfg.MemoryDir, cfg.MemoryMaxSnippets, append(SummarizeHostProfile(opts.HostProfile), opts.HostNotes...))
+	wroteHost, err := WriteHostNotes(cfg.MemoryDir, append(SummarizeHostProfile(opts.HostProfile), opts.HostNotes...))
 	if err != nil {
 		return result, err
 	}
@@ -665,16 +664,16 @@ func SummarizeHostProfile(profile HostProfile) []string {
 	return notes
 }
 
-func WriteSoul(memoryDir string, maxSnippets int, profile SoulProfile) (bool, error) {
-	manager := memory.NewManager(memoryDir, nil, maxSnippets)
+func WriteSoul(memoryDir string, profile SoulProfile) (bool, error) {
+	manager := memory.NewManager(memoryDir, nil)
 	if err := manager.EnsureFiles(); err != nil {
 		return false, err
 	}
-	path := filepath.Join(memoryDir, memory.SoulFile)
+	path := filepath.Join(memoryDir, memory.GuidanceFile)
 	data, err := os.ReadFile(path)
 	if err == nil {
 		trimmed := strings.TrimSpace(string(data))
-		if trimmed != "" && trimmed != "# Soul" {
+		if trimmed != "" && trimmed != "# Guidance" {
 			return false, nil
 		}
 	} else if !os.IsNotExist(err) {
@@ -683,7 +682,7 @@ func WriteSoul(memoryDir string, maxSnippets int, profile SoulProfile) (bool, er
 	if profile.ID == "" {
 		profile = DefaultSoulProfile()
 	}
-	content := fmt.Sprintf(`# Soul
+	content := fmt.Sprintf(`# Guidance
 
 You are CvkeHarness, a local-first engineering agent for coding, debugging, systems work, and DevOps-style workflows.
 
@@ -702,13 +701,32 @@ Prefer reversible actions, inspect before changing state, and surface uncertaint
 	return true, os.WriteFile(path, []byte(content), 0644)
 }
 
-func WriteHostNotes(memoryDir string, maxSnippets int, notes []string) (bool, error) {
+func WriteHostNotes(memoryDir string, notes []string) (bool, error) {
 	notes = dedupe(notes)
 	if len(notes) == 0 {
 		return false, nil
 	}
-	manager := memory.NewManager(memoryDir, nil, maxSnippets)
-	return manager.SeedRuntimeHostNotes(context.Background(), notes)
+	manager := memory.NewManager(memoryDir, nil)
+	if err := manager.EnsureFiles(); err != nil {
+		return false, err
+	}
+	path := filepath.Join(memoryDir, memory.GuidanceFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if strings.Contains(string(data), "\n## Runtime Host Notes\n") {
+		return false, nil
+	}
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(string(data), "\n"))
+	b.WriteString("\n\n## Runtime Host Notes\n\n")
+	for _, note := range notes {
+		b.WriteString("- ")
+		b.WriteString(note)
+		b.WriteString("\n")
+	}
+	return true, os.WriteFile(path, []byte(b.String()), 0644)
 }
 
 func MaskSecret(value string) string {

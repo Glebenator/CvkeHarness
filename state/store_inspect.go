@@ -16,7 +16,7 @@ func (s *Store) ListRecentRuns(ctx context.Context, limit int) ([]RunSummary, er
 		limit = 20
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, started_at, finished_at, provider, task, task_class, success,
+		SELECT id, started_at, finished_at, provider, task, task_class, task_state, success,
 			error_message, final_output, verification_status, verification_reason,
 			verification_missing_actions, verification_repair_triggered, routing_enabled
 		FROM runs
@@ -30,17 +30,18 @@ func (s *Store) ListRecentRuns(ctx context.Context, limit int) ([]RunSummary, er
 	var out []RunSummary
 	for rows.Next() {
 		var item RunSummary
-		var taskClass string
+		var taskClass, taskState string
 		var success, repair, routing int
 		if err := rows.Scan(
 			&item.ID, &item.StartedAt, &item.FinishedAt, &item.Provider, &item.Task,
-			&taskClass, &success, &item.ErrorMessage, &item.FinalOutput,
+			&taskClass, &taskState, &success, &item.ErrorMessage, &item.FinalOutput,
 			&item.VerificationStatus, &item.VerificationReason,
 			&item.VerificationMissingActions, &repair, &routing,
 		); err != nil {
 			return nil, err
 		}
 		item.TaskClass = core.TaskClass(taskClass)
+		item.TaskState = TaskState(taskState)
 		item.Success = success == 1
 		item.VerificationRepairTriggered = repair == 1
 		item.RoutingEnabled = routing == 1
@@ -208,7 +209,7 @@ func scanChatSessionSummary(scanner chatSessionScanner) (ChatSessionSummary, err
 func (s *Store) listChatTurns(ctx context.Context, sessionID int64) ([]ChatTurn, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, session_id, turn_index, user_input, task_class, requested_model,
-			actual_model, success, error_message, latency_ms, prompt_tokens,
+			actual_model, task_state, success, error_message, latency_ms, prompt_tokens,
 			completion_tokens, total_tokens, final_output, verification_status,
 			verification_reason, verification_missing_actions, verification_repair_triggered,
 			created_at
@@ -223,11 +224,11 @@ func (s *Store) listChatTurns(ctx context.Context, sessionID int64) ([]ChatTurn,
 	var out []ChatTurn
 	for rows.Next() {
 		var item ChatTurn
-		var taskClass string
+		var taskClass, taskState string
 		var success, repair int
 		if err := rows.Scan(
 			&item.ID, &item.SessionID, &item.TurnIndex, &item.UserInput, &taskClass,
-			&item.RequestedModel, &item.ActualModel, &success, &item.ErrorMessage,
+			&item.RequestedModel, &item.ActualModel, &taskState, &success, &item.ErrorMessage,
 			&item.LatencyMs, &item.PromptTokens, &item.CompletionTokens, &item.TotalTokens,
 			&item.FinalOutput, &item.VerificationStatus, &item.VerificationReason,
 			&item.VerificationMissingActions, &repair, &item.CreatedAt,
@@ -235,6 +236,7 @@ func (s *Store) listChatTurns(ctx context.Context, sessionID int64) ([]ChatTurn,
 			return nil, err
 		}
 		item.TaskClass = core.TaskClass(taskClass)
+		item.TaskState = TaskState(taskState)
 		item.Success = success == 1
 		item.VerificationRepairTriggered = repair == 1
 		out = append(out, item)

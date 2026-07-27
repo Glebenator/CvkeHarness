@@ -196,12 +196,42 @@ var jobsRunsCmd = &cobra.Command{
 	},
 }
 
+var jobsHealthCmd = &cobra.Command{
+	Use:   "health",
+	Short: "Show scheduler health derived from telemetry",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		store, closeFn, err := openState()
+		if err != nil {
+			return err
+		}
+		defer closeFn()
+		health, err := store.ListSchedulerHealth(context.Background())
+		if err != nil {
+			return err
+		}
+		for _, item := range health {
+			fmt.Printf("- %s status=%s blocked=%t overdue=%t claimed=%t stale_claim=%t heartbeat_fresh=%t last_heartbeat=%s last_finished=%s\n",
+				item.JobID,
+				emptyAs(item.LastStatus, "(none)"),
+				item.Blocked,
+				item.Overdue,
+				item.Claimed,
+				item.StaleClaim,
+				item.HeartbeatFresh,
+				formatOptionalTime(item.LastHeartbeatAt),
+				formatOptionalTime(item.LastFinishedAt),
+			)
+		}
+		return nil
+	},
+}
+
 type scheduledAgentRunner struct {
 	agent *agent.Agent
 }
 
 func (r scheduledAgentRunner) RunScheduledJob(ctx context.Context, job state.ScheduledJob) (string, int64, error) {
-	result, err := r.agent.Run(ctx, job.Prompt)
+	result, err := r.agent.Run(agent.WithScheduledJobID(ctx, job.ID), job.Prompt)
 	return result.Output, result.Run.ID, err
 }
 
@@ -215,15 +245,16 @@ func newScheduledAgentRunner(ctx context.Context, store *state.Store) (scheduled
 	if err != nil {
 		return scheduledAgentRunner{}, err
 	}
-	mem := memory.NewManager(cfg.MemoryDir, store, cfg.MemoryMaxSnippets)
+	mem := memory.NewManager(cfg.MemoryDir, store)
 	if err := mem.EnsureFiles(); err != nil {
 		return scheduledAgentRunner{}, err
 	}
 	if err := mem.Reindex(ctx); err != nil {
 		log.FromContext(ctx).Warn("failed to reindex memory metadata", "error", err)
 	}
-	promptDumper := promptdump.New(cfg.DebugPromptDumps, cfg.PromptDumpDir)
-	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper)
+	promptDumper := promptdump.NewWithRetentionDays(cfg.DebugPromptDumps, cfg.PromptDumpDir, cfg.PromptDumpRetentionDays)
+	telemetryWriter := telemetryWriterFromConfig(cfg, store)
+	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper, true)
 	if err != nil {
 		return scheduledAgentRunner{}, err
 	}
@@ -244,7 +275,9 @@ func newScheduledAgentRunner(ctx context.Context, store *state.Store) (scheduled
 		MemoryRetriever:  mem,
 		MemoryCurator:    mem,
 		RunRecorder:      store,
+		BlockedWorkStore: store,
 		PromptDumper:     promptDumper,
+		TelemetryWriter:  telemetryWriter,
 	})}, nil
 }
 
@@ -262,6 +295,10 @@ func runJobsLoop(ctx context.Context, interval time.Duration, once bool) error {
 		return err
 	}
 	svc := scheduler.New(store)
+	cfg, cfgErr := config.LoadConfig()
+	if cfgErr == nil {
+		svc.SetTelemetryWriter(telemetryWriterFromConfig(cfg, store))
+	}
 	for {
 		runs, err := svc.RunDue(ctx, runner)
 		if err != nil {
@@ -309,6 +346,20 @@ func confirmCLI(prompt string) bool {
 	return idx == 1
 }
 
+func emptyAs(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return "(none)"
+	}
+	return value.Format(time.RFC3339)
+}
+
 func init() {
 	jobsAddCmd.Flags().String("name", "", "job name")
 	jobsAddCmd.Flags().String("kind", "every", "schedule kind: at, every, cron")
@@ -321,6 +372,6 @@ func init() {
 	jobsRunLoopCmd.Flags().Duration("interval", 30*time.Second, "poll interval")
 	jobsRunLoopCmd.Flags().Bool("once", false, "run due jobs once and exit")
 
-	jobsCmd.AddCommand(jobsListCmd, jobsAddCmd, jobsUpdateCmd, jobsRunCmd, jobsRunLoopCmd, jobsPauseCmd, jobsResumeCmd, jobsRemoveCmd, jobsRunsCmd)
+	jobsCmd.AddCommand(jobsListCmd, jobsAddCmd, jobsUpdateCmd, jobsRunCmd, jobsRunLoopCmd, jobsPauseCmd, jobsResumeCmd, jobsRemoveCmd, jobsRunsCmd, jobsHealthCmd)
 	rootCmd.AddCommand(jobsCmd)
 }

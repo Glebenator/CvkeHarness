@@ -6,6 +6,17 @@ import (
 	"github.com/coolcake/cvkeharness/core"
 )
 
+// TaskState is the durable lifecycle state for a run or chat turn.
+type TaskState string
+
+const (
+	TaskStateRunning            TaskState = "running"
+	TaskStateCompleted          TaskState = "completed"
+	TaskStateBlockedWaitingUser TaskState = "blocked_waiting_user"
+	TaskStateFailed             TaskState = "failed"
+	TaskStateIncomplete         TaskState = "incomplete"
+)
+
 // RunRecord stores the structured outcome of a harness run.
 type RunRecord struct {
 	ID                          int64
@@ -14,6 +25,7 @@ type RunRecord struct {
 	Provider                    string
 	Task                        string
 	TaskClass                   core.TaskClass
+	TaskState                   TaskState
 	Success                     bool
 	ErrorMessage                string
 	FinalOutput                 string
@@ -308,6 +320,9 @@ type ScheduledJob struct {
 	LastRunAt        time.Time
 	LastRunStatus    string
 	ConsecutiveFail  int
+	Blocked          bool
+	BlockedReason    string
+	BlockedWorkID    string
 	ClaimedBy        string
 	ClaimExpiresAt   time.Time
 	ClaimHeartbeatAt time.Time
@@ -348,6 +363,7 @@ type RunSummary struct {
 	Provider                    string
 	Task                        string
 	TaskClass                   core.TaskClass
+	TaskState                   TaskState
 	Success                     bool
 	ErrorMessage                string
 	FinalOutput                 string
@@ -400,6 +416,7 @@ type ChatTurn struct {
 	TaskClass                   core.TaskClass
 	RequestedModel              string
 	ActualModel                 string
+	TaskState                   TaskState
 	Success                     bool
 	ErrorMessage                string
 	LatencyMs                   int64
@@ -436,6 +453,23 @@ type Snapshot struct {
 	Path       string
 	Reason     string
 	CreatedAt  time.Time
+}
+
+// BlockedWork stores a resumable unit that is waiting for explicit user action.
+type BlockedWork struct {
+	ID                     string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	ResolvedAt             time.Time
+	Task                   string
+	TaskClass              core.TaskClass
+	TaskState              TaskState
+	BlockedReason          string
+	PendingApprovalType    string
+	PendingApprovalPayload string
+	ConversationSnapshot   string
+	ContinuationData       string
+	ScheduledJobID         string
 }
 
 const (

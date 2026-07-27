@@ -68,7 +68,7 @@ var runCmd = &cobra.Command{
 		}
 		defer store.Close()
 
-		mem := memory.NewManager(cfg.MemoryDir, store, cfg.MemoryMaxSnippets)
+		mem := memory.NewManager(cfg.MemoryDir, store)
 		if err := mem.EnsureFiles(); err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
@@ -76,8 +76,9 @@ var runCmd = &cobra.Command{
 		if err := mem.Reindex(ctx); err != nil {
 			logger.Warn("failed to reindex memory metadata", "error", err)
 		}
-		promptDumper := promptdump.New(cfg.DebugPromptDumps, cfg.PromptDumpDir)
-		registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper)
+		promptDumper := promptdump.NewWithRetentionDays(cfg.DebugPromptDumps, cfg.PromptDumpDir, cfg.PromptDumpRetentionDays)
+		telemetryWriter := telemetryWriterFromConfig(cfg, store)
+		registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper, false)
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
@@ -105,7 +106,9 @@ var runCmd = &cobra.Command{
 			MemoryRetriever:  mem,
 			MemoryCurator:    mem,
 			RunRecorder:      store,
+			BlockedWorkStore: store,
 			PromptDumper:     promptDumper,
+			TelemetryWriter:  telemetryWriter,
 		})
 
 		ui := cli.NewChatSurface(os.Stdout)

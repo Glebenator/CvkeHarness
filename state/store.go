@@ -82,6 +82,13 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 	if !s.Available() {
 		return s.Err()
 	}
+	if record.TaskState == "" {
+		if record.Success {
+			record.TaskState = TaskStateCompleted
+		} else {
+			record.TaskState = TaskStateFailed
+		}
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -91,15 +98,16 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO runs (
-			started_at, finished_at, provider, task, task_class, success, error_message,
+			started_at, finished_at, provider, task, task_class, task_state, success, error_message,
 			final_output, verification_status, verification_reason, verification_missing_actions,
 			verification_repair_triggered, routing_enabled
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.StartedAt.UTC(),
 		record.FinishedAt.UTC(),
 		record.Provider,
 		record.Task,
 		string(record.TaskClass),
+		string(record.TaskState),
 		boolToInt(record.Success),
 		record.ErrorMessage,
 		record.FinalOutput,
@@ -400,6 +408,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			provider TEXT NOT NULL,
 			task TEXT NOT NULL,
 			task_class TEXT NOT NULL,
+			task_state TEXT NOT NULL DEFAULT 'completed',
 			success INTEGER NOT NULL,
 			error_message TEXT NOT NULL DEFAULT '',
 			final_output TEXT NOT NULL DEFAULT '',
@@ -661,6 +670,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			task_class TEXT NOT NULL,
 			requested_model TEXT NOT NULL,
 			actual_model TEXT NOT NULL,
+			task_state TEXT NOT NULL DEFAULT 'completed',
 			success INTEGER NOT NULL DEFAULT 0,
 			error_message TEXT NOT NULL DEFAULT '',
 			latency_ms INTEGER NOT NULL DEFAULT 0,
@@ -729,6 +739,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			last_run_at DATETIME,
 			last_run_status TEXT NOT NULL DEFAULT '',
 			consecutive_failures INTEGER NOT NULL DEFAULT 0,
+			blocked INTEGER NOT NULL DEFAULT 0,
+			blocked_reason TEXT NOT NULL DEFAULT '',
+			blocked_work_id TEXT NOT NULL DEFAULT '',
 			claimed_by TEXT NOT NULL DEFAULT '',
 			claim_expires_at DATETIME,
 			claim_heartbeat_at DATETIME,
@@ -745,6 +758,63 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			error TEXT NOT NULL DEFAULT '',
 			run_id INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS blocked_work (
+			id TEXT PRIMARY KEY,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+			resolved_at DATETIME,
+			task TEXT NOT NULL,
+			task_class TEXT NOT NULL,
+			task_state TEXT NOT NULL,
+			blocked_reason TEXT NOT NULL DEFAULT '',
+			pending_approval_type TEXT NOT NULL DEFAULT '',
+			pending_approval_payload TEXT NOT NULL DEFAULT '',
+			conversation_snapshot TEXT NOT NULL DEFAULT '',
+			continuation_data TEXT NOT NULL DEFAULT '',
+			scheduled_job_id TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE TABLE IF NOT EXISTS telemetry_events (
+			event_id TEXT PRIMARY KEY,
+			timestamp DATETIME NOT NULL,
+			stream TEXT NOT NULL,
+			event_type TEXT NOT NULL,
+			session_id TEXT NOT NULL DEFAULT '',
+			run_id TEXT NOT NULL DEFAULT '',
+			turn_id TEXT NOT NULL DEFAULT '',
+			job_id TEXT NOT NULL DEFAULT '',
+			phase TEXT NOT NULL DEFAULT '',
+			iteration INTEGER NOT NULL DEFAULT 0,
+			provider TEXT NOT NULL DEFAULT '',
+			requested_model TEXT NOT NULL DEFAULT '',
+			actual_model TEXT NOT NULL DEFAULT '',
+			task_state TEXT NOT NULL DEFAULT '',
+			target_id TEXT NOT NULL DEFAULT '',
+			tool_call_id TEXT NOT NULL DEFAULT '',
+			payload_json TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE TABLE IF NOT EXISTS telemetry_task_projection (
+			run_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			turn_id TEXT NOT NULL DEFAULT '',
+			job_id TEXT NOT NULL DEFAULT '',
+			task_state TEXT NOT NULL DEFAULT '',
+			target_id TEXT NOT NULL DEFAULT '',
+			last_event_type TEXT NOT NULL DEFAULT '',
+			updated_at DATETIME NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS scheduler_health_projection (
+			job_id TEXT PRIMARY KEY,
+			last_status TEXT NOT NULL DEFAULT '',
+			blocked INTEGER NOT NULL DEFAULT 0,
+			overdue INTEGER NOT NULL DEFAULT 0,
+			claimed INTEGER NOT NULL DEFAULT 0,
+			claim_lease_ms INTEGER NOT NULL DEFAULT 0,
+			last_claim_at DATETIME,
+			last_heartbeat_at DATETIME,
+			last_started_at DATETIME,
+			last_finished_at DATETIME,
+			last_event_at DATETIME NOT NULL
 		);`,
 		`CREATE TABLE IF NOT EXISTS system_cron_audit (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -768,11 +838,13 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	optionalColumns := []string{
+		`ALTER TABLE runs ADD COLUMN task_state TEXT NOT NULL DEFAULT 'completed'`,
 		`ALTER TABLE runs ADD COLUMN final_output TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE runs ADD COLUMN verification_status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE runs ADD COLUMN verification_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE runs ADD COLUMN verification_missing_actions TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE runs ADD COLUMN verification_repair_triggered INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE chat_turns ADD COLUMN task_state TEXT NOT NULL DEFAULT 'completed'`,
 		`ALTER TABLE chat_turns ADD COLUMN final_output TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE chat_turns ADD COLUMN verification_status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE chat_turns ADD COLUMN verification_reason TEXT NOT NULL DEFAULT ''`,
