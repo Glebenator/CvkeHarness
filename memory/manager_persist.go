@@ -114,39 +114,10 @@ func (m *Manager) CurateRunOutcome(ctx context.Context, outcome RunOutcome) erro
 		changed = applyPlaybook(&mem, targetID, intent, successfulCommands, outcome.Task, now) || changed
 	}
 
-	if len(successfulCommands) == 0 && !hasWebResearchTool(outcome.ToolCalls) && strings.TrimSpace(outcome.ExecutionError) == "" && targetID != "" {
-		summary := strings.TrimSpace(outcome.Output)
-		if summary != "" {
-			finding := state.Finding{
-				ID:         findingID(targetID+"|run", summary),
-				TargetID:   targetID,
-				Intent:     intent,
-				ToolName:   "",
-				Status:     "active",
-				Origin:     "run_outcome",
-				Body:       oneSentence(summary),
-				Confidence: 0.65,
-				SeenCount:  1,
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			}
-			mem.Findings, changed = upsertFinding(mem.Findings, finding)
-		}
-	}
-
 	if !changed {
 		return nil
 	}
 	return m.writeAllState(ctx, mem, "curate run outcome")
-}
-
-func hasWebResearchTool(calls []ObservedToolCall) bool {
-	for _, call := range calls {
-		if isWebResearchTool(call.ToolName) {
-			return true
-		}
-	}
-	return false
 }
 
 func isWebResearchTool(name string) bool {
@@ -329,9 +300,6 @@ func (m *Manager) applyObservedFacts(mem *fileState, targetID string, call Obser
 	target.Facts = dedupeFacts(target.Facts)
 	target.Hostnames = dedupeStrings(target.Hostnames)
 	mem.Targets[idx] = target
-	if targetID == mem.RuntimeHostID {
-		mem.RuntimeHostFacts = mergeFactLists(mem.RuntimeHostFacts, facts)
-	}
 	return len(target.Facts) != before || len(facts) > 0
 }
 

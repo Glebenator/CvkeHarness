@@ -329,6 +329,23 @@ func TestShellTool_ReturnsUserDenial(t *testing.T) {
 	}
 }
 
+func TestBlockingApproverReturnsApprovalRequiredError(t *testing.T) {
+	t.Parallel()
+
+	tool := NewShellToolWithApprover([]string{"ps"}, NewBlockingApprover(), "primary")
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"echo hello"}`))
+	if err == nil {
+		t.Fatal("expected blocked approval error")
+	}
+	approvalErr, ok := IsApprovalRequired(err)
+	if !ok {
+		t.Fatalf("expected ApprovalRequiredError, got %T: %v", err, err)
+	}
+	if approvalErr.Request.Command != "echo hello" {
+		t.Fatalf("expected command to persist in approval request, got %#v", approvalErr)
+	}
+}
+
 func TestShellTool_PersistsApprovedSegments(t *testing.T) {
 	t.Parallel()
 

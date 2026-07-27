@@ -17,7 +17,7 @@ var memoryCmd = &cobra.Command{
 
 var memoryShowCmd = &cobra.Command{
 	Use:   "show",
-	Short: "Show operator, soul, targets, host, playbooks, findings, cautions, and snapshot summary",
+	Short: "Show guidance, targets, playbooks, findings, cautions, and snapshot summary",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.LoadConfig()
 		if err != nil {
@@ -26,7 +26,7 @@ var memoryShowCmd = &cobra.Command{
 		store := state.Open(cfg.StateDBPath)
 		defer store.Close()
 
-		mem := memory.NewManager(cfg.MemoryDir, store, cfg.MemoryMaxSnippets)
+		mem := memory.NewManager(cfg.MemoryDir, store)
 		out, err := mem.Show(context.Background())
 		if err != nil {
 			return err
@@ -48,7 +48,7 @@ var memoryRollbackCmd = &cobra.Command{
 		store := state.Open(cfg.StateDBPath)
 		defer store.Close()
 
-		mem := memory.NewManager(cfg.MemoryDir, store, cfg.MemoryMaxSnippets)
+		mem := memory.NewManager(cfg.MemoryDir, store)
 		if err := mem.Rollback(context.Background(), args[0]); err != nil {
 			return err
 		}
@@ -68,7 +68,7 @@ var memoryReindexCmd = &cobra.Command{
 		store := state.Open(cfg.StateDBPath)
 		defer store.Close()
 
-		mem := memory.NewManager(cfg.MemoryDir, store, cfg.MemoryMaxSnippets)
+		mem := memory.NewManager(cfg.MemoryDir, store)
 		if err := mem.Reindex(context.Background()); err != nil {
 			return err
 		}

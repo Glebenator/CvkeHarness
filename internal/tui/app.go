@@ -347,7 +347,8 @@ func loadOverviewData(svc *Service) tea.Msg {
 func loadJobsData(svc *Service) tea.Msg {
 	ctx := context.Background()
 	jobs, _ := svc.ScheduledJobs(ctx)
-	return jobsDataMsg{jobs: jobs}
+	health, _ := svc.SchedulerHealth(ctx)
+	return jobsDataMsg{jobs: jobs, health: health}
 }
 
 func loadRunsData(svc *Service) tea.Msg {

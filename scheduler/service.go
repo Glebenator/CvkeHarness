@@ -4,17 +4,20 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/state"
 )
 
 const (
-	RunStatusOK    = "ok"
-	RunStatusError = "error"
+	RunStatusOK      = "ok"
+	RunStatusError   = "error"
+	RunStatusBlocked = "blocked"
 
 	DefaultClaimLease        = 5 * time.Minute
 	DefaultHeartbeatInterval = time.Minute
@@ -32,6 +35,7 @@ type Service struct {
 	owner             string
 	claimLease        time.Duration
 	heartbeatInterval time.Duration
+	telemetryWriter   *telemetry.Writer
 }
 
 // New creates a scheduler service.
@@ -61,6 +65,11 @@ func (s *Service) SetHeartbeatInterval(interval time.Duration) {
 	if interval > 0 {
 		s.heartbeatInterval = interval
 	}
+}
+
+// SetTelemetryWriter configures canonical scheduler event emission.
+func (s *Service) SetTelemetryWriter(writer *telemetry.Writer) {
+	s.telemetryWriter = writer
 }
 
 // Create validates and persists a new scheduled job.
@@ -161,6 +170,18 @@ func (s *Service) RunDue(ctx context.Context, runner Runner) ([]state.ScheduledJ
 	var runs []state.ScheduledJobRun
 	var firstErr error
 	for _, job := range jobs {
+		eventCtx := s.telemetryContext(ctx, job.ID)
+		if job.NextRunAt.Before(s.now()) {
+			_ = telemetry.Record(eventCtx, telemetry.Event{
+				Type:  telemetry.EventSchedulerOverdue,
+				JobID: job.ID,
+			})
+		}
+		_ = telemetry.Record(eventCtx, telemetry.Event{
+			Type:    telemetry.EventSchedulerClaimed,
+			JobID:   job.ID,
+			Payload: s.schedulerTelemetryPayload(),
+		})
 		run, err := s.runClaimed(ctx, runner, job, false)
 		if err != nil {
 			if firstErr == nil {
@@ -195,11 +216,20 @@ func (s *Service) runClaimed(ctx context.Context, runner Runner, job state.Sched
 		return state.ScheduledJobRun{}, err
 	}
 	started := s.now()
+	_ = telemetry.Record(s.telemetryContext(ctx, job.ID), telemetry.Event{
+		Type:    telemetry.EventSchedulerStarted,
+		JobID:   job.ID,
+		Payload: s.schedulerTelemetryPayload(),
+	})
 	output, runID, execErr := runner.RunScheduledJob(ctx, job)
 	finished := s.now()
 	status := RunStatusOK
 	errText := ""
-	if execErr != nil {
+	blockedState := blockedTaskState(execErr)
+	if blockedState == state.TaskStateBlockedWaitingUser {
+		status = RunStatusBlocked
+		errText = execErr.Error()
+	} else if execErr != nil {
 		status = RunStatusError
 		errText = execErr.Error()
 	}
@@ -220,10 +250,19 @@ func (s *Service) runClaimed(ctx context.Context, runner Runner, job state.Sched
 
 	job.LastRunAt = started
 	job.LastRunStatus = status
-	if execErr != nil {
+	if status == RunStatusBlocked {
+		job.Blocked = true
+		job.BlockedReason = errText
+		if carrier, ok := execErr.(interface{ WorkID() string }); ok {
+			job.BlockedWorkID = carrier.WorkID()
+		}
+	} else if execErr != nil {
 		job.ConsecutiveFail++
 	} else {
 		job.ConsecutiveFail = 0
+		job.Blocked = false
+		job.BlockedReason = ""
+		job.BlockedWorkID = ""
 	}
 	if !manual {
 		if job.ScheduleKind == KindAt {
@@ -243,7 +282,26 @@ func (s *Service) runClaimed(ctx context.Context, runner Runner, job state.Sched
 	if err := s.store.SaveScheduledJob(ctx, job); err != nil {
 		return state.ScheduledJobRun{}, err
 	}
+	_ = telemetry.Record(s.telemetryContext(ctx, job.ID), telemetry.Event{
+		Type:      telemetry.EventSchedulerFinished,
+		JobID:     job.ID,
+		TaskState: schedulerTaskState(status),
+	})
+	if status == RunStatusBlocked {
+		return run, nil
+	}
 	return run, execErr
+}
+
+func blockedTaskState(err error) state.TaskState {
+	if err == nil {
+		return ""
+	}
+	carrier, ok := err.(interface{ TaskState() state.TaskState })
+	if !ok {
+		return ""
+	}
+	return carrier.TaskState()
 }
 
 func (s *Service) startHeartbeat(ctx context.Context, jobID, owner string) func() {
@@ -269,6 +327,11 @@ func (s *Service) startHeartbeat(ctx context.Context, jobID, owner string) func(
 				return
 			case <-ticker.C:
 				_ = s.store.RefreshScheduledJobClaim(context.Background(), jobID, owner, s.now(), s.claimLease)
+				_ = telemetry.Record(s.telemetryContext(context.Background(), jobID), telemetry.Event{
+					Type:    telemetry.EventSchedulerHeartbeat,
+					JobID:   jobID,
+					Payload: s.schedulerTelemetryPayload(),
+				})
 			}
 		}
 	}()
@@ -307,4 +370,30 @@ func newID(prefix string) (string, error) {
 		return "", err
 	}
 	return prefix + "_" + hex.EncodeToString(b[:]), nil
+}
+
+func (s *Service) telemetryContext(ctx context.Context, jobID string) context.Context {
+	if s.telemetryWriter == nil {
+		return ctx
+	}
+	ctx = telemetry.WithWriter(ctx, s.telemetryWriter)
+	return telemetry.WithFields(ctx, telemetry.Fields{JobID: jobID})
+}
+
+func schedulerTaskState(status string) string {
+	switch status {
+	case RunStatusOK:
+		return string(state.TaskStateCompleted)
+	case RunStatusBlocked:
+		return string(state.TaskStateBlockedWaitingUser)
+	default:
+		return string(state.TaskStateFailed)
+	}
+}
+
+func (s *Service) schedulerTelemetryPayload() []byte {
+	payload, _ := json.Marshal(map[string]any{
+		"claim_lease_ms": s.claimLease.Milliseconds(),
+	})
+	return payload
 }

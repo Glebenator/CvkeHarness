@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -38,10 +39,42 @@ type ShellApprover interface {
 	Approve(ctx context.Context, req ShellApprovalRequest) (ShellApprovalDecision, error)
 }
 
+// ApprovalRequiredError indicates that work is legitimately waiting for user action.
+type ApprovalRequiredError struct {
+	Request ShellApprovalRequest
+}
+
+func (e ApprovalRequiredError) Error() string {
+	return "user approval required before executing shell command: " + strings.TrimSpace(e.Request.Command)
+}
+
+// IsApprovalRequired reports whether err is a deferred manual-approval blocker.
+func IsApprovalRequired(err error) (ApprovalRequiredError, bool) {
+	if err == nil {
+		return ApprovalRequiredError{}, false
+	}
+	var approvalErr ApprovalRequiredError
+	if ok := errors.As(err, &approvalErr); ok {
+		return approvalErr, true
+	}
+	return ApprovalRequiredError{}, false
+}
+
 type llmJudgeApprover struct {
 	judge       provider.Provider
 	safetyModel string
 	dumper      *promptdump.Dumper
+}
+
+type blockingApprover struct{}
+
+// NewBlockingApprover returns an approver that records a resumable wait instead of prompting.
+func NewBlockingApprover() ShellApprover {
+	return blockingApprover{}
+}
+
+func (blockingApprover) Approve(_ context.Context, req ShellApprovalRequest) (ShellApprovalDecision, error) {
+	return ShellApprovalDecision{}, ApprovalRequiredError{Request: req}
 }
 
 // NewLLMJudgeApprover creates a judge-backed shell approval path.

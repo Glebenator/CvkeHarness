@@ -18,6 +18,7 @@ import (
 	"github.com/coolcake/cvkeharness/internal/cli"
 	"github.com/coolcake/cvkeharness/internal/log"
 	"github.com/coolcake/cvkeharness/internal/promptdump"
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/router"
@@ -191,7 +192,7 @@ func runChat() {
 	}
 	defer store.Close()
 
-	mem := memory.NewManager(cfg.MemoryDir, store, cfg.MemoryMaxSnippets)
+	mem := memory.NewManager(cfg.MemoryDir, store)
 	if err := mem.EnsureFiles(); err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -200,8 +201,9 @@ func runChat() {
 		logger.Warn("failed to reindex memory metadata", "error", err)
 	}
 
-	promptDumper := promptdump.New(cfg.DebugPromptDumps, cfg.PromptDumpDir)
-	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper)
+	promptDumper := promptdump.NewWithRetentionDays(cfg.DebugPromptDumps, cfg.PromptDumpDir, cfg.PromptDumpRetentionDays)
+	telemetryWriter := telemetryWriterFromConfig(cfg, store)
+	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper, false)
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -228,7 +230,9 @@ func runChat() {
 		MemoryRetriever:  mem,
 		MemoryCurator:    mem,
 		RunRecorder:      store,
+		BlockedWorkStore: store,
 		PromptDumper:     promptDumper,
+		TelemetryWriter:  telemetryWriter,
 	})
 
 	signals := make(chan os.Signal, 2)
@@ -311,6 +315,10 @@ func runChat() {
 		ui.PrintUser(line)
 		ui.StartThinking()
 		turnCtx, cancelTurn := context.WithCancel(ctx)
+		turnCtx = telemetry.WithFields(turnCtx, telemetry.Fields{
+			SessionID: fmt.Sprintf("session_%d", current.sessionID),
+			TurnID:    fmt.Sprintf("turn_%d", current.stats.turnCount+1),
+		})
 		outcomeCh := make(chan chatTurnOutcome, 1)
 		go func() {
 			result, turnErr := current.session.Turn(turnCtx, line)
@@ -421,6 +429,7 @@ func persistChatTurn(ctx context.Context, store *state.Store, sessionID int64, u
 		TaskClass:                   result.TaskClass,
 		RequestedModel:              result.Phase.RequestedModel,
 		ActualModel:                 result.Phase.ActualModel,
+		TaskState:                   result.TaskState,
 		Success:                     result.Phase.Success,
 		ErrorMessage:                errorString(result.ExecutionErr),
 		LatencyMs:                   result.Phase.LatencyMs,

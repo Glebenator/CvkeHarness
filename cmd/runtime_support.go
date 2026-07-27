@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/promptdump"
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/state"
@@ -102,16 +104,17 @@ func routingConfigFromConfig(cfg *config.Config, store *state.Store) core.Routin
 	}
 }
 
-func defaultRegistryFromConfig(cfg *config.Config, store *state.Store, mem *memory.Manager, judge provider.Provider, promptDumper *promptdump.Dumper) (*tools.Registry, error) {
+func defaultRegistryFromConfig(cfg *config.Config, store *state.Store, mem *memory.Manager, judge provider.Provider, promptDumper *promptdump.Dumper, blockManualApprovals bool) (*tools.Registry, error) {
 	return tools.NewDefaultRegistryFromOptions(tools.DefaultRegistryOptions{
-		AllowedCommands: cfg.AllowedCommands,
-		Store:           store,
-		Memory:          mem,
-		Judge:           judge,
-		SafetyMode:      cfg.SafetyMode,
-		SafetyModel:     cfg.SafetyModel,
-		PrimaryModel:    cfg.PrimaryModel(),
-		PromptDumper:    promptDumper,
+		AllowedCommands:      cfg.AllowedCommands,
+		Store:                store,
+		Memory:               mem,
+		Judge:                judge,
+		SafetyMode:           cfg.SafetyMode,
+		SafetyModel:          cfg.SafetyModel,
+		PrimaryModel:         cfg.PrimaryModel(),
+		PromptDumper:         promptDumper,
+		BlockManualApprovals: blockManualApprovals,
 		WebSearch: tools.WebSearchOptions{
 			Enabled:         cfg.WebSearch.Enabled,
 			Provider:        cfg.WebSearch.Provider,
@@ -123,4 +126,11 @@ func defaultRegistryFromConfig(cfg *config.Config, store *state.Store, mem *memo
 			BlockedDomains:  cfg.WebSearch.BlockedDomains,
 		},
 	})
+}
+
+func telemetryWriterFromConfig(cfg *config.Config, store *state.Store) *telemetry.Writer {
+	if cfg == nil {
+		return nil
+	}
+	return telemetry.NewWriter(filepath.Join(filepath.Dir(cfg.StateDBPath), "telemetry"), telemetry.StreamLive, store)
 }

@@ -93,15 +93,13 @@ flowchart TB
 
     subgraph Memory["Readable Operational Memory (`memory/`)"]
         manager["memory.Manager"]
-        ensureFiles["EnsureFiles\nbootstrap files + snapshots dir + legacy import"]
+        ensureFiles["EnsureFiles\nbootstrap files + snapshots dir"]
         resolveTarget["ResolveTarget\nregistry + alias merge"]
         retrievePlan["RetrievePlan\nruntime summary + target summary + playbook + caution + finding"]
         curateOutcome["CurateRunOutcome\nfacts + playbooks + cautions + findings"]
         reindex["Reindex / parse managed markdown files"]
-        operatorFile["operator.md"]
-        soulFile["soul.md"]
+        guidanceFile["guidance.md"]
         targetsFile["targets.md"]
-        hostFile["host.md"]
         playbooksFile["playbooks.md"]
         findingsFile["findings.md"]
         cautionsFile["cautions.md"]
@@ -125,7 +123,7 @@ flowchart TB
 
     subgraph Observability["Observability"]
         slog["internal/log\nstructured runtime logs"]
-        telemetry["internal/telemetry\ntelemetry.jsonl"]
+        telemetry["internal/telemetry\ntelemetry/live/events.jsonl + SQLite projections"]
     end
 
     subgraph Safety["Safety Evaluation Flows (`safety/`)"]
@@ -284,7 +282,7 @@ sequenceDiagram
     participant SH as ShellTool
     participant DB as state.db
     participant MEM as managed markdown files
-    participant TEL as telemetry.jsonl
+    participant TEL as telemetry/live/events.jsonl
 
     U->>C: cvkeharness run "task"
     C->>CFG: LoadConfig()
@@ -292,7 +290,7 @@ sequenceDiagram
     C->>M: NewManager(memoryDir, store)
     C->>M: EnsureFiles()
     C->>M: Reindex()
-    M->>MEM: Parse targets.md, host.md, playbooks.md, findings.md, cautions.md
+    M->>MEM: Parse targets.md, playbooks.md, findings.md, cautions.md
     M->>DB: ReplaceOperationalMemory(...)
     C->>T: NewDefaultRegistryWithStoreAndMemory(...)
     T->>DB: ListCommandApprovals()
@@ -312,7 +310,7 @@ sequenceDiagram
             R->>DB: SaveModelApproval(approved_once)
         end
         A->>M: RetrievePlan(planning context)
-        M->>MEM: Read operator.md + soul.md
+        M->>MEM: Read guidance.md
         M->>DB: LoadOperationalMemory() or parse fallback files
         A->>P: ChatCompletion(plan prompt)
         P-->>A: concise planning notes
@@ -321,7 +319,7 @@ sequenceDiagram
     A->>R: Select(execution, taskClass, toolset)
     R->>DB: ListModelStats(execution, taskClass, toolset)
     A->>M: RetrievePlan(execution context)
-    M->>MEM: Read operator.md + soul.md
+    M->>MEM: Read guidance.md
     M->>DB: LoadOperationalMemory() or parse fallback files
     A->>A: Build system prompt stack
 
@@ -383,7 +381,7 @@ sequenceDiagram
   - validates Codex CLI ChatGPT login, OpenRouter/OpenAI credentials, or LM Studio base URLs
   - configures safety mode, routing, token/iteration limits, and logging
   - writes `config.yaml`
-  - bootstraps `soul.md` plus the structured memory files
+  - bootstraps `guidance.md` plus the structured memory files
 
 ### 2. Agent orchestration
 
@@ -404,15 +402,14 @@ Prompt construction is layered rather than monolithic.
 `memory.Manager.RetrievePlan()` returns:
 
 - built-in invariant rules
-- `operator.md`
-- `soul.md`
+- compiled `guidance.md`
 - runtime-host summary
 - optional target summary
 - optional primary playbook
 - optional caution
 - optional fallback finding
 
-`agent.initialSystemMessages()` then stacks those pieces into ordered `system` messages and optionally appends planning notes during execution.
+`agent.buildPromptPlan()` lays those pieces out as a stable prefix, stable tool policy, compact target brief, and volatile turn context.
 
 This is a deliberate architecture choice: the runtime treats human-managed instructions and machine-curated operational knowledge as separate layers instead of flattening everything into one mutable memory file.
 
@@ -472,11 +469,9 @@ The memory subsystem has a dual representation by design.
 
 Readable files in `~/.cvkeharness/`:
 
-- `operator.md`
-- `soul.md`
+- `guidance.md`
 - `targets.md`
-- `host.md`
-  Runtime-host profile plus durable operator notes about local-machine quirks.
+  Includes the runtime host as a normal target record.
 - `playbooks.md`
 - `findings.md`
 - `cautions.md`

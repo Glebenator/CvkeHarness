@@ -407,8 +407,19 @@ func configFields() []configField {
 			Set:         func(c *config.Config, v string) { c.PromptDumpDir = v },
 		},
 		{
+			Label:       "Prompt Dump Retention",
+			Description: "Days to keep debug prompt dumps before pruning",
+			Kind:        configFieldNumber,
+			Get:         func(c *config.Config) string { return strconv.Itoa(c.PromptDumpRetentionDays) },
+			Set: func(c *config.Config, v string) {
+				if parsed, err := strconv.Atoi(v); err == nil {
+					c.PromptDumpRetentionDays = parsed
+				}
+			},
+		},
+		{
 			Label:       "Memory Dir",
-			Description: "Directory for soul, host, target, and playbook memory",
+			Description: "Directory for guidance, target, playbook, finding, and caution memory",
 			Kind:        configFieldText,
 			Get:         func(c *config.Config) string { return c.MemoryDir },
 			Set:         func(c *config.Config, v string) { c.MemoryDir = v },

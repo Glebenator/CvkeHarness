@@ -19,7 +19,7 @@ func TestMemoryRecordFindingTool_WritesFinding(t *testing.T) {
 	store := state.Open(filepath.Join(dir, "state.db"))
 	defer store.Close()
 
-	manager := memory.NewManager(dir, store, 3)
+	manager := memory.NewManager(dir, store)
 	if err := manager.EnsureFiles(); err != nil {
 		t.Fatalf("EnsureFiles returned error: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestMemoryRecordFindingTool_RequiresToolNameForToolScope(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	manager := memory.NewManager(dir, state.Open(""), 3)
+	manager := memory.NewManager(dir, state.Open(""))
 	tool := NewMemoryRecordFindingTool(manager)
 
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"body":"Shell needs smaller steps.","scope":"tool"}`))
@@ -70,7 +70,7 @@ func TestDefaultRegistryWithStoreAndMemory_RegistersMemoryTool(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	manager := memory.NewManager(dir, state.Open(""), 3)
+	manager := memory.NewManager(dir, state.Open(""))
 	registry := NewDefaultRegistryWithStoreAndMemory([]string{"pwd"}, nil, manager, nil, SafetyModeUserConfirm, "", "primary")
 
 	if _, ok := registry.Get("memory_record_finding"); !ok {

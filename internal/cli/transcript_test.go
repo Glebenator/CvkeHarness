@@ -121,11 +121,11 @@ func TestTranscriptRendererShowsMemoryInjection(t *testing.T) {
 
 	renderer.Observe(tools.Event{
 		Type:   tools.EventMemoryInjected,
-		Output: "execution memory injected: operator.md: 120 chars; soul.md: 48 chars",
+		Output: "execution memory injected: guidance.md: 120 chars; targets.md: 48 chars",
 	})
 
 	got := out.String()
-	if !strings.Contains(got, "[memory] execution memory injected: operator.md: 120 chars; soul.md: 48 chars") {
+	if !strings.Contains(got, "[memory] execution memory injected: guidance.md: 120 chars; targets.md: 48 chars") {
 		t.Fatalf("expected memory injection event to be visible, got %q", got)
 	}
 }

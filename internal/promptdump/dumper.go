@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/provider"
 )
 
@@ -29,6 +30,7 @@ type Metadata struct {
 type Dumper struct {
 	enabled bool
 	dir     string
+	retain  time.Duration
 	runID   string
 	mu      sync.Mutex
 	entries []*dumpEntry
@@ -36,9 +38,18 @@ type Dumper struct {
 }
 
 func New(enabled bool, dir string) *Dumper {
+	return NewWithRetentionDays(enabled, dir, 7)
+}
+
+// NewWithRetentionDays creates a dumper with automatic age-based pruning.
+func NewWithRetentionDays(enabled bool, dir string, days int) *Dumper {
+	if days <= 0 {
+		days = 7
+	}
 	return &Dumper{
 		enabled: enabled,
 		dir:     strings.TrimSpace(dir),
+		retain:  time.Duration(days) * 24 * time.Hour,
 		runID:   "run-" + time.Now().UTC().Format("20060102-150405.000"),
 	}
 }
@@ -74,6 +85,9 @@ func (d *Dumper) Begin(ctx context.Context, meta Metadata, req *provider.ChatReq
 		return nil, nil
 	}
 	now := time.Now().UTC()
+	if err := d.pruneExpired(now); err != nil {
+		return nil, err
+	}
 	runDir := filepath.Join(d.dir, now.Format("2006-01-02"), d.runID)
 	if err := os.MkdirAll(runDir, 0700); err != nil {
 		return nil, err
@@ -86,7 +100,7 @@ func (d *Dumper) Begin(ctx context.Context, meta Metadata, req *provider.ChatReq
 	htmlPath := filepath.Join(runDir, htmlName)
 	indexPath := filepath.Join(runDir, "index.html")
 	tokenEstimate := estimateRequestTokens(req)
-	dump := promptDump{CreatedAt: now, Metadata: meta, Request: req, RunID: d.runID, TokenEstimate: tokenEstimate}
+	dump := promptDump{CreatedAt: now, Metadata: sanitizeMetadata(meta), Request: sanitizeRequest(req), RunID: d.runID, TokenEstimate: tokenEstimate}
 	if err := os.WriteFile(mdPath, []byte(renderMarkdown(dump, htmlName, "index.html")), 0600); err != nil {
 		return nil, err
 	}
@@ -121,7 +135,7 @@ func (d *Dumper) Finish(handle *Handle, result Result) error {
 	if handle == nil || handle.d == nil || !handle.d.Enabled() {
 		return nil
 	}
-	handle.dump.Result = result
+	handle.dump.Result = sanitizeResult(result)
 	if err := os.WriteFile(handle.mdPath, []byte(renderMarkdown(handle.dump, handle.htmlName, "index.html")), 0600); err != nil {
 		return err
 	}
@@ -146,6 +160,33 @@ func (d *Dumper) Finish(handle *Handle, result Result) error {
 	index := renderRunIndex(handle.d.runID, handle.d.entries)
 	handle.d.mu.Unlock()
 	return os.WriteFile(handle.indexPath, []byte(index), 0600)
+}
+
+func (d *Dumper) pruneExpired(now time.Time) error {
+	if d == nil || d.retain <= 0 || strings.TrimSpace(d.dir) == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(d.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	cutoff := now.Add(-d.retain)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		day, err := time.ParseInLocation("2006-01-02", entry.Name(), time.UTC)
+		if err != nil || !day.Before(cutoff) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(d.dir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type promptDump struct {
@@ -255,6 +296,68 @@ func renderMarkdown(d promptDump, htmlName, indexName string) string {
 	b.WriteString(jsonPretty(req))
 	b.WriteString("\n```\n")
 	return b.String()
+}
+
+func sanitizeMetadata(meta Metadata) Metadata {
+	meta.Provider = secrets.Mask(meta.Provider)
+	meta.Model = secrets.Mask(meta.Model)
+	meta.Label = secrets.Mask(meta.Label)
+	return meta
+}
+
+func sanitizeResult(result Result) Result {
+	result.ActualModel = secrets.Mask(result.ActualModel)
+	if result.Err != nil {
+		result.Err = fmt.Errorf("%s", secrets.Mask(result.Err.Error()))
+	}
+	return result
+}
+
+func sanitizeRequest(req *provider.ChatRequest) *provider.ChatRequest {
+	if req == nil {
+		return nil
+	}
+	out := *req
+	out.Model = secrets.Mask(req.Model)
+	out.Messages = make([]provider.Message, len(req.Messages))
+	for i, message := range req.Messages {
+		out.Messages[i] = provider.Message{
+			Role:       secrets.Mask(message.Role),
+			Content:    secrets.Mask(message.Content),
+			ToolCallID: secrets.Mask(message.ToolCallID),
+		}
+		if len(message.ToolCalls) > 0 {
+			out.Messages[i].ToolCalls = make([]provider.ToolCall, len(message.ToolCalls))
+			for j, call := range message.ToolCalls {
+				out.Messages[i].ToolCalls[j] = provider.ToolCall{
+					ID:   secrets.Mask(call.ID),
+					Type: secrets.Mask(call.Type),
+					Function: provider.ToolFunction{
+						Name:      secrets.Mask(call.Function.Name),
+						Arguments: secrets.Mask(call.Function.Arguments),
+					},
+				}
+			}
+		}
+		if len(message.ResponseItems) > 0 {
+			out.Messages[i].ResponseItems = make([]json.RawMessage, len(message.ResponseItems))
+			for j, item := range message.ResponseItems {
+				out.Messages[i].ResponseItems[j] = json.RawMessage(secrets.Mask(string(item)))
+			}
+		}
+	}
+	out.Tools = make([]provider.ToolDef, len(req.Tools))
+	for i, tool := range req.Tools {
+		out.Tools[i] = provider.ToolDef{
+			Type: secrets.Mask(tool.Type),
+			Function: provider.ToolFuncDef{
+				Name:        secrets.Mask(tool.Function.Name),
+				Description: secrets.Mask(tool.Function.Description),
+				Parameters:  json.RawMessage(secrets.Mask(string(tool.Function.Parameters))),
+			},
+		}
+	}
+	return &out
 }
 
 func renderHTML(d promptDump, mdName, indexName string) string {

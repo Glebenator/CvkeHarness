@@ -39,9 +39,9 @@ func (s *Store) SaveScheduledJob(ctx context.Context, job ScheduledJob) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO scheduled_jobs (
 			id, name, schedule_kind, schedule_spec, prompt, enabled, next_run_at,
-			last_run_at, last_run_status, consecutive_failures, claimed_by,
-			claim_expires_at, claim_heartbeat_at, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			last_run_at, last_run_status, consecutive_failures, blocked, blocked_reason,
+			blocked_work_id, claimed_by, claim_expires_at, claim_heartbeat_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			schedule_kind = excluded.schedule_kind,
@@ -52,13 +52,17 @@ func (s *Store) SaveScheduledJob(ctx context.Context, job ScheduledJob) error {
 			last_run_at = excluded.last_run_at,
 			last_run_status = excluded.last_run_status,
 			consecutive_failures = excluded.consecutive_failures,
+			blocked = excluded.blocked,
+			blocked_reason = excluded.blocked_reason,
+			blocked_work_id = excluded.blocked_work_id,
 			claimed_by = excluded.claimed_by,
 			claim_expires_at = excluded.claim_expires_at,
 			claim_heartbeat_at = excluded.claim_heartbeat_at,
 			updated_at = excluded.updated_at`,
 		job.ID, job.Name, job.ScheduleKind, job.ScheduleSpec, job.Prompt,
 		boolToInt(job.Enabled), next, last, job.LastRunStatus, job.ConsecutiveFail,
-		job.ClaimedBy, claimExpires, claimHeartbeat, job.CreatedAt.UTC(), job.UpdatedAt.UTC(),
+		boolToInt(job.Blocked), job.BlockedReason, job.BlockedWorkID, job.ClaimedBy,
+		claimExpires, claimHeartbeat, job.CreatedAt.UTC(), job.UpdatedAt.UTC(),
 	)
 	return err
 }
@@ -70,7 +74,8 @@ func (s *Store) GetScheduledJob(ctx context.Context, id string) (ScheduledJob, e
 	}
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, name, schedule_kind, schedule_spec, prompt, enabled, next_run_at,
-			last_run_at, last_run_status, consecutive_failures, claimed_by,
+			last_run_at, last_run_status, consecutive_failures, blocked, blocked_reason,
+			blocked_work_id, claimed_by,
 			claim_expires_at, claim_heartbeat_at, created_at, updated_at
 		FROM scheduled_jobs WHERE id = ?`, id)
 	return scanScheduledJob(row)
@@ -83,7 +88,8 @@ func (s *Store) ListScheduledJobs(ctx context.Context, includeDisabled bool) ([]
 	}
 	query := `
 		SELECT id, name, schedule_kind, schedule_spec, prompt, enabled, next_run_at,
-			last_run_at, last_run_status, consecutive_failures, claimed_by,
+			last_run_at, last_run_status, consecutive_failures, blocked, blocked_reason,
+			blocked_work_id, claimed_by,
 			claim_expires_at, claim_heartbeat_at, created_at, updated_at
 		FROM scheduled_jobs`
 	if !includeDisabled {
@@ -113,10 +119,11 @@ func (s *Store) ListDueScheduledJobs(ctx context.Context, now time.Time) ([]Sche
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, schedule_kind, schedule_spec, prompt, enabled, next_run_at,
-			last_run_at, last_run_status, consecutive_failures, claimed_by,
+			last_run_at, last_run_status, consecutive_failures, blocked, blocked_reason,
+			blocked_work_id, claimed_by,
 			claim_expires_at, claim_heartbeat_at, created_at, updated_at
 		FROM scheduled_jobs
-		WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ?
+		WHERE enabled = 1 AND blocked = 0 AND next_run_at IS NOT NULL AND next_run_at <= ?
 		ORDER BY next_run_at ASC`, now.UTC())
 	if err != nil {
 		return nil, err
@@ -153,6 +160,7 @@ func (s *Store) ClaimDueScheduledJobs(ctx context.Context, owner string, now tim
 		SELECT id
 		FROM scheduled_jobs
 		WHERE enabled = 1
+			AND blocked = 0
 			AND next_run_at IS NOT NULL
 			AND next_run_at <= ?
 			AND (claimed_by = '' OR claim_expires_at IS NULL OR claim_expires_at <= ?)
@@ -181,6 +189,7 @@ func (s *Store) ClaimDueScheduledJobs(ctx context.Context, owner string, now tim
 			SET claimed_by = ?, claim_expires_at = ?, claim_heartbeat_at = ?, updated_at = ?
 			WHERE id = ?
 				AND enabled = 1
+				AND blocked = 0
 				AND next_run_at IS NOT NULL
 				AND next_run_at <= ?
 				AND (claimed_by = '' OR claim_expires_at IS NULL OR claim_expires_at <= ?)`,
@@ -286,6 +295,32 @@ func (s *Store) ReleaseScheduledJobClaim(ctx context.Context, id, owner string) 
 	return err
 }
 
+// MarkScheduledJobBlocked prevents repeated execution until user action resolves the blocker.
+func (s *Store) MarkScheduledJobBlocked(ctx context.Context, id, reason, workID string) error {
+	if !s.Available() {
+		return s.Err()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE scheduled_jobs
+		SET blocked = 1, blocked_reason = ?, blocked_work_id = ?, updated_at = ?
+		WHERE id = ?`,
+		reason, workID, time.Now().UTC(), id)
+	return err
+}
+
+// UnblockScheduledJob clears the manual-action hold on a scheduled job.
+func (s *Store) UnblockScheduledJob(ctx context.Context, id string) error {
+	if !s.Available() {
+		return s.Err()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE scheduled_jobs
+		SET blocked = 0, blocked_reason = '', blocked_work_id = '', updated_at = ?
+		WHERE id = ?`,
+		time.Now().UTC(), id)
+	return err
+}
+
 // DeleteScheduledJob removes a scheduled job and its run records.
 func (s *Store) DeleteScheduledJob(ctx context.Context, id string) error {
 	if !s.Available() {
@@ -374,12 +409,12 @@ type scheduledJobScanner interface {
 
 func scanScheduledJob(scanner scheduledJobScanner) (ScheduledJob, error) {
 	var job ScheduledJob
-	var enabled int
+	var enabled, blocked int
 	var next, last, claimExpires, claimHeartbeat sql.NullTime
 	err := scanner.Scan(
 		&job.ID, &job.Name, &job.ScheduleKind, &job.ScheduleSpec, &job.Prompt,
 		&enabled, &next, &last, &job.LastRunStatus, &job.ConsecutiveFail,
-		&job.ClaimedBy, &claimExpires, &claimHeartbeat,
+		&blocked, &job.BlockedReason, &job.BlockedWorkID, &job.ClaimedBy, &claimExpires, &claimHeartbeat,
 		&job.CreatedAt, &job.UpdatedAt,
 	)
 	if err != nil {
@@ -389,6 +424,7 @@ func scanScheduledJob(scanner scheduledJobScanner) (ScheduledJob, error) {
 		return ScheduledJob{}, err
 	}
 	job.Enabled = enabled == 1
+	job.Blocked = blocked == 1
 	if next.Valid {
 		job.NextRunAt = next.Time
 	}

@@ -27,9 +27,9 @@ flowchart TD
     memory["memory.Manager"]
     store["state.Store\n~/.cvkeharness/state.db"]
     provider["provider.Provider\nOpenRouter or LM Studio"]
-    files["Readable managed files\noperator.md\nsoul.md\ntargets.md\nhost.md\nplaybooks.md\nfindings.md\ncautions.md"]
+    files["Readable managed files\nguidance.md\ntargets.md\nplaybooks.md\nfindings.md\ncautions.md"]
     safety["safety package\nscorecard + redteam"]
-    telemetry["telemetry.jsonl\nstreamed runtime events"]
+    telemetry["telemetry/live/events.jsonl\ncanonical runtime events"]
 
     user --> cli
     cli --> cfg
@@ -72,10 +72,10 @@ flowchart TD
     resolve["ResolveTarget()\nruntime host or remote target"]
     retrieval["core.RetrievalContext\nphase + task_class + active_model\n+ runtime_host_id + target_id\n+ target_kind + tool_names + trouble"]
     ensure["memory.Manager.EnsureFiles()"]
-    files["Read operator.md and soul.md"]
+    files["Read guidance.md"]
     stateLoad["LoadOperationalMemory()\nor parse markdown fallback"]
     rank["Select one compact brief\nruntime host summary\n+ optional target summary\n+ optional playbook\n+ optional caution\n+ optional finding"]
-    stack["initialSystemMessages()\n1. built-in rules\n2. operator.md\n3. soul.md\n4. runtime-host summary\n5. retrieved brief\n6. planning notes"]
+    stack["buildPromptPlan()\n1. compiled guidance prefix\n2. stable tool policy\n3. host-target-memory brief\n4. volatile turn context"]
     chat["agent.ChatState"]
     refresh["One refresh after tool trouble\nor policy denial"]
 
@@ -90,8 +90,7 @@ flowchart TD
 What matters here:
 
 - `builtInRules()` is fixed runtime policy and keeps baseline behavior stable
-- `operator.md` is the harness operating manual
-- `soul.md` is the human-facing persona layer and remains user-owned
+- `guidance.md` is the user-authored operating surface
 - retrieval is structured-first, not semantic-first
 - the runtime host and the active target are modeled separately
 - mid-run refresh is allowed once after tool trouble so the model can see a tighter brief for the failing target/tool
@@ -215,12 +214,11 @@ flowchart TD
 
 Important behaviors:
 
-- the runtime host gets its own stable profile in `host.md`, including optional operator-authored machine quirks
+- the runtime host is represented as a normal target inside `targets.md`
 - remote targets live in `targets.md` with aliases and verified facts
 - playbooks only come from successful verified operational sequences
 - cautions come from concrete failures or policy denials
 - `memory_record_finding` is the narrow manual note path, not the main executable memory path
-- legacy `memory.md` is imported into `findings.md` as `needs_curation`
 
 ## 6. Retrieval Priorities
 

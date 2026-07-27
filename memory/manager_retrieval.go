@@ -14,7 +14,11 @@ import (
 	"github.com/coolcake/cvkeharness/state"
 )
 
-var userHostPattern = regexp.MustCompile(`\b[a-zA-Z0-9._-]+@[a-zA-Z0-9._:-]+\b`)
+var (
+	userHostPattern         = regexp.MustCompile(`\b[a-zA-Z0-9._-]+@[a-zA-Z0-9._:-]+\b`)
+	ipAddressPattern        = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	explicitHostnamePattern = regexp.MustCompile(`\b[a-zA-Z0-9][a-zA-Z0-9-]*(?:\.[a-zA-Z0-9-]+)+\b`)
+)
 
 // Retrieve loads the current compact operational memory brief for a phase.
 func (m *Manager) Retrieve(ctx context.Context, input core.RetrievalContext) (RetrievalResult, error) {
@@ -27,11 +31,7 @@ func (m *Manager) RetrievePlan(ctx context.Context, input core.RetrievalContext)
 		return RetrievalResult{}, err
 	}
 
-	operatorBytes, err := os.ReadFile(m.managedPath(OperatorFile))
-	if err != nil {
-		return RetrievalResult{}, err
-	}
-	soulBytes, err := os.ReadFile(m.managedPath(SoulFile))
+	guidanceBytes, err := os.ReadFile(m.managedPath(GuidanceFile))
 	if err != nil {
 		return RetrievalResult{}, err
 	}
@@ -77,8 +77,7 @@ func (m *Manager) RetrievePlan(ctx context.Context, input core.RetrievalContext)
 
 	result := RetrievalResult{
 		BuiltInRules:       builtInRules(),
-		Operator:           formatOperatorContext(m.dir, string(operatorBytes)),
-		Soul:               strings.TrimSpace(string(soulBytes)),
+		Guidance:           formatGuidanceContext(m.dir, string(guidanceBytes)),
 		RuntimeHostSummary: renderRuntimeHostSummary(mem, resolution.RuntimeHostID),
 		TargetSummary:      renderTargetSummary(mem, resolution),
 		CautionBrief:       renderCautionBrief(mem, caution),
@@ -101,9 +100,8 @@ func retrievalSources(result RetrievalResult) []InjectionSource {
 		text   string
 	}{
 		{name: "built-in rules", origin: "harness", text: result.BuiltInRules},
-		{name: OperatorFile, origin: "memory file", text: result.Operator},
-		{name: SoulFile, origin: "memory file", text: result.Soul},
-		{name: HostFile, origin: "runtime host summary", text: result.RuntimeHostSummary},
+		{name: GuidanceFile, origin: "memory file", text: result.Guidance},
+		{name: TargetsFile, origin: "runtime host summary", text: result.RuntimeHostSummary},
 		{name: TargetsFile, origin: "target summary", text: result.TargetSummary},
 		{name: PlaybooksFile, origin: "playbook match", text: result.PlaybookBrief},
 		{name: CautionsFile, origin: "caution match", text: result.CautionBrief},
@@ -145,7 +143,7 @@ func (m *Manager) LoadRuntimeHostProfile(ctx context.Context) (state.Target, []s
 	}
 	for _, target := range mem.Targets {
 		if target.Target.ID == mem.RuntimeHostID {
-			return target.Target, mergeFactLists(target.Facts, mem.RuntimeHostFacts), nil
+			return target.Target, target.Facts, nil
 		}
 	}
 	return state.Target{}, nil, fmt.Errorf("runtime host profile is missing")
@@ -185,9 +183,9 @@ func (m *Manager) ResolveTarget(ctx context.Context, input TargetResolutionInput
 		PrimaryName:   runtimePrimaryName(mem),
 	}
 
-	hint := firstTargetHint(input.Command)
+	hint := firstCommandTargetHint(input.Command)
 	if hint == nil {
-		hint = firstTargetHint(input.Task)
+		hint = firstProseTargetHint(input.Task)
 	}
 	if hint == nil {
 		return resolution, nil
@@ -369,12 +367,10 @@ func retrievableFinding(finding state.Finding) bool {
 		return false
 	}
 	switch finding.Origin {
-	case "ad_hoc", "legacy_memory":
+	case "ad_hoc":
 		return true
-	case "run_outcome":
-		return finding.Confidence >= 0.85 && finding.SeenCount >= 2
 	default:
-		return finding.Confidence >= 0.85
+		return false
 	}
 }
 
@@ -387,25 +383,108 @@ Use web_search only for public current documentation, release notes, issues, and
 If required tooling is missing, confirm the missing dependency, ask before installing or mutating the system, and after approval perform the install instead of only handing the user manual steps.`
 }
 
-func formatOperatorContext(dir, operator string) string {
-	operator = strings.TrimSpace(operator)
-	if operator == "" {
+func formatGuidanceContext(dir, guidance string) string {
+	compiled := compileGuidanceMarkdown(guidance)
+	if compiled == "" {
 		return ""
 	}
 	parts := []string{
-		"Runtime file locations:",
-		"- Memory directory: " + dir,
-		"- operator.md: " + filepath.Join(dir, OperatorFile),
-		"- soul.md: " + filepath.Join(dir, SoulFile),
-		"- targets.md: " + filepath.Join(dir, TargetsFile),
-		"- host.md: " + filepath.Join(dir, HostFile),
-		"- playbooks.md: " + filepath.Join(dir, PlaybooksFile),
-		"- findings.md: " + filepath.Join(dir, FindingsFile),
-		"- cautions.md: " + filepath.Join(dir, CautionsFile),
+		"Compiled guidance:",
+		compiled,
 		"",
-		operator,
+		"Authoritative memory files:",
+		"- " + filepath.Join(dir, GuidanceFile),
+		"- " + filepath.Join(dir, TargetsFile),
+		"- " + filepath.Join(dir, PlaybooksFile),
+		"- " + filepath.Join(dir, CautionsFile),
+		"- " + filepath.Join(dir, FindingsFile),
 	}
 	return strings.Join(parts, "\n")
+}
+
+func compileGuidanceMarkdown(markdown string) string {
+	lines := strings.Split(markdown, "\n")
+	seen := make(map[string]bool)
+	var items []string
+	var paragraph []string
+	flushParagraph := func() {
+		if len(paragraph) == 0 {
+			return
+		}
+		item := strings.Join(paragraph, " ")
+		paragraph = nil
+		item = strings.Join(strings.Fields(strings.TrimSpace(item)), " ")
+		if item == "" || seen[item] {
+			return
+		}
+		seen[item] = true
+		items = append(items, item)
+	}
+
+	inFence := false
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "```") {
+			flushParagraph()
+			inFence = !inFence
+			continue
+		}
+		if inFence || line == "" {
+			flushParagraph()
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			flushParagraph()
+			continue
+		}
+		if item, ok := markdownListItem(line); ok {
+			flushParagraph()
+			if !seen[item] {
+				seen[item] = true
+				items = append(items, item)
+			}
+			continue
+		}
+		paragraph = append(paragraph, line)
+	}
+	flushParagraph()
+
+	if len(items) == 0 {
+		return ""
+	}
+	if len(items) > 12 {
+		items = items[:12]
+	}
+	for i, item := range items {
+		items[i] = "- " + clampGuidanceItem(item, 220)
+	}
+	return strings.Join(items, "\n")
+}
+
+func markdownListItem(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(trimmed, "- "), strings.HasPrefix(trimmed, "* "):
+		return strings.TrimSpace(trimmed[2:]), true
+	}
+	dot := strings.Index(trimmed, ". ")
+	if dot <= 0 {
+		return "", false
+	}
+	for _, r := range trimmed[:dot] {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return strings.TrimSpace(trimmed[dot+2:]), true
+}
+
+func clampGuidanceItem(item string, limit int) string {
+	runes := []rune(strings.TrimSpace(item))
+	if limit <= 0 || len(runes) <= limit {
+		return string(runes)
+	}
+	return strings.TrimSpace(string(runes[:limit-1])) + "…"
 }
 
 func renderRuntimeHostSummary(mem fileState, runtimeHostID string) string {
@@ -413,21 +492,10 @@ func renderRuntimeHostSummary(mem fileState, runtimeHostID string) string {
 	lines = append(lines, "Runtime host summary:")
 	lines = append(lines, "- id: "+runtimeHostID)
 	lines = append(lines, "- name: "+runtimePrimaryName(mem))
-	for _, fact := range prioritizedFacts(mergeFactLists(mem.RuntimeHostFacts, factsForTarget(mem, runtimeHostID)), 3) {
+	for _, fact := range prioritizedFacts(factsForTarget(mem, runtimeHostID), 3) {
 		lines = append(lines, fmt.Sprintf("- %s: %s", fact.Key, fact.Value))
 	}
-	if notes := summarizeRuntimeHostNotes(mem.RuntimeHostNotes, 2); len(notes) > 0 {
-		lines = append(lines, "- quirks: "+strings.Join(notes, "; "))
-	}
 	return clampRenderedText(strings.Join(lines, "\n"), 7, 520)
-}
-
-func summarizeRuntimeHostNotes(notes []string, max int) []string {
-	notes = dedupeStrings(notes)
-	if max > 0 && len(notes) > max {
-		return notes[:max]
-	}
-	return notes
 }
 
 func renderTargetSummary(mem fileState, resolution TargetResolution) string {
@@ -606,15 +674,29 @@ type targetHint struct {
 	Kind string
 }
 
-func firstTargetHint(text string) *targetHint {
+func firstCommandTargetHint(text string) *targetHint {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	if hint := parseCommandTargetHint(text); hint != nil {
-		return hint
+	return parseCommandTargetHint(text)
+}
+
+func firstProseTargetHint(text string) *targetHint {
+	if strings.TrimSpace(text) == "" {
+		return nil
 	}
 	for _, match := range userHostPattern.FindAllString(text, -1) {
 		if hint := parseTargetToken(match, TargetKindSSH); hint != nil {
+			return hint
+		}
+	}
+	for _, match := range ipAddressPattern.FindAllString(text, -1) {
+		if hint := parseTargetToken(match, TargetKindUnknown); hint != nil {
+			return hint
+		}
+	}
+	for _, match := range explicitHostnamePattern.FindAllString(text, -1) {
+		if hint := parseTargetToken(match, TargetKindUnknown); hint != nil {
 			return hint
 		}
 	}
