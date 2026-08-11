@@ -17,11 +17,8 @@ import (
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/cli"
 	"github.com/coolcake/cvkeharness/internal/log"
-	"github.com/coolcake/cvkeharness/internal/promptdump"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/internal/termui"
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/router"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/spf13/cobra"
 )
@@ -180,60 +177,22 @@ func runChat() {
 	ctx := context.Background()
 	logger := log.FromContext(ctx)
 
-	p, err := resolveProvider(cfg, "")
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-
 	store := state.Open(cfg.StateDBPath)
 	if store.Err() != nil {
 		fmt.Printf("Warning: state DB unavailable, continuing without persisted chat history (%v)\n", store.Err())
 	}
 	defer store.Close()
 
-	mem := memory.NewManager(cfg.MemoryDir, store)
-	if err := mem.EnsureFiles(); err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-	if err := mem.Reindex(ctx); err != nil {
-		logger.Warn("failed to reindex memory metadata", "error", err)
-	}
-
-	promptDumper := promptdump.NewWithRetentionDays(cfg.DebugPromptDumps, cfg.PromptDumpDir, cfg.PromptDumpRetentionDays)
-	telemetryWriter := telemetryWriterFromConfig(cfg, store)
-	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper, false)
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-	routingCfg := routingConfigFromConfig(cfg, store)
-	r := router.New(routingCfg, store, func(ctx context.Context, selection core.RoutingSelection) (bool, error) {
+	a, err := newChatAgent(ctx, cfg, store, ui, false, func(ctx context.Context, selection core.RoutingSelection) (bool, error) {
 		if selection.Recommendation == nil {
 			return false, nil
 		}
 		return promptModelApproval(*selection.Recommendation, selection.RecommendationReason)
 	})
-
-	a := agent.New(agent.Options{
-		Provider:         p,
-		ProviderName:     cfg.Provider,
-		ProviderResolver: providerResolver{cfg: cfg},
-		ToolRegistry:     registry,
-		EventObserver:    ui,
-		DefaultModel:     cfg.PrimaryModel(),
-		MaxIterations:    cfg.MaxIterations,
-		MaxTokens:        cfg.MaxTokens,
-		RoutingConfig:    routingCfg,
-		Router:           r,
-		MemoryRetriever:  mem,
-		MemoryCurator:    mem,
-		RunRecorder:      store,
-		BlockedWorkStore: store,
-		PromptDumper:     promptDumper,
-		TelemetryWriter:  telemetryWriter,
-	})
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)

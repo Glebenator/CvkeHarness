@@ -36,21 +36,22 @@ var (
 	styleKey           = lipgloss.NewStyle().Foreground(colorAccent)
 )
 
-var stepOrder = []step{
-	stepWelcome,
-	stepProvider,
-	stepCredentials,
-	stepModel,
-	stepSafety,
-	stepScan,
-	stepDependencies,
-	stepDaemon,
-	stepCapabilities,
-	stepWebSearch,
-	stepRecommendations,
-	stepSoul,
-	stepNotes,
-	stepReview,
+type setupStage int
+
+const (
+	stageConnect setupStage = iota
+	stageSafety
+	stageCapabilities
+	stageReady
+)
+
+var stageOrder = []setupStage{stageConnect, stageSafety, stageCapabilities, stageReady}
+
+var stageLabels = map[setupStage]string{
+	stageConnect:      "Connect",
+	stageSafety:       "Safety",
+	stageCapabilities: "Capabilities",
+	stageReady:        "Ready",
 }
 
 var stepLabels = map[step]string{
@@ -78,34 +79,41 @@ type row struct {
 func (m setupModel) frame(title, body string) string {
 	var b strings.Builder
 	width := m.width - 4
-	if width < 64 {
-		width = 64
+	if width < 24 {
+		width = 24
 	}
 
 	b.WriteString("\n  ")
 	b.WriteString(styleTitle.Render("CvkeHarness"))
-	b.WriteString(styleMuted.Render(" Setup "))
-	b.WriteString(styleStep.Render(title))
-	b.WriteString(styleMuted.Render(fmt.Sprintf("  %d/%d", m.stepNumber(), len(stepOrder))))
+	b.WriteString(styleMuted.Render("  GUIDED SETUP  "))
+	b.WriteString(styleStep.Render(stageLabels[m.stage()]))
+	b.WriteString(styleMuted.Render(fmt.Sprintf("  %d/%d", m.stageNumber(), len(stageOrder))))
 	b.WriteString("\n  ")
 	b.WriteString(styleSubtle.Render(strings.Repeat("─", min(width, 110))))
 	b.WriteString("\n\n")
 
-	if m.width >= 104 && m.step != stepDone {
-		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, m.progressRail(), body))
+	content := "  " + styleTitle.Render(title) + "\n\n" + body
+	if m.width >= 120 && m.step != stepDone {
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, m.progressRail(), content))
 	} else {
-		b.WriteString(body)
+		b.WriteString(content)
 	}
 
 	if m.errMessage != "" {
-		b.WriteString("\n  ")
-		b.WriteString(styleError.Render(m.errMessage))
 		b.WriteString("\n")
+		for _, line := range wrap(m.errMessage, max(20, width-4)) {
+			b.WriteString("  ")
+			b.WriteString(styleError.Render("! " + line))
+			b.WriteString("\n")
+		}
 	}
 	if m.message != "" {
-		b.WriteString("\n  ")
-		b.WriteString(styleAccent.Render(m.message))
 		b.WriteString("\n")
+		for _, line := range wrap(m.message, max(20, width-4)) {
+			b.WriteString("  ")
+			b.WriteString(styleAccent.Render("• " + line))
+			b.WriteString("\n")
+		}
 	}
 	b.WriteString("\n")
 	b.WriteString(m.footer())
@@ -114,13 +122,13 @@ func (m setupModel) frame(title, body string) string {
 
 func (m setupModel) progressRail() string {
 	var b strings.Builder
-	for _, s := range stepOrder {
-		label := truncate(stepLabels[s], 18)
+	for _, s := range stageOrder {
+		label := stageLabels[s]
 		switch {
-		case s < m.step:
+		case s < m.stage():
 			b.WriteString(styleSuccess.Render("  ● "))
 			b.WriteString(styleMuted.Render(label))
-		case s == m.step:
+		case s == m.stage():
 			b.WriteString(styleAccent.Render("  ▸ "))
 			b.WriteString(styleStep.Render(label))
 		default:
@@ -129,26 +137,43 @@ func (m setupModel) progressRail() string {
 		}
 		b.WriteString("\n")
 	}
-	return lipgloss.NewStyle().Width(24).Render(b.String())
+	return lipgloss.NewStyle().Width(22).Render(b.String())
 }
 
 func (m setupModel) footer() string {
 	if m.inputMode != inputNone {
 		return "  " + keyHint("enter", "submit") + "  " + keyHint("esc", "cancel") + "  " + keyHint("ctrl+c", "quit")
 	}
-	return "  " + keyHint("enter", "select") + "  " + keyHint("n", "next") + "  " + keyHint("esc", "back") + "  " + keyHint("↑↓", "move") + "  " + keyHint("q", "quit")
+	hints := []string{
+		keyHint("enter", "select"),
+		keyHint("n", "continue"),
+		keyHint("esc", "back"),
+		keyHint("↑↓", "move"),
+	}
+	if m.step == stepScan || m.step == stepCapabilities {
+		hints = append(hints, keyHint("a", "advanced"))
+	}
+	if m.width >= 72 {
+		hints = append(hints, keyHint("q", "quit"))
+	}
+	return "  " + strings.Join(hints, "  ")
 }
 
-func (m setupModel) stepNumber() int {
-	if m.step >= stepDone {
-		return len(stepOrder)
+func (m setupModel) stage() setupStage {
+	switch {
+	case m.step <= stepModel:
+		return stageConnect
+	case m.step <= stepDaemon:
+		return stageSafety
+	case m.step <= stepNotes:
+		return stageCapabilities
+	default:
+		return stageReady
 	}
-	for i, s := range stepOrder {
-		if s == m.step {
-			return i + 1
-		}
-	}
-	return 1
+}
+
+func (m setupModel) stageNumber() int {
+	return int(m.stage()) + 1
 }
 
 func (m setupModel) stepTitle() string {
@@ -160,18 +185,40 @@ func (m setupModel) stepTitle() string {
 
 func (m setupModel) renderList(rows []row) string {
 	var b strings.Builder
+	contentWidth := max(20, m.width-8)
+	if m.width >= 120 {
+		contentWidth = max(20, m.width-30)
+	}
+	stacked := contentWidth < 88
 	for i, row := range rows {
-		gap := strings.Repeat(" ", max(1, 24-len(row.label)))
+		pointer := "  "
+		labelStyle := styleRowLabel
+		descStyle := styleRowDesc
 		if i == m.cursor {
-			line := styleAccent.Render("▸ ") + styleSelectedLabel.Render(row.label) + gap + " " + styleSelectedDesc.Render(row.desc)
-			b.WriteString("  ")
-			b.WriteString(styleSelect.Render(line))
-		} else {
-			line := "  " + styleRowLabel.Render(row.label) + gap + " " + styleRowDesc.Render(row.desc)
-			b.WriteString("  ")
-			b.WriteString(line)
+			pointer = styleAccent.Render("▸ ")
+			labelStyle = styleSelectedLabel
+			descStyle = styleSelectedDesc
 		}
-		b.WriteString("\n")
+		if stacked {
+			line := pointer + labelStyle.Render(truncate(row.label, contentWidth-4))
+			if i == m.cursor {
+				line = styleSelect.Render(line)
+			}
+			b.WriteString("  " + line + "\n")
+			for _, desc := range wrap(row.desc, max(16, contentWidth-6)) {
+				b.WriteString("      " + descStyle.Render(desc) + "\n")
+			}
+		} else {
+			labelWidth := min(24, max(14, contentWidth/3))
+			label := truncate(row.label, labelWidth)
+			gap := strings.Repeat(" ", max(1, labelWidth-len([]rune(label))))
+			desc := truncate(row.desc, max(16, contentWidth-labelWidth-5))
+			line := pointer + labelStyle.Render(label) + gap + " " + descStyle.Render(desc)
+			if i == m.cursor {
+				line = styleSelect.Render(line)
+			}
+			b.WriteString("  " + line + "\n")
+		}
 	}
 	return b.String()
 }
@@ -179,7 +226,10 @@ func (m setupModel) renderList(rows []row) string {
 func (m setupModel) renderInputField(label string) string {
 	width := 72
 	if m.width > 0 {
-		width = min(72, max(32, m.width-36))
+		width = min(72, max(18, m.width-8))
+		if m.width >= 120 {
+			width = min(72, max(18, m.width-30))
+		}
 	}
 	field := lipgloss.NewStyle().
 		Width(width).
@@ -198,10 +248,17 @@ func modelRows(items []setupflow.ModelOption) []row {
 	return rows
 }
 
-func paragraph(lines ...string) string {
+func (m setupModel) paragraph(lines ...string) string {
 	var b strings.Builder
+	maxWidth := 72
+	if m.width > 0 {
+		maxWidth = max(20, min(72, m.width-8))
+	}
+	if m.width >= 120 {
+		maxWidth = 72
+	}
 	for _, line := range lines {
-		for _, wrapped := range wrap(line, 96) {
+		for _, wrapped := range wrap(line, maxWidth) {
 			b.WriteString("  ")
 			b.WriteString(styleBase.Render(wrapped))
 			b.WriteString("\n")

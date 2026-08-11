@@ -91,6 +91,8 @@ type setupModel struct {
 	soulProfile     setupflow.SoulProfile
 	hostNotes       string
 	applyActions    bool
+	safetyAdvanced  bool
+	capAdvanced     bool
 	saving          bool
 	saveResult      setupflow.FinalizeResult
 }
@@ -122,7 +124,7 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case modelResultMsg:
 		m.modelsLoading = false
 		m.models = msg.result
-		m.cursor = 0
+		m.cursor = m.preferredCursor()
 		return m, nil
 	case credentialMsg:
 		m.validating = false
@@ -185,6 +187,23 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.step == stepCapabilities {
 				m.cycleCapability(1)
 			}
+		case msg.String() == "a":
+			switch m.step {
+			case stepScan:
+				m.safetyAdvanced = !m.safetyAdvanced
+				if m.safetyAdvanced {
+					m.message = "Advanced Safety options enabled: dependency and daemon planning will be shown"
+				} else {
+					m.message = "Advanced Safety options hidden; no install or daemon action will be selected"
+				}
+			case stepCapabilities:
+				m.capAdvanced = !m.capAdvanced
+				if m.capAdvanced {
+					m.message = "Advanced Capabilities enabled: web search, guidance, and host notes will be shown"
+				} else {
+					m.message = "Advanced Capabilities hidden; current optional settings remain unchanged"
+				}
+			}
 		case msg.String() == "n":
 			if m.canAdvanceWithN() {
 				return m.nextStep()
@@ -199,6 +218,18 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m setupModel) canAdvanceWithN() bool {
 	switch m.step {
+	case stepCredentials:
+		switch m.cfg.Provider {
+		case "codex":
+			_, ok := setupflow.CodexAuthSummary()
+			return ok
+		case "openai":
+			return strings.TrimSpace(m.cfg.GetAPIKey("openai")) != ""
+		case "lmstudio":
+			return true
+		default:
+			return strings.TrimSpace(m.cfg.GetAPIKey("openrouter")) != ""
+		}
 	case stepModel:
 		return len(m.models.Items) > 0 && strings.TrimSpace(m.cfg.PrimaryModel()) != ""
 	case stepScan:
@@ -257,10 +288,10 @@ func (m setupModel) stepView() string {
 }
 
 func (m setupModel) viewWelcome() string {
-	return paragraph(
-		"CvkeHarness is a local-first engineering agent for coding, debugging, systems work, and DevOps workflows. It connects a model provider to guarded shell tools, durable memory, scheduled jobs, and an operations TUI.",
-		"Setup will configure a provider, choose models, scan this machine, pick a safety level, collect capability preferences, optionally enable public web search, and optionally install the scheduler daemon.",
-	) + "\n" + m.renderList([]row{{"Start setup", "Begin guided configuration"}})
+	return m.paragraph(
+		"Reach a safe working agent in four grouped stages. Configuration is saved locally; installs and daemon changes require a separate final choice.",
+		"Recommended defaults keep command approval, optional capabilities, and external actions conservative.",
+	) + "\n" + m.renderList([]row{{"Continue to Connect", "Choose the model connection used for conversations and actions"}})
 }
 
 func (m setupModel) viewProvider() string {
@@ -290,7 +321,7 @@ func (m setupModel) viewCredentials() string {
 		if !ok {
 			status += " · run `codex login` first"
 		}
-		return paragraph(status) + "\n" + m.renderList([]row{{"Use this Codex login", "Continue with Codex CLI authentication"}, {"Check again", "Re-read the Codex auth cache"}})
+		return m.paragraph(status) + "\n" + m.renderList([]row{{"Use this Codex login", "Continue with Codex CLI authentication"}, {"Check again", "Re-read the Codex auth cache"}})
 	case "openai":
 		return m.apiKeyView("openai", "OpenAI API key")
 	case "lmstudio":
@@ -336,11 +367,14 @@ func (m setupModel) viewModel() string {
 	for _, item := range m.models.Items {
 		rows = append(rows, row{item.ID, item.Description})
 	}
-	return paragraph("Source: "+status+" · "+m.models.Source) + "\n" + m.renderList(rows)
+	return m.paragraph("Source: "+status+" · "+m.models.Source) + "\n" + m.renderList(rows)
 }
 
 func (m setupModel) viewSafety() string {
-	return paragraph("Choose the command safety posture. You can change this later in config.") + "\n" + m.renderList(modelRows(setupflow.SafetyOptions()))
+	return m.paragraph(
+		"Choose how shell commands are approved. The recommended judge mode keeps the allowlist and evaluates commands outside it.",
+		"Every status remains explicit; unrestricted mode is intentionally marked risky.",
+	) + "\n" + m.renderList(modelRows(setupflow.SafetyOptions()))
 }
 
 func (m setupModel) viewScan() string {
@@ -348,7 +382,10 @@ func (m setupModel) viewScan() string {
 		return line("Scanning this system...")
 	}
 	if !m.scanComplete {
-		return line("Press enter to scan OS, installed tools, Python readiness, and network reachability.")
+		return m.paragraph(
+			"Scan the local host before continuing. This is read-only and checks the OS, installed tools, Python readiness, disk, and endpoint reachability.",
+			"Press Enter to scan. Press A to reveal optional dependency and daemon planning after the scan.",
+		)
 	}
 	rows := []string{
 		fmt.Sprintf("Platform: %s/%s", m.hostProfile.OS, m.hostProfile.Arch),
@@ -359,17 +396,22 @@ func (m setupModel) viewScan() string {
 		fmt.Sprintf("Internet: %s", boolText(m.hostProfile.InternetReachable)),
 		fmt.Sprintf("Provider endpoint: %s", boolText(m.hostProfile.ProviderReachable)),
 	}
-	return paragraph(rows...) + "\n" + m.renderList([]row{{"Continue", "Use this scan summary"}})
+	advanced := "Optional install and daemon planning will be skipped"
+	if m.safetyAdvanced {
+		advanced = "Optional install and daemon planning will be shown"
+	}
+	rows = append(rows, "Next: "+advanced)
+	return m.paragraph(rows...) + "\n" + m.renderList([]row{{"Continue", "Accept this read-only scan summary"}})
 }
 
 func (m setupModel) viewDependencies() string {
 	if m.hostProfile.Python.Found {
-		return paragraph("Python is available: "+foundText(m.hostProfile.Python)) + "\n" + m.renderList([]row{{"Continue", "No install needed"}})
+		return m.paragraph("Python is available: "+foundText(m.hostProfile.Python)) + "\n" + m.renderList([]row{{"Continue", "No install needed"}})
 	}
 	if !m.installPlan.Available {
-		return paragraph(m.installPlan.Description) + "\n" + m.renderList([]row{{"Skip", "Continue without installing Python"}})
+		return m.paragraph(m.installPlan.Description) + "\n" + m.renderList([]row{{"Skip", "Continue without installing Python"}})
 	}
-	return paragraph("Python was not found. Setup can plan an install, but it will only run after final confirmation.", "Command: "+setupflow.CommandString(m.installPlan.Command)) + "\n" + m.renderList([]row{{"Skip", "Continue without installing Python"}, {"Plan install", m.installPlan.Description}})
+	return m.paragraph("Python was not found. Setup can plan an install, but it will only run after final confirmation.", "Command: "+setupflow.CommandString(m.installPlan.Command)) + "\n" + m.renderList([]row{{"Skip", "Continue without installing Python"}, {"Plan install", m.installPlan.Description}})
 }
 
 func (m setupModel) viewDaemon() string {
@@ -377,9 +419,9 @@ func (m setupModel) viewDaemon() string {
 		return m.viewInputPrompt("System service user input active", "Enter the Linux user that should own the scheduler service; press enter to continue or esc to cancel.", "System service user")
 	}
 	if !m.daemonPlan.Supported {
-		return paragraph("Scheduler daemon install is unavailable: "+m.daemonPlan.Reason) + "\n" + m.renderList([]row{{"Continue", "Skip daemon setup"}})
+		return m.paragraph("Scheduler daemon install is unavailable: "+m.daemonPlan.Reason) + "\n" + m.renderList([]row{{"Continue", "Skip daemon setup"}})
 	}
-	return paragraph("The scheduler daemon runs CvkeHarness jobs while the TUI is closed.") + "\n" + m.renderList([]row{
+	return m.paragraph("The scheduler daemon runs CvkeHarness jobs while the TUI is closed.") + "\n" + m.renderList([]row{
 		{"Skip", "Do not install the daemon now"},
 		{"Install user service", "Install current-user systemd service"},
 		{"Install and start", "Install, enable, and start the user service"},
@@ -394,7 +436,14 @@ func (m setupModel) viewCapabilities() string {
 		{"Network probes", m.cfg.CapabilityPolicy.NetworkProbes},
 		{"Install missing tools", m.cfg.CapabilityPolicy.InstallMissingTools},
 	}
-	return paragraph("Use left/right or space to change a policy. Press enter to keep the current values and continue. `ask` is the recommended default.") + "\n" + m.renderList(rows)
+	next := "Optional web search and guidance screens are hidden"
+	if m.capAdvanced {
+		next = "Optional web search, guidance, and host notes will be shown"
+	}
+	return m.paragraph(
+		"Choose what the agent may attempt. `ask` is the recommended default and keeps operator intent in the loop.",
+		"Use Left/Right or Space to change a policy. "+next+"; press A to toggle.",
+	) + "\n" + m.renderList(rows)
 }
 
 func (m setupModel) viewWebSearch() string {
@@ -408,7 +457,7 @@ func (m setupModel) viewWebSearch() string {
 	if m.cfg.WebSearch.Enabled {
 		status = "enabled"
 	}
-	return paragraph(
+	return m.paragraph(
 		"Web search is optional and read-only. It lets the agent look up public current documentation, release notes, issues, and error messages through Tavily.",
 		"Status: "+status+". Never put secrets, private hostnames, or internal URLs into web search requests.",
 	) + "\n" + m.renderList(webSearchRows(m.webSearchOptions()))
@@ -421,8 +470,8 @@ func (m setupModel) viewRecommendations() string {
 	if len(m.recommendations) == 0 {
 		return line("Press enter to generate guided setup recommendations.")
 	}
-	return paragraph("Choose what to do with these recommendations. Accepting appends them to machine notes; skipping leaves them out.") + "\n" +
-		paragraph(m.recommendations...) + "\n" +
+	return m.paragraph("Choose what to do with these recommendations. Accepting appends them to machine notes; skipping leaves them out.") + "\n" +
+		m.paragraph(m.recommendations...) + "\n" +
 		m.renderList([]row{
 			{"Accept into notes", "Save these recommendations in guidance.md"},
 			{"Edit before saving", "Open the machine notes editor with these prefilled"},
@@ -447,12 +496,12 @@ func (m setupModel) viewNotes() string {
 	if value == "" {
 		value = "No machine notes yet"
 	}
-	return paragraph(value) + "\n" + m.renderList([]row{{"Edit notes", "Add durable host quirks"}, {"Skip", "Continue without extra notes"}})
+	return m.paragraph(value) + "\n" + m.renderList([]row{{"Edit notes", "Add durable host quirks"}, {"Skip", "Continue without extra notes"}})
 }
 
 func (m setupModel) viewReview() string {
 	if m.saving {
-		return line("Saving setup...")
+		return m.paragraph("Saving configuration and local setup artifacts. External actions run only when the second option was explicitly selected.")
 	}
 	lines := []string{
 		"Provider: " + m.cfg.Provider,
@@ -471,7 +520,10 @@ func (m setupModel) viewReview() string {
 			lines = append(lines, "Will run: "+setupflow.CommandString(cmd))
 		}
 	}
-	return paragraph(lines...) + "\n" + m.renderList([]row{{"Save only", "Write config, memory, and host profile"}, {"Save and apply actions", "Also run selected install/daemon commands"}})
+	return m.paragraph(lines...) + "\n" + m.renderList([]row{
+		{"Save configuration only", "Recommended: write config, guidance, and host profile; execute nothing"},
+		{"Save and apply selected actions", "Also execute only the install or daemon commands listed above"},
+	})
 }
 
 func (m setupModel) viewDone() string {
@@ -491,11 +543,11 @@ func (m setupModel) viewDone() string {
 		}
 	}
 	lines = append(lines, "Press q to exit.")
-	return paragraph(lines...)
+	return m.paragraph(lines...)
 }
 
 func (m setupModel) viewInputPrompt(title, detail, label string) string {
-	return paragraph(title, detail) + "\n" + m.renderInputField(label)
+	return m.paragraph(title, detail) + "\n" + m.renderInputField(label)
 }
 
 func (m setupModel) activate() (setupModel, tea.Cmd) {
@@ -836,19 +888,66 @@ func (m setupModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m setupModel) nextStep() (setupModel, tea.Cmd) {
+	switch {
+	case m.step == stepScan && !m.safetyAdvanced:
+		m.step = stepCapabilities
+		m.cursor = 0
+		return m, nil
+	case m.step == stepCapabilities && !m.capAdvanced:
+		m.step = stepReview
+		m.cursor = 0
+		return m, nil
+	}
 	if m.step < stepReview {
 		m.step++
-		m.cursor = 0
+		m.cursor = m.preferredCursor()
 	}
 	return m, nil
 }
 
 func (m setupModel) prevStep() (setupModel, tea.Cmd) {
 	if m.step > stepWelcome && !m.saving && !m.scanning && !m.validating {
-		m.step--
-		m.cursor = 0
+		switch {
+		case m.step == stepCapabilities && !m.safetyAdvanced:
+			m.step = stepScan
+		case m.step == stepReview && !m.capAdvanced:
+			m.step = stepCapabilities
+		default:
+			m.step--
+		}
+		m.cursor = m.preferredCursor()
 	}
 	return m, nil
+}
+
+func (m setupModel) preferredCursor() int {
+	switch m.step {
+	case stepProvider:
+		for i, option := range setupflow.ProviderOptions() {
+			if option.ID == m.cfg.Provider {
+				return i
+			}
+		}
+	case stepModel:
+		for i, option := range m.models.Items {
+			if option.ID == m.cfg.PrimaryModel() {
+				return i
+			}
+		}
+	case stepSafety:
+		for i, option := range setupflow.SafetyOptions() {
+			if option.ID == m.cfg.SafetyMode {
+				return i
+			}
+		}
+	case stepSoul:
+		for i, profile := range setupflow.SoulProfiles() {
+			if profile.ID == m.soulProfile.ID {
+				return i
+			}
+		}
+	}
+	return 0
 }
 
 func (m *setupModel) moveCursor(delta int) {
