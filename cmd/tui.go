@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/coolcake/cvkeharness/agent"
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/log"
 	dashboard "github.com/coolcake/cvkeharness/internal/tui"
 	"github.com/coolcake/cvkeharness/scheduler"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/systemcron"
+	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -44,11 +47,69 @@ var tuiCmd = &cobra.Command{
 		}
 
 		service := dashboard.NewService(cfg, store, systemcron.New(nil), sched, runJobNow)
+		service.SetChatStarter(func(ctx context.Context, observer tools.EventObserver) (dashboard.LiveChatSession, error) {
+			switch cfg.Provider {
+			case "openrouter", "openai":
+				if cfg.GetAPIKey(cfg.Provider) == "" {
+					return nil, fmt.Errorf("missing %s API key; open Settings or run setup to add credentials", cfg.Provider)
+				}
+			}
+			a, err := newChatAgent(ctx, cfg, store, observer, true, func(context.Context, core.RoutingSelection) (bool, error) {
+				// The console never prompts on stdin behind Bubble Tea. Unapproved
+				// routing recommendations safely fall back to the configured model.
+				return false, nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			conversation, sessionID, err := startChatSession(ctx, a, store, cfg)
+			if err != nil {
+				return nil, err
+			}
+			return &dashboardChatSession{
+				conversation: conversation,
+				store:        store,
+				sessionID:    sessionID,
+				stats:        newChatSessionStats(conversation.Selection()),
+			}, nil
+		})
 		if setupMode {
 			service.MarkSetupMode()
 		}
 		return dashboard.Run(service, os.Args[0])
 	},
+}
+
+type dashboardChatSession struct {
+	conversation *agent.ChatConversation
+	store        *state.Store
+	sessionID    int64
+	stats        *chatSessionStats
+	closed       bool
+}
+
+func (s *dashboardChatSession) Selection() core.RoutingSelection {
+	return s.conversation.Selection()
+}
+
+func (s *dashboardChatSession) Turn(ctx context.Context, prompt string) (agent.ChatTurnResult, error) {
+	result, err := s.conversation.Turn(ctx, prompt)
+	current := &chatSessionState{
+		session:   s.conversation,
+		sessionID: s.sessionID,
+		stats:     s.stats,
+	}
+	recordChatTurn(ctx, s.store, current, prompt, result)
+	s.sessionID = current.sessionID
+	return result, err
+}
+
+func (s *dashboardChatSession) Close(ctx context.Context, exitReason string) {
+	if s.closed {
+		return
+	}
+	finishChatSession(ctx, s.store, s.sessionID, exitReason)
+	s.closed = true
 }
 
 func init() {

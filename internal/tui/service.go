@@ -2,11 +2,13 @@ package tui
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/scheduler"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/systemcron"
+	"github.com/coolcake/cvkeharness/tools"
 )
 
 // RunJobFunc triggers a scheduled job by ID.
@@ -19,8 +21,20 @@ type Service struct {
 	cron      *systemcron.Client
 	scheduler *scheduler.Service
 	runJobNow RunJobFunc
+	startChat StartChatFunc
 	binary    string
 	setupMode bool
+}
+
+// SetChatStarter attaches the shared in-process agent runtime to the TUI.
+func (s *Service) SetChatStarter(start StartChatFunc) { s.startChat = start }
+
+// StartChat creates a live in-process chat session.
+func (s *Service) StartChat(ctx context.Context, observer tools.EventObserver) (LiveChatSession, error) {
+	if s == nil || s.startChat == nil {
+		return nil, fmt.Errorf("live chat runtime is unavailable")
+	}
+	return s.startChat(ctx, observer)
 }
 
 // NewService creates a dashboard data service.

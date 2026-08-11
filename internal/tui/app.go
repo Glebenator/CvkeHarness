@@ -80,7 +80,12 @@ func Run(svc *Service, binaryName string) error {
 		},
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	_, err := p.Run()
+	finalModel, err := p.Run()
+	if final, ok := finalModel.(model); ok {
+		if chat, ok := final.tabs[tabChat].(*chatTab); ok {
+			chat.closeSession("tui_exit")
+		}
+	}
 	return err
 }
 
@@ -224,22 +229,35 @@ func clampLines(s string, maxLines int) string {
 func (m model) renderStatusBar() string {
 	left := styleStatusBar.Render("CvkeHarness")
 
-	// Context-sensitive hints from the active tab.
-	var hints []string
-	if tabHints := m.tabs[m.activeTab].StatusHints(); len(tabHints) > 0 {
-		hints = append(hints, tabHints...)
-		hints = append(hints, styleMuted.Render("│"))
+	// Context-sensitive hints from the active tab. Add only what fits so the
+	// dashboard remains horizontally safe at 80 columns.
+	quitKey := "q"
+	if m.tabs[m.activeTab].Consuming() {
+		quitKey = "ctrl+c"
 	}
-	hints = append(hints,
+	hints := []string{renderKeyHint(quitKey, "quit")}
+	var candidates []string
+	if tabHints := m.tabs[m.activeTab].StatusHints(); len(tabHints) > 0 {
+		candidates = append(candidates, tabHints...)
+	}
+	candidates = append(candidates,
 		renderKeyHint("←→", "switch"),
 		renderKeyHint("?", "help"),
-		renderKeyHint("q", "quit"),
 	)
-	right := strings.Join(hints, styleMuted.Render(" "))
+
+	for _, candidate := range candidates {
+		next := append(append([]string(nil), hints...), candidate)
+		right := strings.Join(next, "  ")
+		if lipgloss.Width(left)+1+lipgloss.Width(right) > m.width {
+			continue
+		}
+		hints = next
+	}
+	right := strings.Join(hints, "  ")
 
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		gap = 1
+	if gap < 0 {
+		gap = 0
 	}
 	return left + strings.Repeat(" ", gap) + right
 }
@@ -355,10 +373,4 @@ func loadRunsData(svc *Service) tea.Msg {
 	ctx := context.Background()
 	runs, _ := svc.RecentRuns(ctx, 50)
 	return runsDataMsg{runs: runs}
-}
-
-func loadChatData(svc *Service) tea.Msg {
-	ctx := context.Background()
-	sessions, _ := svc.RecentChatSessions(ctx, 50)
-	return chatDataMsg{sessions: sessions}
 }
