@@ -3,7 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +15,8 @@ import (
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
 )
 
@@ -46,6 +51,16 @@ type sequenceProvider struct {
 	fn   func(call int, req *provider.ChatRequest) (*provider.ChatResponse, error)
 }
 
+type contextSequenceProvider struct {
+	call int
+	fn   func(ctx context.Context, call int, req *provider.ChatRequest) (*provider.ChatResponse, error)
+}
+
+func (p *contextSequenceProvider) ChatCompletion(ctx context.Context, req *provider.ChatRequest) (*provider.ChatResponse, error) {
+	p.call++
+	return p.fn(ctx, p.call, req)
+}
+
 func (p *sequenceProvider) ChatCompletion(_ context.Context, req *provider.ChatRequest) (*provider.ChatResponse, error) {
 	p.call++
 	return p.fn(p.call, req)
@@ -75,6 +90,22 @@ type fixedOutputTool struct {
 	name   string
 	output string
 }
+
+type approvalCountingTool struct{ calls int }
+
+func (t *approvalCountingTool) Name() string        { return "schedule_manage" }
+func (t *approvalCountingTool) Description() string { return "changes a scheduled job" }
+func (t *approvalCountingTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string"}}}`)
+}
+func (t *approvalCountingTool) Execute(context.Context, json.RawMessage) (string, error) {
+	t.calls++
+	return "scheduled once", nil
+}
+
+type approvalEventObserver struct{ events chan tools.Event }
+
+func (o approvalEventObserver) Observe(event tools.Event) { o.events <- event }
 
 func (t fixedOutputTool) Name() string        { return t.name }
 func (t fixedOutputTool) Description() string { return t.name }
@@ -660,6 +691,346 @@ func TestChatConversationVerificationRepairRetriesWithinIterationBudget(t *testi
 	}
 	if !result.Verification.RepairTriggered || result.Output != "done now" || result.Verification.Status != verificationSatisfied {
 		t.Fatalf("expected retry repair to satisfy the turn, got output=%q verification=%#v", result.Output, result.Verification)
+	}
+}
+
+func TestChatConversationContinuesExactApprovedToolCallWithPriorContext(t *testing.T) {
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+	policy, err := securitypolicy.Resolve(securitypolicy.DefaultSelection())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	providerCalls := 0
+	p := &sequenceProvider{fn: func(call int, req *provider.ChatRequest) (*provider.ChatResponse, error) {
+		providerCalls = call
+		hasEarlierUser := false
+		hasEarlierAssistant := false
+		for _, message := range req.Messages {
+			hasEarlierUser = hasEarlierUser || (message.Role == "user" && message.Content == "remember target alpha")
+			hasEarlierAssistant = hasEarlierAssistant || (message.Role == "assistant" && message.Content == "I will keep target alpha in context.")
+		}
+		switch call {
+		case 1:
+			return assistantText("I will keep target alpha in context."), nil
+		case 2:
+			if !hasEarlierUser || !hasEarlierAssistant {
+				return nil, fmt.Errorf("approved turn lost prior conversation context")
+			}
+			return assistantToolCall("approval-call", "schedule_manage", `{"action":"add"}`), nil
+		case 3:
+			if !hasEarlierUser || !hasEarlierAssistant {
+				return nil, fmt.Errorf("post-approval continuation lost prior conversation context")
+			}
+			last := req.Messages[len(req.Messages)-1]
+			if last.Role != "tool" || last.ToolCallID != "approval-call" || last.Content != "scheduled once" {
+				return nil, fmt.Errorf("expected exact approved tool result, got %#v", last)
+			}
+			return assistantText("Target alpha was scheduled."), nil
+		default:
+			return nil, fmt.Errorf("unexpected provider call %d", call)
+		}
+	}}
+
+	countingTool := &approvalCountingTool{}
+	registry := tools.NewRegistry()
+	registry.ConfigureSecurityWithStore(policy, tools.NewBlockingApprover(), nil, store)
+	registry.Register(countingTool)
+	events := make(chan tools.Event, 16)
+	a := New(Options{
+		Provider:                      p,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  registry,
+		EventObserver:                 approvalEventObserver{events: events},
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		MemoryRetriever:               &memoryStub{},
+		BlockedWorkStore:              store,
+		AwaitManualApprovals:          true,
+		DisableCompletionVerification: true,
+	})
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Turn(context.Background(), "remember target alpha"); err != nil {
+		t.Fatal(err)
+	}
+
+	type turnOutcome struct {
+		result ChatTurnResult
+		err    error
+	}
+	turnDone := make(chan turnOutcome, 1)
+	go func() {
+		result, turnErr := session.Turn(context.Background(), "schedule it now")
+		turnDone <- turnOutcome{result: result, err: turnErr}
+	}()
+
+	var approvalEvent tools.Event
+	waitDeadline := time.After(2 * time.Second)
+	waiting := true
+	for waiting {
+		select {
+		case event := <-events:
+			if event.Type == tools.EventApprovalRequired {
+				approvalEvent = event
+				waiting = false
+			}
+		case <-waitDeadline:
+			t.Fatal("timed out waiting for inline approval request")
+		}
+	}
+	if approvalEvent.BlockedWorkID == "" || approvalEvent.ToolCallID != "approval-call" {
+		t.Fatalf("approval event did not identify the blocked call: %#v", approvalEvent)
+	}
+	if providerCalls != 2 || countingTool.calls != 0 {
+		t.Fatalf("tool must remain unexecuted while approval is pending: provider_calls=%d tool_calls=%d", providerCalls, countingTool.calls)
+	}
+
+	grant, err := tools.ApproveBlockedWork(context.Background(), store, policy, approvalEvent.BlockedWorkID, 15*time.Minute, "test-tui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.ResumeApproval(approvalEvent.BlockedWorkID); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case outcome := <-turnDone:
+		if outcome.err != nil {
+			t.Fatal(outcome.err)
+		}
+		if outcome.result.Output != "Target alpha was scheduled." || len(outcome.result.Tools) != 1 || !outcome.result.Tools[0].Success {
+			t.Fatalf("unexpected continued turn result: %#v", outcome.result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for approved turn to continue")
+	}
+	if providerCalls != 3 {
+		t.Fatalf("approval replayed the prompt instead of continuing the pending call: provider_calls=%d", providerCalls)
+	}
+	if countingTool.calls != 1 {
+		t.Fatalf("approved action executed %d times, want exactly once", countingTool.calls)
+	}
+	if history := session.History(); len(history) != 6 || history[3].Role != "assistant" || history[4].Role != "tool" {
+		t.Fatalf("conversation history was not continued in place: %#v", history)
+	}
+	grants, err := store.ListSecurityActionGrants(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) != 1 || grants[0].Digest != grant.Digest || grants[0].RemainingUses != 0 || grants[0].UsedAt.IsZero() {
+		t.Fatalf("exact one-use grant was not consumed by the pending action: %#v", grants)
+	}
+}
+
+func TestChatConversationExecutesApprovedShellCallOnceWithoutPromptReplay(t *testing.T) {
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+	policy, err := securitypolicy.Resolve(securitypolicy.DefaultSelection())
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "approval-marker")
+	command := fmt.Sprintf("sh -c %q", fmt.Sprintf("printf x >> %q", marker))
+	assessment, err := tools.AssessShellCommand(command, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.Decision != securitypolicy.DecisionAsk {
+		t.Fatalf("test shell command must require approval, got %s: %s", assessment.Decision, assessment.Reason)
+	}
+	args, err := json.Marshal(map[string]string{"command": command})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := &sequenceProvider{fn: func(call int, req *provider.ChatRequest) (*provider.ChatResponse, error) {
+		switch call {
+		case 1:
+			return assistantToolCall("shell-approval-call", "shell_execute", string(args)), nil
+		case 2:
+			last := req.Messages[len(req.Messages)-1]
+			if last.Role != "tool" || last.ToolCallID != "shell-approval-call" {
+				return nil, fmt.Errorf("expected continued shell tool result, got %#v", last)
+			}
+			return assistantText("The approved shell action completed."), nil
+		default:
+			return nil, fmt.Errorf("approval replayed the prompt: provider call %d", call)
+		}
+	}}
+	registry, err := tools.NewDefaultRegistryFromOptions(tools.DefaultRegistryOptions{
+		Store:                store,
+		BlockManualApprovals: true,
+		SecurityPolicy:       &policy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan tools.Event, 32)
+	a := New(Options{
+		Provider:                      p,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  registry,
+		EventObserver:                 approvalEventObserver{events: events},
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		MemoryRetriever:               &memoryStub{},
+		BlockedWorkStore:              store,
+		AwaitManualApprovals:          true,
+		DisableCompletionVerification: true,
+	})
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	type turnOutcome struct {
+		result ChatTurnResult
+		err    error
+	}
+	turnDone := make(chan turnOutcome, 1)
+	go func() {
+		result, turnErr := session.Turn(context.Background(), "append the marker")
+		turnDone <- turnOutcome{result: result, err: turnErr}
+	}()
+
+	var approvalEvent tools.Event
+	waitDeadline := time.After(2 * time.Second)
+	waiting := true
+	for waiting {
+		select {
+		case event := <-events:
+			if event.Type == tools.EventApprovalRequired {
+				approvalEvent = event
+				waiting = false
+			}
+		case <-waitDeadline:
+			t.Fatal("timed out waiting for shell approval request")
+		}
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("shell action ran before approval: %v", err)
+	}
+	if _, err := tools.ApproveBlockedWork(context.Background(), store, policy, approvalEvent.BlockedWorkID, 15*time.Minute, "test-tui"); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.ResumeApproval(approvalEvent.BlockedWorkID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case outcome := <-turnDone:
+		if outcome.err != nil {
+			t.Fatal(outcome.err)
+		}
+		if outcome.result.Output != "The approved shell action completed." || len(outcome.result.Tools) != 1 || !outcome.result.Tools[0].Success {
+			t.Fatalf("unexpected approved shell result: %#v", outcome.result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for approved shell continuation")
+	}
+	contents, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "x" || p.call != 2 {
+		t.Fatalf("approved shell action was replayed: contents=%q provider_calls=%d", contents, p.call)
+	}
+}
+
+func TestChatConversationCancellationCompletesPendingToolMessage(t *testing.T) {
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+	policy, err := securitypolicy.Resolve(securitypolicy.DefaultSelection())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := &contextSequenceProvider{fn: func(ctx context.Context, call int, req *provider.ChatRequest) (*provider.ChatResponse, error) {
+		switch call {
+		case 1:
+			return assistantToolCall("cancel-call", "schedule_manage", `{"action":"add"}`), nil
+		case 2:
+			last := req.Messages[len(req.Messages)-1]
+			if last.Role != "tool" || last.ToolCallID != "cancel-call" || !strings.Contains(last.Content, "approval wait interrupted") {
+				return nil, fmt.Errorf("canceled approval left an invalid tool sequence: %#v", last)
+			}
+			return nil, ctx.Err()
+		case 3:
+			roles := make([]string, 0, len(req.Messages))
+			for _, message := range req.Messages {
+				roles = append(roles, message.Role)
+			}
+			if !strings.Contains(strings.Join(roles, ","), "assistant,tool,user") {
+				return nil, fmt.Errorf("next turn did not receive a completed canceled tool sequence: %v", roles)
+			}
+			return assistantText("The approval was canceled safely."), nil
+		default:
+			return nil, fmt.Errorf("unexpected provider call %d", call)
+		}
+	}}
+	registry := tools.NewRegistry()
+	registry.ConfigureSecurityWithStore(policy, tools.NewBlockingApprover(), nil, store)
+	registry.Register(&approvalCountingTool{})
+	events := make(chan tools.Event, 16)
+	a := New(Options{
+		Provider:                      p,
+		ProviderName:                  "openrouter",
+		ToolRegistry:                  registry,
+		EventObserver:                 approvalEventObserver{events: events},
+		DefaultModel:                  "test-model",
+		MaxIterations:                 3,
+		MaxTokens:                     512,
+		MemoryRetriever:               &memoryStub{},
+		BlockedWorkStore:              store,
+		AwaitManualApprovals:          true,
+		DisableCompletionVerification: true,
+	})
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnCtx, cancel := context.WithCancel(context.Background())
+	type turnError struct{ err error }
+	turnDone := make(chan turnError, 1)
+	go func() {
+		_, turnErr := session.Turn(turnCtx, "schedule this")
+		turnDone <- turnError{err: turnErr}
+	}()
+
+	waitDeadline := time.After(2 * time.Second)
+	waiting := true
+	for waiting {
+		select {
+		case event := <-events:
+			if event.Type == tools.EventApprovalRequired {
+				waiting = false
+			}
+		case <-waitDeadline:
+			t.Fatal("timed out waiting for approval before cancellation")
+		}
+	}
+	cancel()
+	select {
+	case outcome := <-turnDone:
+		if !errors.Is(outcome.err, context.Canceled) {
+			t.Fatalf("expected canceled approval turn, got %v", outcome.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out canceling approval wait")
+	}
+	if history := session.History(); len(history) != 3 || history[2].Role != "tool" || history[2].ToolCallID != "cancel-call" {
+		t.Fatalf("canceled approval left incomplete conversation history: %#v", history)
+	}
+	result, err := session.Turn(context.Background(), "what happened?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "The approval was canceled safely." {
+		t.Fatalf("unexpected follow-up after canceled approval: %#v", result)
 	}
 }
 

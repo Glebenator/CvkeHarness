@@ -18,13 +18,16 @@ import (
 )
 
 type fakeLiveChatSession struct {
-	id        int64
-	selection core.RoutingSelection
-	result    agent.ChatTurnResult
-	err       error
-	prompt    string
-	closed    string
-	tools     []agent.ChatTool
+	id         int64
+	selection  core.RoutingSelection
+	result     agent.ChatTurnResult
+	err        error
+	prompt     string
+	closed     string
+	tools      []agent.ChatTool
+	approved   string
+	grant      state.SecurityActionGrant
+	approveErr error
 }
 
 func (f *fakeLiveChatSession) ID() int64 { return f.id }
@@ -38,6 +41,11 @@ func (f *fakeLiveChatSession) Tools() []agent.ChatTool {
 func (f *fakeLiveChatSession) Turn(_ context.Context, prompt string) (agent.ChatTurnResult, error) {
 	f.prompt = prompt
 	return f.result, f.err
+}
+
+func (f *fakeLiveChatSession) ApproveBlockedWork(_ context.Context, workID string) (state.SecurityActionGrant, error) {
+	f.approved = workID
+	return f.grant, f.approveErr
 }
 
 func (f *fakeLiveChatSession) Close(_ context.Context, reason string) { f.closed = reason }
@@ -629,7 +637,7 @@ func TestBlockedChatShowsPolicyReasonAndInlineApprovalAction(t *testing.T) {
 	if tab.status != "APPROVAL REQUIRED" || tab.statusDetail != "untrusted executable docker is ask" {
 		t.Fatalf("blocked policy reason missing: status=%q detail=%q", tab.status, tab.statusDetail)
 	}
-	if tab.pendingApproval == nil || tab.pendingApproval.workID != "blocked_123" || tab.pendingApproval.prompt != "inspect disk usage" {
+	if tab.pendingApproval == nil || tab.pendingApproval.workID != "blocked_123" {
 		t.Fatalf("inline approval action missing: %#v", tab.pendingApproval)
 	}
 	if tab.toolCalls[0].status != "APPROVAL REQUIRED" || tab.toolCalls[0].err != "" || !tab.toolCalls[0].expanded {
@@ -646,13 +654,72 @@ func TestBlockedChatShowsPolicyReasonAndInlineApprovalAction(t *testing.T) {
 	tab.resize(80, 30)
 	tab.viewport.GotoBottom()
 	view := tab.viewport.View()
-	for _, expected := range []string{"Policy reason:", "untrusted executable docker is ask", "commands.unknown", "approve once + retry"} {
+	for _, expected := range []string{"Policy reason:", "untrusted executable docker is ask", "commands.unknown", "approve once + continue"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("approval prompt missing %q:\n%s", expected, view)
 		}
 	}
-	if hints := strings.Join(tab.StatusHints(), " "); !strings.Contains(hints, "approve once + retry") {
+	if hints := strings.Join(tab.StatusHints(), " "); !strings.Contains(hints, "approve once + continue") {
 		t.Fatalf("footer does not expose approval action: %q", hints)
+	}
+}
+
+func TestLiveApprovalContinuesCurrentTurnWithoutClearingContext(t *testing.T) {
+	t.Parallel()
+	session := &fakeLiveChatSession{grant: state.SecurityActionGrant{MaskedSummary: "schedule_manage add"}}
+	tab := newChatTab().(*chatTab)
+	tab.session = session
+	tab.running = true
+	tab.activeTurn = 2
+	tab.sessionID = "session-current"
+	tab.activeTurnID = "turn-current"
+	tab.messages = []liveChatMessage{
+		{role: "user", content: "remember target alpha", turn: 1},
+		{role: "assistant", content: "target alpha remembered", turn: 1},
+		{role: "user", content: "schedule it now", turn: 2},
+	}
+
+	tab.applyRuntimeEvent(tools.Event{
+		Type:            tools.EventApprovalRequired,
+		ToolCallID:      "call-approval",
+		ToolName:        "schedule_manage",
+		BlockedWorkID:   "blocked-current",
+		Command:         "schedule_manage add",
+		ApprovalReason:  "scheduled change requires approval",
+		ApprovalEffects: []tools.ShellEffect{{Setting: "autonomy.scheduled_changes", Detail: "scheduled-job add"}},
+		SessionID:       "session-current",
+		TurnID:          "turn-current",
+	})
+	if tab.pendingApproval == nil || tab.pendingApproval.workID != "blocked-current" || tab.status != "APPROVAL REQUIRED" {
+		t.Fatalf("live approval event did not pause the current turn: %#v status=%q", tab.pendingApproval, tab.status)
+	}
+	if hints := strings.Join(tab.StatusHints(), " "); !strings.Contains(hints, "approve once + continue") {
+		t.Fatalf("running approval did not expose the continue action: %q", hints)
+	}
+
+	beforeSessionID := tab.sessionID
+	beforeTurn := tab.activeTurn
+	beforeMessages := append([]liveChatMessage(nil), tab.messages...)
+	done := approveBlockedWorkCmd(session, "blocked-current")().(chatApprovalDoneMsg)
+	updated, _ := tab.Update(done, nil, 100, 30)
+	tab = updated.(*chatTab)
+
+	if session.approved != "blocked-current" || session.closed != "" {
+		t.Fatalf("approval restarted or bypassed the active session: approved=%q closed=%q", session.approved, session.closed)
+	}
+	if tab.sessionID != beforeSessionID || tab.activeTurn != beforeTurn || !tab.running {
+		t.Fatalf("approval reset current turn identity: session=%q turn=%d running=%t", tab.sessionID, tab.activeTurn, tab.running)
+	}
+	if len(tab.messages) != len(beforeMessages)+1 {
+		t.Fatalf("approval cleared transcript context: before=%#v after=%#v", beforeMessages, tab.messages)
+	}
+	for i := range beforeMessages {
+		if tab.messages[i] != beforeMessages[i] {
+			t.Fatalf("approval changed prior message %d: before=%#v after=%#v", i, beforeMessages[i], tab.messages[i])
+		}
+	}
+	if tab.pendingApproval != nil || tab.status != "RESUMING" || !strings.Contains(tab.messages[len(tab.messages)-1].content, "Continuing the current turn") {
+		t.Fatalf("approval did not resume in place: pending=%#v status=%q messages=%#v", tab.pendingApproval, tab.status, tab.messages)
 	}
 }
 
@@ -1174,7 +1241,6 @@ func TestApprovalPromptDoesNotOverflowRepresentativeWidths(t *testing.T) {
 		tab := newChatTab().(*chatTab)
 		tab.pendingApproval = &pendingChatApproval{
 			workID:  "blocked-1",
-			prompt:  "inspect storage",
 			summary: "echo storage && docker system df && du -xhd 2 /Users/operator/.docker | sort -h | tail -30",
 			reason:  "known read-only command echo is allow; untrusted or path-qualified executable docker is ask",
 			effects: []tools.ShellEffect{
@@ -1186,7 +1252,7 @@ func TestApprovalPromptDoesNotOverflowRepresentativeWidths(t *testing.T) {
 		_ = tab.View(width, 30)
 		tab.viewport.GotoBottom()
 		view := tab.View(width, 30)
-		if !strings.Contains(view, "APPROVAL REQUIRED") || !strings.Contains(view, "approve once + retry") {
+		if !strings.Contains(view, "APPROVAL REQUIRED") || !strings.Contains(view, "approve once + continue") {
 			t.Fatalf("width %d hid the approval action:\n%s", width, view)
 		}
 		for lineNo, line := range strings.Split(view, "\n") {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/coolcake/cvkeharness/agent"
 	"github.com/coolcake/cvkeharness/config"
@@ -68,6 +69,7 @@ var tuiCmd = &cobra.Command{
 			}
 			return &dashboardChatSession{
 				conversation: conversation,
+				cfg:          cfg,
 				store:        store,
 				sessionID:    sessionID,
 				stats:        newChatSessionStats(conversation.Selection()),
@@ -82,6 +84,7 @@ var tuiCmd = &cobra.Command{
 
 type dashboardChatSession struct {
 	conversation *agent.ChatConversation
+	cfg          *config.Config
 	store        *state.Store
 	sessionID    int64
 	stats        *chatSessionStats
@@ -106,6 +109,27 @@ func (s *dashboardChatSession) Turn(ctx context.Context, prompt string) (agent.C
 	recordChatTurn(ctx, s.store, current, prompt, result)
 	s.sessionID = current.sessionID
 	return result, err
+}
+
+func (s *dashboardChatSession) ApproveBlockedWork(ctx context.Context, workID string) (state.SecurityActionGrant, error) {
+	if s.closed || s.conversation == nil {
+		return state.SecurityActionGrant{}, fmt.Errorf("chat session is closed")
+	}
+	if s.cfg == nil {
+		return state.SecurityActionGrant{}, fmt.Errorf("chat approval configuration is unavailable")
+	}
+	policy, err := s.cfg.EffectiveSecurity()
+	if err != nil {
+		return state.SecurityActionGrant{}, err
+	}
+	grant, err := tools.ApproveBlockedWork(ctx, s.store, policy, workID, 15*time.Minute, "tui-blocked-work")
+	if err != nil {
+		return state.SecurityActionGrant{}, err
+	}
+	if err := s.conversation.ResumeApproval(workID); err != nil {
+		return state.SecurityActionGrant{}, err
+	}
+	return grant, nil
 }
 
 func (s *dashboardChatSession) Close(ctx context.Context, exitReason string) {

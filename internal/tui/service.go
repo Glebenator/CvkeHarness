@@ -133,24 +133,6 @@ func (s *Service) ExportChatSession(ctx context.Context, id int64) (string, erro
 	return chatexport.WriteMarkdown(dir, detail, time.Now())
 }
 
-// ApproveBlockedWork grants one exact blocked action one use for 15 minutes.
-// The shared approval helper revalidates the action against the current policy
-// and binds the grant to the original host, principal, working directory,
-// effect set, and policy version before writing it.
-func (s *Service) ApproveBlockedWork(ctx context.Context, id string) (state.SecurityActionGrant, error) {
-	if s == nil || s.cfg == nil {
-		return state.SecurityActionGrant{}, fmt.Errorf("approval configuration is unavailable")
-	}
-	if s.store == nil || !s.store.Available() {
-		return state.SecurityActionGrant{}, fmt.Errorf("state database is unavailable")
-	}
-	policy, err := s.cfg.EffectiveSecurity()
-	if err != nil {
-		return state.SecurityActionGrant{}, err
-	}
-	return tools.ApproveBlockedWork(ctx, s.store, policy, id, 15*time.Minute, "tui-blocked-work")
-}
-
 // ScheduledJobs returns all scheduled jobs.
 func (s *Service) ScheduledJobs(ctx context.Context) ([]state.ScheduledJob, error) {
 	if s.store == nil || !s.store.Available() {

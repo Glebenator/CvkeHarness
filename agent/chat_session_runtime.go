@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coolcake/cvkeharness/core"
@@ -25,6 +26,8 @@ type ChatConversation struct {
 	selection          core.RoutingSelection
 	history            *ChatState
 	previousActionable classificationContext
+	approvalMu         sync.Mutex
+	approvalWaiters    map[string]chan struct{}
 }
 
 // ChatTurnResult contains one assistant turn plus transcript and stats.
@@ -81,10 +84,67 @@ func (a *Agent) StartChat(ctx context.Context) (*ChatConversation, core.RoutingS
 	}
 
 	return &ChatConversation{
-		agent:     a,
-		selection: selection,
-		history:   NewChatState(),
+		agent:           a,
+		selection:       selection,
+		history:         NewChatState(),
+		approvalWaiters: make(map[string]chan struct{}),
 	}, selection, nil
+}
+
+// ResumeApproval wakes the exact blocked action in this conversation after its
+// scoped grant has been persisted. It never executes or authorizes an action by
+// itself; the waiting tool call must still consume the grant through policy.
+func (c *ChatConversation) ResumeApproval(workID string) error {
+	workID = strings.TrimSpace(workID)
+	if workID == "" {
+		return fmt.Errorf("blocked work id is required")
+	}
+	c.approvalMu.Lock()
+	waiter, ok := c.approvalWaiters[workID]
+	c.approvalMu.Unlock()
+	if !ok {
+		return fmt.Errorf("blocked work %s is not waiting in this conversation", workID)
+	}
+	select {
+	case waiter <- struct{}{}:
+		return nil
+	default:
+		return fmt.Errorf("blocked work %s approval was already resumed", workID)
+	}
+}
+
+func (c *ChatConversation) awaitApproval(ctx context.Context, workID string, request tools.ShellApprovalRequest) error {
+	workID = strings.TrimSpace(workID)
+	if workID == "" {
+		return fmt.Errorf("cannot await approval without persisted blocked work")
+	}
+	waiter := make(chan struct{}, 1)
+	c.approvalMu.Lock()
+	if _, exists := c.approvalWaiters[workID]; exists {
+		c.approvalMu.Unlock()
+		return fmt.Errorf("blocked work %s is already waiting for approval", workID)
+	}
+	c.approvalWaiters[workID] = waiter
+	c.approvalMu.Unlock()
+	defer func() {
+		c.approvalMu.Lock()
+		delete(c.approvalWaiters, workID)
+		c.approvalMu.Unlock()
+	}()
+
+	tools.EmitEvent(ctx, tools.Event{
+		Type:            tools.EventApprovalRequired,
+		BlockedWorkID:   workID,
+		Command:         secrets.Mask(strings.TrimSpace(request.Command)),
+		ApprovalReason:  secrets.Mask(strings.TrimSpace(request.ValidationError)),
+		ApprovalEffects: append([]tools.ShellEffect(nil), request.Effects...),
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-waiter:
+		return nil
+	}
 }
 
 // Tools returns the capabilities registered for this conversation in stable
@@ -393,7 +453,6 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 					Command: command,
 				})
 			}
-			toolStart := time.Now()
 			toolCtx := tools.WithToolCallContext(telemetry.WithFields(telemetry.WithModel(iterCtx, actualModel), telemetry.Fields{
 				ToolCallID: call.ID,
 				TargetID:   targetResolution.TargetID,
@@ -409,8 +468,55 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				TargetID:   targetResolution.TargetID,
 				Payload:    payload,
 			})
-			resultStr, toolErr := c.agent.opts.ToolRegistry.ExecuteTool(toolCtx, call)
-			durationMs := time.Since(toolStart).Milliseconds()
+			var resultStr string
+			var toolErr error
+			var durationMs int64
+			for {
+				toolStart := time.Now()
+				resultStr, toolErr = c.agent.opts.ToolRegistry.ExecuteTool(toolCtx, call)
+				durationMs += time.Since(toolStart).Milliseconds()
+
+				approvalErr, approvalRequired := tools.IsApprovalRequired(toolErr)
+				if !approvalRequired {
+					break
+				}
+				phaseRecord.Success = false
+				workID, persistErr := c.agent.persistBlockedWork(iterCtx, prompt, taskClass, targetResolution, turnChat.Messages(), call, approvalErr)
+				if persistErr != nil {
+					return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", persistErr
+				}
+				if !c.agent.opts.AwaitManualApprovals {
+					return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", blockedTaskError{
+						workID:  workID,
+						reason:  toolErr.Error(),
+						request: approvalErr.Request,
+					}
+				}
+
+				approvalPayload, _ := json.Marshal(map[string]any{"blocked_work_id": workID})
+				_ = telemetry.Record(telemetry.WithFields(iterCtx, telemetry.Fields{TaskState: string(state.TaskStateBlockedWaitingUser)}), telemetry.Event{
+					Type:       telemetry.EventTaskBlocked,
+					TaskState:  string(state.TaskStateBlockedWaitingUser),
+					ToolCallID: call.ID,
+					TargetID:   targetResolution.TargetID,
+					Payload:    approvalPayload,
+				})
+				if waitErr := c.awaitApproval(toolCtx, workID, approvalErr.Request); waitErr != nil {
+					toolErr = fmt.Errorf("approval wait interrupted: %w", waitErr)
+					break
+				}
+				phaseRecord.Success = false
+				_ = telemetry.Record(telemetry.WithFields(iterCtx, telemetry.Fields{TaskState: string(state.TaskStateRunning)}), telemetry.Event{
+					Type:       telemetry.EventTaskResumed,
+					TaskState:  string(state.TaskStateRunning),
+					ToolCallID: call.ID,
+					TargetID:   targetResolution.TargetID,
+					Payload:    approvalPayload,
+				})
+				// Retry this exact call. The persisted one-use grant is still
+				// consumed by the normal authorization path immediately before
+				// execution; no model prompt or earlier action is replayed.
+			}
 
 			outcome := state.ToolOutcome{
 				Phase:      core.PhaseChat,
@@ -429,19 +535,6 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				outcome.ErrorMessage = toolErr.Error()
 				outcome.PolicyDenied, outcome.DenialClass = classifyPolicyDenial(toolErr)
 				resultStr = fmt.Sprintf("Error executing tool: %v", toolErr)
-
-				if approvalErr, ok := tools.IsApprovalRequired(toolErr); ok {
-					phaseRecord.Success = false
-					workID, persistErr := c.agent.persistBlockedWork(iterCtx, prompt, taskClass, targetResolution, turnChat.Messages(), call, approvalErr)
-					if persistErr != nil {
-						return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", persistErr
-					}
-					return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", blockedTaskError{
-						workID:  workID,
-						reason:  toolErr.Error(),
-						request: approvalErr.Request,
-					}
-				}
 
 				if !refreshed && (outcome.PolicyDenied || failuresByTool[call.Function.Name] >= 2) {
 					refreshed = true

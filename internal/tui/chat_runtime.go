@@ -6,6 +6,7 @@ import (
 	"github.com/coolcake/cvkeharness/agent"
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
 )
 
@@ -18,6 +19,7 @@ type LiveChatSession interface {
 	Selection() core.RoutingSelection
 	Tools() []agent.ChatTool
 	Turn(ctx context.Context, prompt string) (agent.ChatTurnResult, error)
+	ApproveBlockedWork(ctx context.Context, workID string) (state.SecurityActionGrant, error)
 	Close(ctx context.Context, exitReason string)
 }
 
