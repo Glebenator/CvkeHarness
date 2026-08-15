@@ -143,7 +143,7 @@ The state database in `~/.cvkeharness/state.db` stores:
 - per-model stats
 - routing candidates
 - model approvals
-- command approvals
+- scoped one-time action grants and quarantined legacy command approvals
 - `targets`
 - `target_aliases`
 - `host_facts`
@@ -192,8 +192,9 @@ The setup wizard configures:
 - provider
 - Codex CLI ChatGPT login, API key, or local base URL
 - default model
-- command approval mode
-- safety model when using LLM judge mode
+- security profile (`extra_strict`, `reasonable`, `less_strict`, `minimal`, or `yolo`)
+- optional per-control overrides for filesystem, commands, system, network, remote actions, autonomy, approvals, and limits
+- advisory model for controls explicitly set to `llm_review`
 - routing mode
 - token limit
 - iteration limit
@@ -286,9 +287,11 @@ Exports use private file permissions and mask obvious credential patterns. They 
 ### Command commands
 
 - `cvkeharness commands list`
-  Show the static shell allowlist plus learned approved commands
+  Show the static shell allowlist, scoped grants, and quarantined legacy approvals
 - `cvkeharness commands approve "<command>"`
-  Approve one or more parsed shell command segments for future runs
+  Approve one exact shell action once for 15 minutes under the current policy/host/principal/directory
+- `cvkeharness commands approve-work <blocked-work-id>`
+  Approve the exact shell or non-shell action captured by blocked work once; the original executor scope remains binding
 
 ## Configuration
 
@@ -318,7 +321,10 @@ Important fields:
 - `prompt_dump_retention_days`
   Retention window for debug prompt dumps. Dumps are pruned automatically and secret-looking values are redacted before persistence.
 - `routing_min_confidence`
+- `security`
+  Canonical security profile and per-setting overrides. `reasonable` is the default. See [Security profiles and controls](docs/security-controls.md).
 - `safety_mode`
+  Deprecated compatibility input. It is migrated into `security` when the new section is absent.
 - `safety_model`
 - `max_tokens`
 - `max_iterations`

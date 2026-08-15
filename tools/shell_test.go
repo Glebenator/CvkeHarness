@@ -119,6 +119,12 @@ func TestValidateAllowedShellCommand_UsesAllowlist(t *testing.T) {
 	if err := ValidateAllowedShellCommand("ps <<'EOF'\naux\nEOF", allowed); err == nil {
 		t.Fatal("expected an allowlisted command with a heredoc to require secondary approval")
 	}
+	if err := ValidateAllowedShellCommand("systemctl restart sshd", []string{"systemctl"}); err == nil {
+		t.Fatal("bare systemctl allowlist must not auto-approve mutations")
+	}
+	if err := ValidateAllowedShellCommand("journalctl --vacuum-time=1d", []string{"journalctl"}); err == nil {
+		t.Fatal("bare journalctl allowlist must not auto-approve retention deletion")
+	}
 
 	if err := ValidateAllowedShellCommand("df -h", allowed); err == nil {
 		t.Fatal("expected disallowed base command to be rejected")

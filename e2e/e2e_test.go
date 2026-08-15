@@ -268,13 +268,13 @@ func TestCommandApprovalRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("commands approve failed: %v\n%s", err, approved)
 	}
-	assertContains(t, approved, "Approved echo E2E_APPROVED")
+	assertContains(t, approved, "Approved once (15 minutes, exact action and current policy): echo E2E_APPROVED")
 
 	listed, err := runCLI(t, home, "", "commands", "list")
 	if err != nil {
 		t.Fatalf("commands list failed: %v\n%s", err, listed)
 	}
-	assertContains(t, listed, "Learned approvals:")
+	assertContains(t, listed, "Scoped one-time grants:")
 	assertContains(t, listed, command)
 	assertContains(t, listed, "source=cli")
 	if _, err := os.Stat(paths.stateDB); err != nil {
@@ -296,7 +296,7 @@ func TestManualApprovalOnceExecutesExactCommandWithoutRemembering(t *testing.T) 
 		true,
 	)
 	for _, expected := range []string{
-		"Command requires approval",
+		"Action requires approval",
 		"echo E2E_TOOL_OK",
 		"Approve once",
 		"E2E_TOOL_OK",
@@ -342,7 +342,7 @@ func TestManualApprovalRejectionPreventsExecution(t *testing.T) {
 		false,
 	)
 	for _, expected := range []string{
-		"Command requires approval",
+		"Action requires approval",
 		"touch",
 		filepath.Base(marker),
 		"Reject command",
@@ -528,7 +528,7 @@ func runChatApprovalDecision(t *testing.T, home, prompt, finalOutput string, app
 	if _, err := terminal.Write([]byte(prompt + "\r")); err != nil {
 		abort("write chat prompt: " + err.Error())
 	}
-	if !waitForOutput(buffer, "Command requires approval", 5*time.Second) {
+	if !waitForOutput(buffer, "Action requires approval", 5*time.Second) {
 		abort("manual approval prompt did not appear")
 	}
 	if approve {

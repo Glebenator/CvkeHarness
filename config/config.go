@@ -371,6 +371,19 @@ func (c *Config) migrateLegacySecurity() *securitypolicy.Selection {
 	switch c.SafetyMode {
 	case "user_confirm_all":
 		selection.Profile = securitypolicy.ProfileExtraStrict
+		// Legacy user_confirm_all meant every valid action could be reviewed by
+		// a person. Preserve that behavior explicitly instead of inheriting the
+		// profile's read ALLOW and destructive DENY values.
+		for _, setting := range securitypolicy.Catalog() {
+			if setting.Kind == securitypolicy.KindDecision {
+				_ = selection.SetOverride(setting.ID, string(securitypolicy.DecisionAsk))
+			}
+		}
+	case "user_confirm":
+		// The legacy allowlist did not auto-authorize file creation/append merely
+		// because the effect was recoverable.
+		_ = selection.SetOverride(securitypolicy.SettingFileCreate, string(securitypolicy.DecisionAsk))
+		_ = selection.SetOverride(securitypolicy.SettingFileAppend, string(securitypolicy.DecisionAsk))
 	case "unrestricted":
 		selection.Profile = securitypolicy.ProfileYOLO
 	}
@@ -381,6 +394,9 @@ func (c *Config) migrateLegacySecurity() *securitypolicy.Selection {
 		securitypolicy.SettingPackageChanges:  c.CapabilityPolicy.InstallMissingTools,
 	}
 	for id, value := range legacyOverrides {
+		if c.SafetyMode == "user_confirm_all" {
+			continue
+		}
 		value = strings.ToLower(strings.TrimSpace(value))
 		if value == "" || value == "ask" {
 			continue

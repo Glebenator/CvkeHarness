@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -149,6 +150,42 @@ func (s *Store) ResolveBlockedShellCommand(ctx context.Context, command string) 
 		resolved = append(resolved, work)
 	}
 	return resolved, nil
+}
+
+// ResolveBlockedSecurityGrant clears work waiting on one exact grant digest.
+func (s *Store) ResolveBlockedSecurityGrant(ctx context.Context, digest string) ([]BlockedWork, error) {
+	if !s.Available() {
+		return nil, s.Err()
+	}
+	pending, err := s.ListBlockedWork(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var resolved []BlockedWork
+	for _, work := range pending {
+		if work.PendingApprovalType != "security_action" || blockedGrantDigest(work.PendingApprovalPayload) != digest {
+			continue
+		}
+		if err := s.ResolveBlockedWork(ctx, work.ID, TaskStateRunning); err != nil {
+			return nil, err
+		}
+		if work.ScheduledJobID != "" {
+			if err := s.UnblockScheduledJob(ctx, work.ScheduledJobID); err != nil {
+				return nil, err
+			}
+		}
+		work.TaskState = TaskStateRunning
+		resolved = append(resolved, work)
+	}
+	return resolved, nil
+}
+
+func blockedGrantDigest(payload string) string {
+	var grant SecurityActionGrant
+	if json.Unmarshal([]byte(payload), &grant) == nil && grant.Digest != "" {
+		return grant.Digest
+	}
+	return payload
 }
 
 type blockedWorkScanner interface {

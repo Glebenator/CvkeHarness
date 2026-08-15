@@ -18,7 +18,7 @@ import (
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/coolcake/cvkeharness/securitypolicy"
 )
 
 const HostProfileFile = "host_profile.json"
@@ -151,11 +151,16 @@ func ProviderOptions() []ProviderOption {
 }
 
 func SafetyOptions() []ModelOption {
-	return []ModelOption{
-		{ID: tools.SafetyModeLLMJudge, Description: "Recommended: allowlist plus LLM judge for other commands"},
-		{ID: tools.SafetyModeUserConfirmAll, Description: "Ask for user approval before every shell command"},
-		{ID: tools.SafetyModeUnrestricted, Description: "Risky: run parsed shell commands without approval"},
+	bundles := securitypolicy.Profiles()
+	options := make([]ModelOption, 0, len(bundles))
+	for _, bundle := range bundles {
+		description := bundle.Description
+		if bundle.ID == securitypolicy.ProfileReasonable {
+			description = "Recommended: " + description
+		}
+		options = append(options, ModelOption{ID: string(bundle.ID), Description: description})
 	}
+	return options
 }
 
 func SoulProfiles() []SoulProfile {
@@ -169,12 +174,18 @@ func SoulProfiles() []SoulProfile {
 
 func DefaultSoulProfile() SoulProfile { return SoulProfiles()[0] }
 
-func LoadWizardConfig() *config.Config {
-	existing, _ := config.LoadConfig()
+func LoadWizardConfig() (*config.Config, error) {
+	existing, loadErr := config.LoadConfig()
 	cfg := config.DefaultConfig()
 	if existing == nil {
+		path, pathErr := config.ConfigPath()
+		if pathErr == nil {
+			if _, statErr := os.Stat(path); statErr == nil || !os.IsNotExist(statErr) {
+				return nil, loadErr
+			}
+		}
 		cfg.Normalize()
-		return cfg
+		return cfg, nil
 	}
 	clone := *cfg
 	clone.Provider = firstNonEmpty(existing.Provider, cfg.Provider)
@@ -202,11 +213,12 @@ func LoadWizardConfig() *config.Config {
 	clone.RoutingMinConfidence = existing.RoutingMinConfidence
 	clone.SetupAgentMode = firstNonEmpty(existing.SetupAgentMode, cfg.SetupAgentMode)
 	clone.CapabilityPolicy = existing.CapabilityPolicy
+	clone.Security = existing.Security.Clone()
 	clone.WebSearch = existing.WebSearch
 	clone.WebSearch.AllowedDomains = append([]string(nil), existing.WebSearch.AllowedDomains...)
 	clone.WebSearch.BlockedDomains = append([]string(nil), existing.WebSearch.BlockedDomains...)
 	clone.Normalize()
-	return &clone
+	return &clone, nil
 }
 
 func SetDefaultModel(cfg *config.Config, model string) {
@@ -490,8 +502,8 @@ func (p *DaemonPlan) RefreshReviewCommands() {
 
 func GenerateRecommendations(cfg *config.Config, profile HostProfile, installPlan InstallPlan, daemonPlan DaemonPlan) []string {
 	var out []string
-	if cfg.SafetyMode == tools.SafetyModeUnrestricted {
-		out = append(out, "Unrestricted shell mode is fastest, but it removes CvkeHarness' approval guard. Use it only on disposable or trusted environments.")
+	if effective, err := cfg.EffectiveSecurity(); err == nil && effective.Profile == securitypolicy.ProfileYOLO {
+		out = append(out, "YOLO removes CvkeHarness approval and deletion guards. It does not bypass operating-system or provider protections; use it only on disposable or trusted environments.")
 	}
 	if !profile.Python.Found {
 		out = append(out, "Install Python if you expect the agent to generate diagnostic scripts or data-processing helpers.")

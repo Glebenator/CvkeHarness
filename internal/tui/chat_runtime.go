@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/coolcake/cvkeharness/agent"
+	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/tools"
 )
@@ -21,4 +22,4 @@ type LiveChatSession interface {
 }
 
 // StartChatFunc creates one live chat session with structured tool events.
-type StartChatFunc func(ctx context.Context, observer tools.EventObserver) (LiveChatSession, error)
+type StartChatFunc func(ctx context.Context, cfg *config.Config, observer tools.EventObserver) (LiveChatSession, error)

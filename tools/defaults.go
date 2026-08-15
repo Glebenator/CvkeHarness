@@ -31,8 +31,9 @@ func NewDefaultRegistry(allowedCommands []string, judge provider.Provider, safet
 	return NewDefaultRegistryWithStoreAndMemory(allowedCommands, nil, nil, judge, safetyMode, safetyModel, primaryModel)
 }
 
-// NewDefaultRegistryWithStore creates the standard registry and reuses
-// persisted command approvals when a state store is available.
+// NewDefaultRegistryWithStore creates the standard registry. Legacy runtimes
+// may reuse old command approvals; effect-policy runtimes consume only scoped
+// one-time action grants.
 func NewDefaultRegistryWithStore(allowedCommands []string, store *state.Store, judge provider.Provider, safetyMode, safetyModel, primaryModel string) *Registry {
 	return NewDefaultRegistryWithStoreAndMemory(allowedCommands, store, nil, judge, safetyMode, safetyModel, primaryModel)
 }
@@ -72,6 +73,9 @@ func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, erro
 		humanApprover = NewUserPromptApprover(os.Stdin, os.Stdout)
 	}
 	llmApprover := NewLLMJudgeApproverWithPromptDumper(opts.Judge, opts.SafetyModel, opts.PromptDumper)
+	if opts.SecurityPolicy != nil {
+		registry.ConfigureSecurityWithStore(*opts.SecurityPolicy, humanApprover, llmApprover, opts.Store)
+	}
 	switch opts.SafetyMode {
 	case "", SafetyModeLLMJudge:
 		approver = llmApprover

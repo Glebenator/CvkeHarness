@@ -47,7 +47,7 @@ var tuiCmd = &cobra.Command{
 		}
 
 		service := dashboard.NewService(cfg, store, systemcron.New(nil), sched, runJobNow)
-		service.SetChatStarter(func(ctx context.Context, observer tools.EventObserver) (dashboard.LiveChatSession, error) {
+		service.SetChatStarter(func(ctx context.Context, cfg *config.Config, observer tools.EventObserver) (dashboard.LiveChatSession, error) {
 			switch cfg.Provider {
 			case "openrouter", "openai":
 				if cfg.GetAPIKey(cfg.Provider) == "" {

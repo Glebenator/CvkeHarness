@@ -3,11 +3,13 @@ package tools
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
 
+	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/securitypolicy"
 )
 
@@ -34,6 +36,11 @@ func AssessShellCommand(command string, policy securitypolicy.EffectivePolicy) (
 	if err != nil {
 		return ShellAssessment{Decision: securitypolicy.DecisionDeny}, err
 	}
+	for _, segment := range parsed.Segments {
+		if err := validateNestedShellSyntax(segment, 0); err != nil {
+			return ShellAssessment{Decision: securitypolicy.DecisionDeny}, err
+		}
+	}
 	if len(parsed.Segments) > policy.Int(securitypolicy.SettingMaxSegments) {
 		return ShellAssessment{Decision: securitypolicy.DecisionDeny}, fmt.Errorf("command has %d segments; security limit is %d", len(parsed.Segments), policy.Int(securitypolicy.SettingMaxSegments))
 	}
@@ -54,7 +61,7 @@ func AssessShellCommand(command string, policy securitypolicy.EffectivePolicy) (
 			decision = policy.Decision(securitypolicy.SettingUnknownCommands)
 		}
 		if policy.Bool(securitypolicy.SettingProtectCritical) &&
-			(effect.Setting == securitypolicy.SettingFileDelete || effect.Setting == securitypolicy.SettingFileOverwrite) &&
+			isPersistentMutationEffect(effect.Setting) &&
 			isCriticalPath(effect.Target) {
 			decision = strictestSecurityDecision(decision, securitypolicy.DecisionAsk)
 			reasons = append(reasons, "critical path "+printableTarget(effect.Target)+" requires approval")
@@ -104,7 +111,7 @@ func classifyShellEffects(segment ShellSegment, depth int) []ShellEffect {
 		if redirect.DescriptorOnly || redirect.Target == "/dev/null" {
 			continue
 		}
-		target := expandPolicyPath(redirect.Target)
+		target, stableTarget := resolvePolicyTarget(redirect.Target)
 		switch redirect.Mode {
 		case "read":
 			add(securitypolicy.SettingReadCommands, "input redirection", target)
@@ -114,21 +121,44 @@ func classifyShellEffects(segment ShellSegment, depth int) []ShellEffect {
 		case "append":
 			add(securitypolicy.SettingFileAppend, "file append", target)
 		case "write":
-			if pathExists(target) {
+			if !stableTarget {
+				add(securitypolicy.SettingUnknownCommands, "dynamic or unresolved write target", target)
+			}
+			if stableTarget && pathExists(target) {
 				add(securitypolicy.SettingFileOverwrite, "existing-file truncation", target)
 			} else {
 				add(securitypolicy.SettingFileCreate, "new-file redirection", target)
 			}
+		}
+		if redirect.Mode != "read" && isRawDeviceTarget(target) {
+			add(securitypolicy.SettingRawDeviceAccess, "raw-device redirection", target)
 		}
 	}
 
 	if isCredentialTarget(strings.Join(argv, " ")) {
 		add(securitypolicy.SettingCredentialAccess, "credential-bearing command arguments", firstPathArg(args))
 	}
+	if secrets.Contains(strings.Join(argv, " ")) {
+		add(securitypolicy.SettingCredentialAccess, "literal secret-like value in command arguments", "")
+	}
+	if executableNeedsReview(argv[0]) {
+		add(securitypolicy.SettingUnknownCommands, "untrusted or path-qualified executable "+argv[0], argv[0])
+		return effects
+	}
 
 	switch base {
-	case "set", "df", "free", "uptime", "ps", "netstat", "ss", "du", "ls", "stat", "head", "tail", "grep", "rg", "cat", "sort", "wc", "pwd", "whoami", "id", "uname", "date", "echo", "printf", "true", "false", "which", "whereis", "file", "readlink", "realpath":
+	case "set", "df", "free", "uptime", "ps", "netstat", "ss", "du", "ls", "stat", "head", "tail", "grep", "rg", "cat", "wc", "pwd", "whoami", "id", "uname", "date", "echo", "printf", "true", "false", "which", "whereis", "file", "readlink", "realpath":
 		add(securitypolicy.SettingReadCommands, "known read-only command "+base, "")
+	case "sort":
+		if target := optionValue(args, "-o", "--output"); target != "" {
+			target, stable := resolvePolicyTarget(target)
+			if !stable {
+				add(securitypolicy.SettingUnknownCommands, "dynamic or unresolved sort output", target)
+			}
+			add(securitypolicy.SettingFileOverwrite, "sort output file mutation", target)
+		} else {
+			add(securitypolicy.SettingReadCommands, "known read-only command sort", "")
+		}
 	case "tmutil":
 		if containsArg(args, "listlocalsnapshots", "listbackups", "destinationinfo", "status") {
 			add(securitypolicy.SettingReadCommands, "Time Machine inspection", "")
@@ -161,21 +191,60 @@ func classifyShellEffects(segment ShellSegment, depth int) []ShellEffect {
 	case "find":
 		if containsArg(args, "-delete") || containsNestedDelete(args) {
 			add(securitypolicy.SettingFileDelete, "find deletion", firstNonFlag(args))
+		} else if containsArg(args, "-exec", "-execdir", "-ok", "-okdir") {
+			add(securitypolicy.SettingUnknownCommands, "find executes a nested command", firstNonFlag(args))
+		} else if target := optionValue(args, "-fprint", "-fprint0", "-fls", "-fprintf"); target != "" {
+			add(securitypolicy.SettingFileOverwrite, "find writes a result file", expandPolicyPath(target))
 		} else {
 			add(securitypolicy.SettingReadCommands, "filesystem search", firstNonFlag(args))
 		}
-	case "cp", "mv", "install", "ln", "tee", "touch", "mkdir", "truncate":
-		target := lastNonFlag(args)
+	case "cp", "mv", "install", "ln":
+		targetArg := lastNonFlag(args)
+		if targetDirectory := optionValue(args, "-t", "--target-directory"); targetDirectory != "" {
+			targetArg = targetDirectory
+		}
+		target, stableTarget := resolvePolicyTarget(targetArg)
 		setting := securitypolicy.SettingFileCreate
-		if base == "truncate" || pathExists(expandPolicyPath(target)) || containsArg(args, "-f", "--force") {
+		if (stableTarget && pathExists(target)) || containsArg(args, "-f", "--force") {
 			setting = securitypolicy.SettingFileOverwrite
 		}
-		add(setting, base+" filesystem mutation", expandPolicyPath(target))
+		if !stableTarget {
+			add(securitypolicy.SettingUnknownCommands, "dynamic or unresolved filesystem target", target)
+		}
+		add(setting, base+" filesystem mutation", target)
+		if isRawDeviceTarget(target) {
+			add(securitypolicy.SettingRawDeviceAccess, "raw-device filesystem mutation", target)
+		}
 		if base == "mv" && len(nonFlagArgs(args)) > 1 {
-			add(securitypolicy.SettingFileDelete, "move removes source path", expandPolicyPath(nonFlagArgs(args)[0]))
+			for _, source := range nonFlagArgs(args) {
+				if source != targetArg {
+					add(securitypolicy.SettingFileDelete, "move removes source path", expandPolicyPath(source))
+				}
+			}
+		}
+	case "tee", "touch", "mkdir", "truncate":
+		targets := nonFlagArgs(args)
+		if len(targets) == 0 {
+			add(securitypolicy.SettingUnknownCommands, base+" has no stable filesystem target", "")
+		}
+		for _, targetArg := range targets {
+			target, stableTarget := resolvePolicyTarget(targetArg)
+			setting := securitypolicy.SettingFileCreate
+			if base == "tee" && containsArg(args, "-a", "--append") {
+				setting = securitypolicy.SettingFileAppend
+			} else if base == "truncate" || (stableTarget && pathExists(target)) {
+				setting = securitypolicy.SettingFileOverwrite
+			}
+			if !stableTarget {
+				add(securitypolicy.SettingUnknownCommands, "dynamic or unresolved filesystem target", target)
+			}
+			add(setting, base+" filesystem mutation", target)
+			if isRawDeviceTarget(target) {
+				add(securitypolicy.SettingRawDeviceAccess, "raw-device filesystem mutation", target)
+			}
 		}
 	case "sed":
-		if containsArg(args, "-i", "--in-place") || hasPrefixArg(args, "-i") {
+		if containsArg(args, "-i", "--in-place") || hasPrefixArg(args, "-i") || hasPrefixArg(args, "--in-place=") {
 			add(securitypolicy.SettingFileOverwrite, "in-place sed edit", expandPolicyPath(lastNonFlag(args)))
 		} else {
 			add(securitypolicy.SettingReadCommands, "stream transformation", "")
@@ -265,8 +334,10 @@ func classifyShellEffects(segment ShellSegment, depth int) []ShellEffect {
 		if containsAnySubstring(script, "os.remove", "os.unlink", "shutil.rmtree", "fs.rmsync", "fs.unlink", "file.delete", "unlink(") {
 			add(securitypolicy.SettingFileDelete, "script contains deletion primitive", "")
 		}
-		if nested := commandStringArg(args); nested != "" {
+		if nested := commandStringArg(args); nested != "" && isShellInterpreter(base) {
 			effects = append(effects, classifySyntheticSegment([]string{nested}, depth+1)...)
+		} else {
+			add(securitypolicy.SettingUnknownCommands, "opaque interpreter body requires review", firstNonFlag(args))
 		}
 	case "env", "command", "exec", "nohup", "xargs", "busybox", "toybox":
 		nested := nestedAfterWrapper(base, args)
@@ -360,13 +431,15 @@ func tokenizePolicySegment(command string) ([]string, []policyRedirect, error) {
 				continue
 			}
 			start := i + 1
-			for i+1 < len(command) && !unicode.IsSpace(rune(command[i+1])) && !strings.ContainsRune("|;&<>", rune(command[i+1])) {
-				i++
+			target, end, scanErr := scanShellWord(command, start)
+			if scanErr != nil {
+				return nil, nil, scanErr
 			}
-			if start > i || start >= len(command) {
+			if target == "" {
 				return nil, nil, fmt.Errorf("redirection missing target")
 			}
-			redirects = append(redirects, policyRedirect{Mode: mode, Target: strings.Trim(command[start:i+1], "\"'")})
+			i = end
+			redirects = append(redirects, policyRedirect{Mode: mode, Target: target})
 		default:
 			current.WriteByte(ch)
 		}
@@ -376,6 +449,57 @@ func tokenizePolicySegment(command string) ([]string, []policyRedirect, error) {
 	}
 	flush()
 	return argv, redirects, nil
+}
+
+func scanShellWord(command string, start int) (string, int, error) {
+	var word strings.Builder
+	inSingle, inDouble, escaped := false, false, false
+	end := start - 1
+	for index := start; index < len(command); index++ {
+		ch := command[index]
+		end = index
+		if escaped {
+			word.WriteByte(ch)
+			escaped = false
+			continue
+		}
+		if inSingle {
+			if ch == '\'' {
+				inSingle = false
+			} else {
+				word.WriteByte(ch)
+			}
+			continue
+		}
+		if inDouble {
+			switch ch {
+			case '"':
+				inDouble = false
+			case '\\':
+				escaped = true
+			default:
+				word.WriteByte(ch)
+			}
+			continue
+		}
+		switch ch {
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		case '\\':
+			escaped = true
+		default:
+			if unicode.IsSpace(rune(ch)) || strings.ContainsRune("|;&<>", rune(ch)) {
+				return word.String(), index - 1, nil
+			}
+			word.WriteByte(ch)
+		}
+	}
+	if inSingle || inDouble || escaped {
+		return "", end, fmt.Errorf("unterminated quoted redirection target")
+	}
+	return word.String(), end, nil
 }
 
 func classifySyntheticSegment(argv []string, depth int) []ShellEffect {
@@ -388,8 +512,39 @@ func classifySyntheticSegment(argv []string, depth int) []ShellEffect {
 			}
 			return effects
 		}
+		return []ShellEffect{{Setting: securitypolicy.SettingUnknownCommands, Detail: "nested command uses blocked or malformed shell syntax"}}
 	}
 	return classifyShellEffects(ShellSegment{Command: strings.Join(argv, " "), Normalized: strings.Join(argv, " ")}, depth)
+}
+
+func validateNestedShellSyntax(segment ShellSegment, depth int) error {
+	if depth > 4 {
+		return fmt.Errorf("nested command depth exceeded")
+	}
+	header := segment.Command
+	if segment.Heredoc {
+		if newline := strings.IndexAny(header, "\r\n"); newline >= 0 {
+			header = header[:newline]
+		}
+	}
+	argv, _, err := tokenizePolicySegment(header)
+	if err != nil || len(argv) == 0 || !isShellInterpreter(filepath.Base(argv[0])) {
+		return nil
+	}
+	nested := commandStringArg(argv[1:])
+	if nested == "" {
+		return nil
+	}
+	parsed, err := ParseShellCommand(nested)
+	if err != nil {
+		return fmt.Errorf("blocked nested shell action: %w", err)
+	}
+	for _, nestedSegment := range parsed.Segments {
+		if err := validateNestedShellSyntax(nestedSegment, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func strictestSecurityDecision(a, b securitypolicy.Decision) securitypolicy.Decision {
@@ -412,10 +567,33 @@ func strictestSecurityDecision(a, b securitypolicy.Decision) securitypolicy.Deci
 }
 
 func classifyGitEffects(args []string, add func(string, string, string)) {
-	verb := firstNonFlag(args)
+	verb, verbArgs := gitVerbAndArgs(args)
 	switch verb {
-	case "status", "diff", "log", "show", "branch", "rev-parse", "ls-files", "remote":
+	case "status", "diff", "log", "show", "rev-parse", "ls-files":
 		add(securitypolicy.SettingReadCommands, "git inspection", "")
+	case "branch":
+		mutatingFlag := containsArg(verbArgs, "-d", "-D", "-f", "-m", "-M", "-c", "-C", "--delete", "--force", "--move", "--copy", "--edit-description", "--set-upstream-to", "--unset-upstream")
+		readMode := containsArg(verbArgs, "-a", "--all", "-r", "--remotes", "-l", "--list", "--show-current", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at")
+		createsNamedBranch := len(nonFlagArgs(verbArgs)) > 0 && !readMode
+		if mutatingFlag || createsNamedBranch {
+			if containsArg(verbArgs, "-d", "-D", "--delete") {
+				add(securitypolicy.SettingFileDelete, "git branch deletion", lastNonFlag(verbArgs))
+			} else {
+				add(securitypolicy.SettingFileOverwrite, "git branch mutation", lastNonFlag(verbArgs))
+			}
+		} else {
+			add(securitypolicy.SettingReadCommands, "git branch inspection", "")
+		}
+	case "remote":
+		remoteVerb := firstNonFlag(verbArgs)
+		switch remoteVerb {
+		case "", "show", "get-url":
+			add(securitypolicy.SettingReadCommands, "git remote inspection", "")
+		case "remove", "rm":
+			add(securitypolicy.SettingFileDelete, "git remote deletion", lastNonFlag(verbArgs))
+		default:
+			add(securitypolicy.SettingFileOverwrite, "git remote configuration mutation", strings.Join(verbArgs, " "))
+		}
 	case "clean":
 		add(securitypolicy.SettingFileDelete, "git clean deletion", "")
 	case "reset", "checkout", "restore":
@@ -434,6 +612,24 @@ func classifyGitEffects(args []string, add func(string, string, string)) {
 	default:
 		add(securitypolicy.SettingFileOverwrite, "git repository mutation", "")
 	}
+}
+
+func gitVerbAndArgs(args []string) (string, []string) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-C" || arg == "-c" || arg == "--git-dir" || arg == "--work-tree" || arg == "--namespace" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--git-dir=") || strings.HasPrefix(arg, "--work-tree=") || strings.HasPrefix(arg, "--namespace=") || strings.HasPrefix(arg, "-c=") {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return arg, args[i+1:]
+	}
+	return "", nil
 }
 
 func systemctlReadOnly(args []string) bool {
@@ -488,11 +684,37 @@ func containerReadOnly(args []string) bool {
 }
 
 func httpMutates(base string, args []string) bool {
-	joined := strings.ToLower(strings.Join(args, " "))
 	if base == "wget" {
+		joined := strings.ToLower(strings.Join(args, " "))
 		return containsAnySubstring(joined, "--post-data", "--post-file", "--method=")
 	}
-	return containsAnySubstring(joined, " -x post", " -x put", " -x patch", " -x delete", "--request=post", "--request=put", "--request=patch", "--request=delete", " --data", " -d ", " --form", " -f ", " --upload-file", " -t ")
+	for index, arg := range args {
+		lower := strings.ToLower(arg)
+		if lower == "-x" || lower == "--request" {
+			if index+1 < len(args) {
+				method := strings.ToLower(args[index+1])
+				if method != "get" && method != "head" {
+					return true
+				}
+			}
+		}
+		if strings.HasPrefix(lower, "-x") && len(lower) > 2 {
+			method := strings.TrimPrefix(lower, "-x")
+			if method != "get" && method != "head" {
+				return true
+			}
+		}
+		if strings.HasPrefix(lower, "--request=") {
+			method := strings.TrimPrefix(lower, "--request=")
+			if method != "get" && method != "head" {
+				return true
+			}
+		}
+		if lower == "-d" || strings.HasPrefix(lower, "--data") || lower == "-f" || strings.HasPrefix(lower, "--form") || lower == "-t" || strings.HasPrefix(lower, "--upload-file") || strings.HasPrefix(lower, "--json") {
+			return true
+		}
+	}
+	return false
 }
 
 func destructiveSQL(query string) bool {
@@ -512,8 +734,12 @@ func nestedAfterWrapper(base string, args []string) []string {
 			return []string{nested}
 		}
 	}
-	for index, arg := range args {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
 		if strings.HasPrefix(arg, "-") || (base == "env" && strings.Contains(arg, "=")) {
+			if wrapperFlagConsumesValue(base, arg) && index+1 < len(args) {
+				index++
+			}
 			continue
 		}
 		if base == "xargs" && index == len(args)-1 {
@@ -522,6 +748,19 @@ func nestedAfterWrapper(base string, args []string) []string {
 		return args[index:]
 	}
 	return nil
+}
+
+func wrapperFlagConsumesValue(base, flag string) bool {
+	switch base {
+	case "sudo", "doas":
+		return containsArg([]string{flag}, "-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-R", "--chroot", "-D", "--chdir")
+	case "env":
+		return containsArg([]string{flag}, "-u", "--unset", "-C", "--chdir")
+	case "xargs":
+		return containsArg([]string{flag}, "-n", "--max-args", "-L", "--max-lines", "-P", "--max-procs", "-s", "--max-chars", "-d", "--delimiter", "-a", "--arg-file", "-I", "--replace")
+	default:
+		return false
+	}
 }
 
 func commandStringArg(args []string) string {
@@ -542,25 +781,137 @@ func isCriticalPath(raw string) bool {
 	if strings.TrimSpace(raw) == "" {
 		return false
 	}
-	path := expandPolicyPath(raw)
+	path, stable := resolvePolicyTarget(raw)
+	if !stable {
+		return true
+	}
 	home, _ := os.UserHomeDir()
-	critical := []string{"/", "/System", "/Library", "/Applications", "/Users", "/bin", "/sbin", "/usr", "/etc", "/var", "/boot", "/dev", "/Volumes"}
+	exact := []string{"/", "/Users"}
+	descendants := []string{"/System", "/Library", "/Applications", "/bin", "/sbin", "/usr", "/etc", "/var", "/boot", "/dev", "/Volumes"}
 	if home != "" {
-		critical = append(critical, filepath.Clean(home), filepath.Join(home, ".Trash"), filepath.Join(home, ".ssh"), filepath.Join(home, ".aws"), filepath.Join(home, ".azure"), filepath.Join(home, ".kube"))
+		exact = append(exact, filepath.Clean(home))
+		descendants = append(descendants, filepath.Join(home, ".Trash"), filepath.Join(home, ".ssh"), filepath.Join(home, ".aws"), filepath.Join(home, ".azure"), filepath.Join(home, ".kube"))
 	}
 	clean := filepath.Clean(path)
-	for _, protected := range critical {
-		if clean == filepath.Clean(protected) {
-			return true
-		}
-	}
 	parts := strings.Split(filepath.ToSlash(clean), "/")
 	for _, part := range parts {
 		if part == ".git" || strings.Contains(strings.ToLower(part), "backup") || strings.Contains(strings.ToLower(part), "snapshot") {
 			return true
 		}
 	}
+	if temp, err := filepath.EvalSymlinks(os.TempDir()); err == nil {
+		temp = filepath.Clean(temp)
+		if clean == temp || strings.HasPrefix(clean, temp+string(filepath.Separator)) {
+			return false
+		}
+	}
+	for _, protected := range exact {
+		if clean == filepath.Clean(protected) {
+			return true
+		}
+	}
+	for _, protected := range descendants {
+		protected = filepath.Clean(protected)
+		if resolved, err := filepath.EvalSymlinks(protected); err == nil {
+			protected = filepath.Clean(resolved)
+		}
+		if clean == protected || strings.HasPrefix(clean, protected+string(filepath.Separator)) {
+			return true
+		}
+	}
 	return false
+}
+
+func isPersistentMutationEffect(setting string) bool {
+	switch setting {
+	case securitypolicy.SettingFileCreate, securitypolicy.SettingFileAppend, securitypolicy.SettingFileOverwrite, securitypolicy.SettingFileDelete, securitypolicy.SettingPrivilegeEscalation:
+		return true
+	default:
+		return false
+	}
+}
+
+func resolvePolicyTarget(raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+	if strings.ContainsAny(raw, "*?[{}") || strings.Contains(raw, "$") || strings.Contains(raw, "`") {
+		return expandPolicyPath(raw), false
+	}
+	path := expandPolicyPath(raw)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return filepath.Clean(resolved), true
+	}
+	parent := filepath.Dir(path)
+	if resolvedParent, err := filepath.EvalSymlinks(parent); err == nil {
+		return filepath.Join(resolvedParent, filepath.Base(path)), true
+	}
+	return path, false
+}
+
+func isRawDeviceTarget(raw string) bool {
+	path, stable := resolvePolicyTarget(raw)
+	if !stable || path == "" {
+		return false
+	}
+	clean := filepath.Clean(path)
+	if clean == "/dev" || strings.HasPrefix(clean, "/dev/") {
+		return true
+	}
+	info, err := os.Stat(clean)
+	return err == nil && info.Mode()&(os.ModeDevice|os.ModeCharDevice) != 0
+}
+
+func executableNeedsReview(command string) bool {
+	if strings.TrimSpace(command) == "" || isTrustedShellBuiltin(command) {
+		return false
+	}
+	if strings.ContainsRune(command, filepath.Separator) {
+		return !isTrustedExecutablePath(command)
+	}
+	resolved, err := exec.LookPath(command)
+	if err != nil {
+		// A missing executable cannot run. Preserve name-based classification so
+		// policies remain portable across hosts where the system tool exists.
+		return false
+	}
+	return !isTrustedExecutablePath(resolved)
+}
+
+func isTrustedExecutablePath(path string) bool {
+	resolved, err := filepath.EvalSymlinks(expandPolicyPath(path))
+	if err != nil {
+		return false
+	}
+	dir := filepath.Dir(filepath.Clean(resolved))
+	for _, trusted := range []string{"/bin", "/sbin", "/usr/bin", "/usr/sbin"} {
+		if dir == trusted {
+			return true
+		}
+	}
+	return false
+}
+
+func isTrustedShellBuiltin(command string) bool {
+	if strings.ContainsRune(command, filepath.Separator) {
+		return false
+	}
+	switch command {
+	case "set", "pwd", "echo", "printf", "true", "false", "command", "exec":
+		return true
+	default:
+		return false
+	}
+}
+
+func isShellInterpreter(base string) bool {
+	switch base {
+	case "sh", "bash", "zsh", "fish", "pwsh", "powershell":
+		return true
+	default:
+		return false
+	}
 }
 
 func isCredentialTarget(value string) bool {
@@ -630,6 +981,23 @@ func argValuePrefix(args []string, prefix string) string {
 	for _, arg := range args {
 		if strings.HasPrefix(arg, prefix) {
 			return strings.TrimPrefix(arg, prefix)
+		}
+	}
+	return ""
+}
+
+func optionValue(args []string, names ...string) string {
+	for index, arg := range args {
+		for _, name := range names {
+			if arg == name && index+1 < len(args) {
+				return args[index+1]
+			}
+			if strings.HasPrefix(arg, name+"=") {
+				return strings.TrimPrefix(arg, name+"=")
+			}
+			if len(name) == 2 && strings.HasPrefix(arg, name) && len(arg) > len(name) {
+				return strings.TrimPrefix(arg, name)
+			}
 		}
 	}
 	return ""

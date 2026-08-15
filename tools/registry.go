@@ -6,9 +6,14 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/secrets"
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/coolcake/cvkeharness/state"
 )
 
 // Tool represents an executable action that an LLM can request.
@@ -21,7 +26,27 @@ type Tool interface {
 
 // Registry manages the set of available tools.
 type Registry struct {
-	tools map[string]Tool
+	tools          map[string]Tool
+	securityPolicy *securitypolicy.EffectivePolicy
+	humanApprover  ShellApprover
+	llmApprover    ShellApprover
+	approvalStore  *state.Store
+}
+
+// ConfigureSecurityWithStore also enables exact, expiring one-time grants for
+// deferred/background approval flows.
+func (r *Registry) ConfigureSecurityWithStore(policy securitypolicy.EffectivePolicy, human, llm ShellApprover, store *state.Store) {
+	r.ConfigureSecurity(policy, human, llm)
+	r.approvalStore = store
+}
+
+// ConfigureSecurity installs the same immutable policy used by shell
+// execution as the authorization boundary for all other tools.
+func (r *Registry) ConfigureSecurity(policy securitypolicy.EffectivePolicy, human, llm ShellApprover) {
+	copyPolicy := policy
+	r.securityPolicy = &copyPolicy
+	r.humanApprover = human
+	r.llmApprover = llm
 }
 
 // NewRegistry creates a new empty tool registry.
@@ -99,7 +124,119 @@ func (r *Registry) ExecuteTool(ctx context.Context, call provider.ToolCall) (str
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
 	}
 
-	return t.Execute(WithToolCallContext(ctx, call.ID, call.Function.Name), json.RawMessage(call.Function.Arguments))
+	toolCtx := WithToolCallContext(ctx, call.ID, call.Function.Name)
+	if err := r.authorizeToolCall(toolCtx, call); err != nil {
+		return "", err
+	}
+	return t.Execute(toolCtx, json.RawMessage(call.Function.Arguments))
+}
+
+func (r *Registry) authorizeToolCall(ctx context.Context, call provider.ToolCall) error {
+	if r.securityPolicy == nil || call.Function.Name == "shell_execute" {
+		return nil
+	}
+	effects := policyToolEffects(call.Function.Name, call.Function.Arguments)
+	decision := securitypolicy.DecisionAllow
+	var reasons []string
+	for _, effect := range effects {
+		effectDecision := r.securityPolicy.Decision(effect.Setting)
+		if effectDecision == "" {
+			effectDecision = r.securityPolicy.Decision(securitypolicy.SettingUnknownCommands)
+		}
+		decision = strictestSecurityDecision(decision, effectDecision)
+		reasons = append(reasons, effect.Detail+" is "+string(effectDecision))
+	}
+	reason := strings.Join(uniqueStrings(reasons), "; ")
+	if decision == securitypolicy.DecisionDeny {
+		return fmt.Errorf("security violation: %s", reason)
+	}
+	if decision == securitypolicy.DecisionAllow {
+		return nil
+	}
+	grant, grantErr := toolSecurityGrantBinding(call.Function.Name, call.Function.Arguments, *r.securityPolicy, effects)
+	if grantErr != nil {
+		return fmt.Errorf("security grant binding: %w", grantErr)
+	}
+	if r.approvalStore != nil && r.approvalStore.Available() {
+		consumed, consumeErr := r.approvalStore.ConsumeSecurityActionGrant(ctx, grant, time.Now().UTC())
+		if consumeErr != nil {
+			return fmt.Errorf("security grant lookup: %w", consumeErr)
+		}
+		if consumed {
+			return nil
+		}
+	}
+	approver := r.humanApprover
+	request := ShellApprovalRequest{
+		Command:         secrets.Mask(call.Function.Name + " " + call.Function.Arguments),
+		ValidationError: reason,
+		Effects:         effects,
+		ActionKind:      call.Function.Name,
+		ActionPayload:   call.Function.Arguments,
+		GrantDigest:     grant.Digest,
+		Grant:           grant,
+	}
+	if decision == securitypolicy.DecisionLLMReview && r.llmApprover != nil {
+		if _, advisoryErr := r.llmApprover.Approve(ctx, request); advisoryErr != nil {
+			return advisoryErr
+		}
+		request.ValidationError = "advisory model found no immediate hazard; human approval is still required; " + request.ValidationError
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"tool_name": call.Function.Name,
+		"decision":  decision,
+		"reason":    reason,
+		"effects":   effects,
+		"policy":    r.securityPolicy.Hash,
+	})
+	_ = telemetry.Record(ctx, telemetry.Event{Type: telemetry.EventApprovalRequested, Payload: payload})
+	if approver == nil {
+		return ApprovalRequiredError{Request: request}
+	}
+	result, err := approver.Approve(ctx, request)
+	if err != nil {
+		return err
+	}
+	if !result.Approved {
+		return fmt.Errorf("security violation: approval gate did not approve %s", call.Function.Name)
+	}
+	return nil
+}
+
+func classifyToolEffects(name string, raw json.RawMessage) []ShellEffect {
+	var args map[string]any
+	_ = json.Unmarshal(raw, &args)
+	action, _ := args["action"].(string)
+	switch name {
+	case "schedule_manage":
+		switch action {
+		case "list", "runs":
+			return []ShellEffect{{Setting: securitypolicy.SettingReadCommands, Detail: "scheduled-job inspection"}}
+		default:
+			return []ShellEffect{{Setting: securitypolicy.SettingScheduledChanges, Detail: "scheduled-job " + action}}
+		}
+	case "system_cron_manage":
+		switch action {
+		case "list", "show", "dry_run":
+			return []ShellEffect{{Setting: securitypolicy.SettingReadCommands, Detail: "system-cron inspection"}}
+		default:
+			return []ShellEffect{{Setting: securitypolicy.SettingScheduledChanges, Detail: "system-cron " + action}}
+		}
+	case "memory_record_finding":
+		return []ShellEffect{{Setting: securitypolicy.SettingFileAppend, Detail: "durable memory write"}}
+	case "web_search", "web_fetch":
+		return []ShellEffect{{Setting: securitypolicy.SettingNetworkAccess, Detail: "external web access"}}
+	default:
+		return []ShellEffect{{Setting: securitypolicy.SettingUnknownCommands, Detail: "unclassified tool " + name}}
+	}
+}
+
+func policyToolEffects(name, arguments string) []ShellEffect {
+	effects := classifyToolEffects(name, json.RawMessage(arguments))
+	if secrets.Contains(arguments) {
+		effects = append(effects, ShellEffect{Setting: securitypolicy.SettingCredentialAccess, Detail: "literal secret-like value in tool arguments"})
+	}
+	return uniqueEffects(effects)
 }
 
 func toolRelevantForTask(name string, taskClass core.TaskClass, lower string) bool {

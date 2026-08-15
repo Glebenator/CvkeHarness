@@ -22,6 +22,7 @@ import (
 type ShellTool struct {
 	allowedCommands  map[string]bool
 	approvedCommands map[string]bool
+	sessionGrants    map[string]bool
 	timeout          time.Duration
 	approver         ShellApprover
 	primaryModel     string
@@ -75,7 +76,9 @@ func (w *streamCaptureWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	remaining := w.limit - w.buf.Len()
+	// Keep bounded look-ahead so a secret split at the visible truncation
+	// boundary is redacted before any output event is emitted.
+	remaining := w.limit + 1024 - w.buf.Len()
 	if remaining <= 0 {
 		w.truncated = true
 		return len(p), nil
@@ -94,6 +97,10 @@ func (w *streamCaptureWriter) Result() string {
 	defer w.mu.Unlock()
 
 	result := secrets.Mask(w.buf.String())
+	if len(result) > w.limit {
+		result = result[:w.limit]
+		w.truncated = true
+	}
 	if w.truncated {
 		result += "\n... (output truncated)"
 	}
@@ -131,6 +138,7 @@ func NewShellToolWithApprovals(allowed, approved []string, approver ShellApprove
 	return &ShellTool{
 		allowedCommands:  amap,
 		approvedCommands: pmap,
+		sessionGrants:    make(map[string]bool),
 		timeout:          30 * time.Duration(time.Second),
 		approver:         approver,
 		primaryModel:     primaryModel,
@@ -220,6 +228,12 @@ func validateShellSegment(segment ShellSegment, allowedCommands, approvedCommand
 	}
 
 	baseCmd := parts[0]
+	if baseCmd == "systemctl" && !systemctlReadOnly(parts[1:]) {
+		return "", fmt.Errorf("systemctl mutation requires effect-aware approval")
+	}
+	if baseCmd == "journalctl" && (hasPrefixArg(parts[1:], "--vacuum") || containsArg(parts[1:], "--rotate", "--sync", "--flush", "--relinquish-var")) {
+		return "", fmt.Errorf("journalctl mutation requires effect-aware approval")
+	}
 
 	// Handle composed commands like 'systemctl status' if the composite form is
 	// explicitly allowlisted.
@@ -359,12 +373,18 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 			}
 			current.WriteByte(ch)
 		case '>':
+			if i+1 < len(cmd) && cmd[i+1] == '(' {
+				return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", ">(")
+			}
 			current.WriteByte(ch)
 			if i+1 < len(cmd) && cmd[i+1] == '>' {
 				current.WriteByte(cmd[i+1])
 				i++
 			}
 		case '<':
+			if i+1 < len(cmd) && cmd[i+1] == '(' {
+				return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "<(")
+			}
 			if i+1 < len(cmd) && cmd[i+1] == '<' {
 				heredoc, end, err := parseQuotedHeredoc(cmd, i)
 				if err != nil {
@@ -625,16 +645,53 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		if assessment.Decision == securitypolicy.DecisionDeny {
 			return "", fmt.Errorf("security violation: %s", assessment.Reason)
 		}
-		if assessment.Decision == securitypolicy.DecisionAsk && allSegmentsApproved(parsedCommand, s.approvedCommands) {
-			assessment.Decision = securitypolicy.DecisionAllow
-			approvalMode = "session_approval"
+		if (assessment.Decision == securitypolicy.DecisionAsk || assessment.Decision == securitypolicy.DecisionLLMReview) && s.approvalStore != nil && s.approvalStore.Available() {
+			grant, _, grantErr := shellSecurityGrantBinding(cmdStr, *s.securityPolicy)
+			if grantErr != nil {
+				return "", fmt.Errorf("security grant binding: %w", grantErr)
+			}
+			consumed, consumeErr := s.approvalStore.ConsumeSecurityActionGrant(ctx, grant, time.Now().UTC())
+			if consumeErr != nil {
+				return "", fmt.Errorf("security grant lookup: %w", consumeErr)
+			}
+			if consumed {
+				assessment.Decision = securitypolicy.DecisionAllow
+				approvalMode = "scoped_one_time_grant"
+			}
+		}
+		if assessment.Decision == securitypolicy.DecisionAsk {
+			grant, _, grantErr := shellSecurityGrantBinding(cmdStr, *s.securityPolicy)
+			if grantErr != nil {
+				return "", fmt.Errorf("session grant binding: %w", grantErr)
+			}
+			if s.sessionGrants[grant.Digest] {
+				assessment.Decision = securitypolicy.DecisionAllow
+				approvalMode = "session_scoped_grant"
+			}
 		}
 		if assessment.Decision == securitypolicy.DecisionAsk || assessment.Decision == securitypolicy.DecisionLLMReview {
 			approver := s.humanApprover
+			requestGrant, _, grantErr := shellSecurityGrantBinding(cmdStr, *s.securityPolicy)
+			if grantErr != nil {
+				return "", fmt.Errorf("security grant binding: %w", grantErr)
+			}
+			request := ShellApprovalRequest{
+				Command:         cmdStr,
+				ValidationError: assessment.Reason,
+				Effects:         assessment.Effects,
+				ActionKind:      "shell_execute",
+				ActionPayload:   cmdStr,
+				GrantDigest:     requestGrant.Digest,
+				Grant:           requestGrant,
+			}
 			if assessment.Decision == securitypolicy.DecisionLLMReview {
-				approver = s.llmApprover
-				if approver == nil {
-					approver = s.humanApprover
+				if s.llmApprover != nil {
+					advisory := request
+					advisory.Command = secrets.Mask(advisory.Command)
+					if _, advisoryErr := s.llmApprover.Approve(ctx, advisory); advisoryErr != nil {
+						return "", advisoryErr
+					}
+					request.ValidationError = "advisory model found no immediate hazard; human approval is still required; " + request.ValidationError
 				}
 			}
 			logger.Warn("shell effects require approval", "command", secrets.Mask(cmdStr), "decision", assessment.Decision, "reason", assessment.Reason)
@@ -648,13 +705,9 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 			})
 			_ = telemetry.Record(ctx, telemetry.Event{Type: telemetry.EventApprovalRequested, Payload: payload})
 			if approver == nil {
-				return "", ApprovalRequiredError{Request: ShellApprovalRequest{Command: cmdStr, ValidationError: assessment.Reason, Effects: assessment.Effects}}
+				return "", ApprovalRequiredError{Request: request}
 			}
-			decision, approvalErr := approver.Approve(ctx, ShellApprovalRequest{
-				Command:         cmdStr,
-				ValidationError: assessment.Reason,
-				Effects:         assessment.Effects,
-			})
+			decision, approvalErr := approver.Approve(ctx, request)
 			if approvalErr != nil {
 				return "", approvalErr
 			}
@@ -664,7 +717,11 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 			approvalMode = decision.Mode
 			historyNote = strings.TrimSpace(decision.HistoryNote)
 			if decision.Remember && s.securityPolicy.Bool(securitypolicy.SettingRememberApprovals) && assessment.Decision == securitypolicy.DecisionAsk {
-				s.rememberApprovedSegments(ctx, parsedCommand, decision)
+				grant, _, grantErr := shellSecurityGrantBinding(cmdStr, *s.securityPolicy)
+				if grantErr != nil {
+					return "", fmt.Errorf("session grant binding: %w", grantErr)
+				}
+				s.sessionGrants[grant.Digest] = true
 			}
 		}
 	} else if s.unrestricted {

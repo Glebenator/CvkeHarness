@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/internal/setupflow"
+	"github.com/coolcake/cvkeharness/securitypolicy"
 )
 
 func TestSetupSurfacesOfflineModelsAndSaveFailure(t *testing.T) {
@@ -49,6 +50,7 @@ func TestSetupUsesFourGroupedStages(t *testing.T) {
 		{stepWelcome, stageConnect},
 		{stepModel, stageConnect},
 		{stepSafety, stageSafety},
+		{stepSecurityControls, stageSafety},
 		{stepDaemon, stageSafety},
 		{stepCapabilities, stageCapabilities},
 		{stepNotes, stageCapabilities},
@@ -63,6 +65,55 @@ func TestSetupUsesFourGroupedStages(t *testing.T) {
 	}
 	if len(stageOrder) != 4 {
 		t.Fatalf("expected four setup stages, got %d", len(stageOrder))
+	}
+}
+
+func TestSetupSecurityProfilesAndProgressiveCustomization(t *testing.T) {
+	t.Parallel()
+	cfg := config.DefaultConfig()
+	cfg.Normalize()
+	m := setupModel{cfg: cfg, step: stepSafety, cursor: 1}
+	if got := setupflow.SafetyOptions(); len(got) != 5 || got[1].ID != string(securitypolicy.ProfileReasonable) {
+		t.Fatalf("unexpected security profiles: %#v", got)
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	custom := next.(setupModel)
+	if !custom.securityCustomize {
+		t.Fatal("expected security customization to be enabled")
+	}
+	next, _ = custom.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	custom = next.(setupModel)
+	if custom.step != stepSecurityControls {
+		t.Fatalf("expected security controls step, got %v", custom.step)
+	}
+	before, _ := custom.cfg.EffectiveSecurity()
+	next, _ = custom.Update(tea.KeyMsg{Type: tea.KeyRight})
+	custom = next.(setupModel)
+	after, _ := custom.cfg.EffectiveSecurity()
+	first := securitypolicy.Catalog()[0]
+	if before.Value(first.ID) == after.Value(first.ID) || after.Origins[first.ID] != "override" {
+		t.Fatalf("control did not become an override: before=%q after=%q origin=%q", before.Value(first.ID), after.Value(first.ID), after.Origins[first.ID])
+	}
+}
+
+func TestSetupYOLORequiresExplicitSecondConfirmation(t *testing.T) {
+	t.Parallel()
+	cfg := config.DefaultConfig()
+	cfg.Normalize()
+	m := setupModel{cfg: cfg, step: stepSafety, cursor: 4}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	first := next.(setupModel)
+	if first.step != stepSafety || !first.yoloConfirm || first.cfg.Security.Profile == securitypolicy.ProfileYOLO {
+		t.Fatalf("first Enter should only arm YOLO confirmation: %#v", first)
+	}
+	if !strings.Contains(first.message, "does not bypass") && !strings.Contains(first.message, "OS and provider") {
+		t.Fatalf("YOLO consequence copy missing: %q", first.message)
+	}
+	next, _ = first.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	confirmed := next.(setupModel)
+	if confirmed.cfg.Security.Profile != securitypolicy.ProfileYOLO || confirmed.step != stepScan {
+		t.Fatalf("YOLO confirmation did not apply: profile=%q step=%v", confirmed.cfg.Security.Profile, confirmed.step)
 	}
 }
 

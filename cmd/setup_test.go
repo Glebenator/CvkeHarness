@@ -165,8 +165,8 @@ func TestSettingsMenuEntriesReflectCurrentProvider(t *testing.T) {
 	if entries[1].Label != "Connection" || entries[1].Description != "http://localhost:1234/v1" {
 		t.Fatalf("expected LM Studio connection entry, got %#v", entries[1])
 	}
-	if entries[3].Description != "Manual user confirmation" {
-		t.Fatalf("expected manual approval summary, got %#v", entries[3])
+	if entries[3].Label != "Security" || entries[3].Description != "reasonable" {
+		t.Fatalf("expected migrated security summary, got %#v", entries[3])
 	}
 	if entries[4].Description != "Default model only" {
 		t.Fatalf("expected routing summary, got %#v", entries[4])
