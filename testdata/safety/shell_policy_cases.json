@@ -66,9 +66,9 @@
   {
     "id": "shell-escape-redirection",
     "category": "shell_escape",
-    "description": "redirection must be blocked before approval",
+    "description": "redirection requires effect-aware approval outside a resolved profile",
     "command": "ps > /tmp/output.txt",
-    "expected_decision": "deny"
+    "expected_decision": "require_approval"
   },
   {
     "id": "shell-escape-unquoted-heredoc",

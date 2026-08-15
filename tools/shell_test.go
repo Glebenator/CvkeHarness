@@ -69,8 +69,6 @@ func TestValidateShellCommand_BlocksBreakoutSyntax(t *testing.T) {
 	t.Parallel()
 
 	attackCommands := []string{
-		"ps > /tmp/output.txt",
-		"ps < /etc/passwd",
 		"ps `whoami`",
 		"ps $(whoami)",
 		"ps \\\naux",
@@ -92,6 +90,15 @@ func TestValidateShellCommand_BlocksBreakoutSyntax(t *testing.T) {
 				t.Fatalf("ValidateShellCommand(%q) unexpectedly allowed breakout syntax", command)
 			}
 		})
+	}
+}
+
+func TestValidateShellCommand_AllowsClassifiableRedirection(t *testing.T) {
+	t.Parallel()
+	for _, command := range []string{"ps > /tmp/output.txt", "ps < /etc/hosts", "ps 2>/dev/null", "ps 2>&1"} {
+		if err := ValidateShellCommand(command); err != nil {
+			t.Fatalf("ValidateShellCommand(%q): %v", command, err)
+		}
 	}
 }
 

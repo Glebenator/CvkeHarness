@@ -24,6 +24,7 @@ const (
 type ShellApprovalRequest struct {
 	Command         string
 	ValidationError string
+	Effects         []ShellEffect
 }
 
 // ShellApprovalDecision captures how a gated command was handled.
@@ -145,7 +146,7 @@ DANGEROUS and no other text.`, req.Command)
 	return ShellApprovalDecision{
 		Approved: true,
 		Mode:     SafetyModeLLMJudge,
-		Remember: true,
+		Remember: false,
 	}, nil
 }
 
