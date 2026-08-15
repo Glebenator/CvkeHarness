@@ -108,6 +108,8 @@ type chatTab struct {
 	controlsReady   bool
 	configuredModel string
 	safety          string
+	markdownWidth   int
+	markdownCache   map[string]string
 }
 
 func newChatTab() tabModel {
@@ -283,8 +285,47 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 			return t.updateHistory(msg, svc)
 		}
 		return t.updateLive(msg, svc)
+
+	case tea.MouseMsg:
+		return t.updateMouse(msg)
 	}
 	return t, nil
+}
+
+func (t *chatTab) updateMouse(msg tea.MouseMsg) (tabModel, tea.Cmd) {
+	direction := verticalMouseWheelDirection(msg)
+	if direction == 0 {
+		return t, nil
+	}
+	delta := maxInt(t.viewport.MouseWheelDelta, 1)
+	if t.history {
+		if t.expanded {
+			t.scroll = maxInt(t.scroll+direction*delta, 0)
+			return t, nil
+		}
+		if len(t.sessions) > 0 {
+			t.cursor = clamp(t.cursor+direction*delta, 0, len(t.sessions)-1)
+		}
+		return t, nil
+	}
+
+	var cmd tea.Cmd
+	t.viewport, cmd = t.viewport.Update(msg)
+	return t, cmd
+}
+
+func verticalMouseWheelDirection(msg tea.MouseMsg) int {
+	if msg.Action != tea.MouseActionPress {
+		return 0
+	}
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		return -1
+	case tea.MouseButtonWheelDown:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
@@ -327,10 +368,9 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		return t, nil
 	case "up":
 		if !t.composerFocused {
-			if len(t.toolCalls) > 0 && t.toolCursor > 0 {
-				t.toolCursor--
+			if t.moveToolSelection(-1) {
 				t.refreshViewport()
-				t.focusSelectedTool()
+				t.focusSelectedTool(-1)
 			} else {
 				t.viewport.LineUp(1)
 			}
@@ -338,10 +378,9 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		}
 	case "down":
 		if !t.composerFocused {
-			if len(t.toolCalls) > 0 && t.toolCursor < len(t.toolCalls)-1 {
-				t.toolCursor++
+			if t.moveToolSelection(1) {
 				t.refreshViewport()
-				t.focusSelectedTool()
+				t.focusSelectedTool(1)
 			} else {
 				t.viewport.LineDown(1)
 			}
@@ -752,9 +791,52 @@ func (t *chatTab) ensureSelectedToolVisible(revealDetails bool) {
 	}
 }
 
+func (t *chatTab) moveToolSelection(direction int) bool {
+	if len(t.toolCalls) == 0 || direction == 0 {
+		return false
+	}
+	t.toolCursor = minInt(maxInt(t.toolCursor, 0), len(t.toolCalls)-1)
+	selectedLine := -1
+	if t.toolCursor < len(t.toolLineStarts) {
+		selectedLine = t.toolLineStarts[t.toolCursor]
+	}
+	top := t.viewport.YOffset
+	bottom := top + maxInt(t.viewport.Height-1, 0)
+
+	// Manual transcript scrolling can leave the cursor far outside the current
+	// view. Recover from the visible region in the requested direction instead
+	// of advancing the stale cursor and jumping the viewport backwards.
+	if direction > 0 && selectedLine < top {
+		for i, line := range t.toolLineStarts {
+			if line >= top {
+				t.toolCursor = i
+				return true
+			}
+		}
+		return false
+	}
+	if direction < 0 && selectedLine > bottom {
+		for i := len(t.toolLineStarts) - 1; i >= 0; i-- {
+			if t.toolLineStarts[i] <= bottom {
+				t.toolCursor = i
+				return true
+			}
+		}
+		return false
+	}
+
+	next := t.toolCursor + direction
+	if next < 0 || next >= len(t.toolCalls) {
+		return false
+	}
+	t.toolCursor = next
+	return true
+}
+
 // focusSelectedTool frames the selected row and its disclosure with balanced
-// transcript context above and below whenever the block fits in the viewport.
-func (t *chatTab) focusSelectedTool() {
+// transcript context whenever possible, without moving opposite to the key the
+// operator pressed.
+func (t *chatTab) focusSelectedTool(direction int) {
 	if t.toolCursor < 0 || t.toolCursor >= len(t.toolLineStarts) {
 		return
 	}
@@ -772,25 +854,39 @@ func (t *chatTab) focusSelectedTool() {
 	if blockHeight < height {
 		contextAbove = (height - blockHeight) / 2
 	}
-	t.viewport.SetYOffset(maxInt(start-contextAbove, 0))
+	target := maxInt(start-contextAbove, 0)
+	if direction > 0 {
+		target = maxInt(target, t.viewport.YOffset)
+	} else if direction < 0 {
+		target = minInt(target, t.viewport.YOffset)
+	}
+	t.viewport.SetYOffset(target)
 }
 
 func (t *chatTab) appendAssistantResponse(lines *[]string, content string) {
 	width := maxInt(t.viewport.Width-8, 18)
-	var body []string
-	for _, raw := range strings.Split(content, "\n") {
-		for _, line := range wrapText(raw, width) {
-			body = append(body, styleBright.Render(line))
-		}
-	}
+	body := t.renderedMarkdown(content, width)
 	box := lipgloss.NewStyle().
 		Width(width).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
-		Background(colorSurface).
 		Padding(0, 1).
-		Render(strings.Join(body, "\n"))
+		Render(body)
 	*lines = append(*lines, "", "  "+styleSectionTitle.Render("RESPONSE"), "  "+strings.ReplaceAll(box, "\n", "\n  "), "")
+}
+
+func (t *chatTab) renderedMarkdown(content string, width int) string {
+	width = maxInt(width, 12)
+	if t.markdownWidth != width || t.markdownCache == nil {
+		t.markdownWidth = width
+		t.markdownCache = make(map[string]string)
+	}
+	if rendered, ok := t.markdownCache[content]; ok {
+		return rendered
+	}
+	rendered := renderMarkdown(content, width)
+	t.markdownCache[content] = rendered
+	return rendered
 }
 
 func firstLine(text string) string {
@@ -1273,7 +1369,7 @@ func (t *chatTab) viewDetail(width, height int) string {
 			lines = append(lines, "  "+styleMuted.Render(meta))
 		}
 		appendWrappedBlock(&lines, "  ", "You:", turn.UserInput, contentWidth, styleSuccess, styleBase)
-		appendWrappedBlock(&lines, "  ", "AI:", turn.FinalOutput, contentWidth, styleSectionTitle, styleBase)
+		t.appendPersistedAssistantMarkdown(&lines, turn.FinalOutput, contentWidth)
 		appendWrappedBlock(&lines, "  ", "Error:", turn.ErrorMessage, contentWidth, styleError, styleError)
 		appendVerificationLines(&lines, turn, contentWidth)
 		appendToolOutcomeLines(&lines, t.detail.ToolsByTurnID[turn.ID], contentWidth)
@@ -1286,6 +1382,17 @@ func (t *chatTab) viewDetail(width, height int) string {
 	t.scroll = clamp(t.scroll, 0, maxScroll)
 	end := minInt(t.scroll+height-1, len(lines))
 	return strings.Join(lines[t.scroll:end], "\n")
+}
+
+func (t *chatTab) appendPersistedAssistantMarkdown(lines *[]string, content string, width int) {
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	*lines = append(*lines, "  "+styleSectionTitle.Render("AI:"))
+	rendered := t.renderedMarkdown(content, maxInt(width-4, 12))
+	for _, line := range strings.Split(rendered, "\n") {
+		*lines = append(*lines, "    "+line)
+	}
 }
 
 func chatTurnMeta(turn state.ChatTurn) string {
