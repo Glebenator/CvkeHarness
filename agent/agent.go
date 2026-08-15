@@ -79,6 +79,10 @@ type Options struct {
 	SafetyMode         string
 	SafetyModel        string
 	ClassifierProvider provider.Provider
+	// AwaitManualApprovals keeps interactive chat turns alive while the UI
+	// records a persisted, exact-action approval. Non-interactive runs continue
+	// returning a resumable blocked-work result instead of waiting indefinitely.
+	AwaitManualApprovals bool
 	// DisableCompletionVerification is intended for focused tests and special
 	// harnesses that already evaluate completion externally.
 	DisableCompletionVerification bool

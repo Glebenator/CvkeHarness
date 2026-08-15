@@ -16,6 +16,7 @@ const (
 	EventToolCallFinished     EventType = "tool_call_finished"
 	EventShellCommandStarted  EventType = "shell_command_started"
 	EventShellApproval        EventType = "shell_approval"
+	EventApprovalRequired     EventType = "approval_required"
 	EventShellOutput          EventType = "shell_output"
 	EventShellCommandFinished EventType = "shell_command_finished"
 	EventMemoryInjected       EventType = "memory_injected"
@@ -74,22 +75,25 @@ type MemorySource struct {
 
 // Event captures a single execution update.
 type Event struct {
-	Type          EventType
-	Timestamp     time.Time
-	ToolName      string
-	ToolCallID    string
-	Command       string
-	Output        string
-	ApprovalMode  string
-	Success       bool
-	ExitCode      int
-	ExitCodeKnown bool
-	Duration      time.Duration
-	ErrorMessage  string
-	MemorySources []MemorySource
-	Verification  VerificationActivity
-	SessionID     string
-	TurnID        string
+	Type            EventType
+	Timestamp       time.Time
+	ToolName        string
+	ToolCallID      string
+	Command         string
+	Output          string
+	ApprovalMode    string
+	BlockedWorkID   string
+	ApprovalReason  string
+	ApprovalEffects []ShellEffect
+	Success         bool
+	ExitCode        int
+	ExitCodeKnown   bool
+	Duration        time.Duration
+	ErrorMessage    string
+	MemorySources   []MemorySource
+	Verification    VerificationActivity
+	SessionID       string
+	TurnID          string
 }
 
 // EventObserver receives runtime events.
