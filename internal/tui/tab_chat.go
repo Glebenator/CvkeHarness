@@ -47,6 +47,13 @@ type chatExportDoneMsg struct {
 	err  error
 }
 
+type chatApprovalDoneMsg struct {
+	workID string
+	prompt string
+	grant  state.SecurityActionGrant
+	err    error
+}
+
 type chatRuntimeEventMsg struct{ event tools.Event }
 type chatRuntimeEventWaitStoppedMsg struct{}
 
@@ -58,15 +65,24 @@ type liveChatMessage struct {
 }
 
 type liveToolCall struct {
-	id       string
-	name     string
-	command  string
-	output   string
-	status   string
-	err      string
-	duration time.Duration
-	expanded bool
-	turn     int
+	id             string
+	name           string
+	command        string
+	output         string
+	status         string
+	err            string
+	approvalReason string
+	duration       time.Duration
+	expanded       bool
+	turn           int
+}
+
+type pendingChatApproval struct {
+	workID  string
+	prompt  string
+	summary string
+	reason  string
+	effects []tools.ShellEffect
 }
 
 type channelEventObserver struct{ ch chan tools.Event }
@@ -90,39 +106,41 @@ type chatTab struct {
 	scroll   int
 	message  string
 
-	composer        textarea.Model
-	viewport        viewport.Model
-	composerFocused bool
-	session         LiveChatSession
-	starting        bool
-	running         bool
-	stopping        bool
-	pendingPrompt   string
-	pendingCommand  chatcmd.Action
-	cancelTurn      context.CancelFunc
-	eventCh         chan tools.Event
-	eventWaitStop   chan struct{}
-	messages        []liveChatMessage
-	toolCalls       []liveToolCall
-	toolCursor      int
-	toolLineStarts  []int
-	toolLineEnds    []int
-	activeTurn      int
-	status          string
-	statusDetail    string
-	target          string
-	verification    string
-	lastError       string
-	controlsReady   bool
-	configuredModel string
-	safety          string
-	markdownWidth   int
-	markdownCache   map[string]string
-	memorySources   []tools.MemorySource
-	commandOpen     bool
-	commandMatches  []chatcmd.Command
-	commandCursor   int
-	commandRows     int
+	composer         textarea.Model
+	viewport         viewport.Model
+	composerFocused  bool
+	session          LiveChatSession
+	starting         bool
+	running          bool
+	stopping         bool
+	pendingPrompt    string
+	pendingCommand   chatcmd.Action
+	cancelTurn       context.CancelFunc
+	eventCh          chan tools.Event
+	eventWaitStop    chan struct{}
+	messages         []liveChatMessage
+	toolCalls        []liveToolCall
+	toolCursor       int
+	toolLineStarts   []int
+	toolLineEnds     []int
+	activeTurn       int
+	status           string
+	statusDetail     string
+	target           string
+	verification     string
+	lastError        string
+	controlsReady    bool
+	configuredModel  string
+	safety           string
+	markdownWidth    int
+	markdownCache    map[string]string
+	memorySources    []tools.MemorySource
+	commandOpen      bool
+	commandMatches   []chatcmd.Command
+	commandCursor    int
+	commandRows      int
+	pendingApproval  *pendingChatApproval
+	approvalInFlight bool
 }
 
 func newChatTab() tabModel {
@@ -175,7 +193,7 @@ func (t *chatTab) Init(svc *Service) tea.Cmd {
 }
 
 func (t *chatTab) Consuming() bool {
-	return !t.history && (t.composerFocused || t.running || t.starting)
+	return !t.history && (t.composerFocused || t.running || t.starting || t.approvalInFlight)
 }
 
 func (t *chatTab) StatusHints() []string {
@@ -206,6 +224,16 @@ func (t *chatTab) StatusHints() []string {
 			hints = append(hints, renderKeyHint("↑↓", "scroll"))
 		}
 		return hints
+	}
+	if t.approvalInFlight {
+		return []string{renderKeyHint("…", "recording scoped approval")}
+	}
+	if t.pendingApproval != nil && !t.composerFocused {
+		return []string{
+			renderKeyHint("a", "approve once + retry"),
+			renderKeyHint("enter", "compose instead"),
+			renderKeyHint("↑↓", "scroll"),
+		}
 	}
 	if !t.composerFocused {
 		hints := []string{
@@ -285,6 +313,21 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		t.refreshViewport()
 		t.viewport.GotoBottom()
 		return t, nil
+
+	case chatApprovalDoneMsg:
+		if t.pendingApproval == nil || t.pendingApproval.workID != msg.workID {
+			return t, nil
+		}
+		t.approvalInFlight = false
+		if msg.err != nil {
+			t.status = "APPROVAL REQUIRED"
+			t.statusDetail = "Approval was not recorded: " + msg.err.Error()
+			t.lastError = msg.err.Error()
+			t.refreshViewport()
+			t.viewport.GotoBottom()
+			return t, nil
+		}
+		return t.startApprovedRetry(svc, msg.prompt, msg.grant)
 
 	case chatRuntimeEventMsg:
 		t.applyRuntimeEvent(msg.event)
@@ -371,6 +414,13 @@ func verticalMouseWheelDirection(msg tea.MouseMsg) int {
 }
 
 func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
+	if msg.String() == "a" && !t.composerFocused && t.pendingApproval != nil && !t.approvalInFlight {
+		t.approvalInFlight = true
+		t.status = "APPROVING"
+		t.statusDetail = "creating one exact, scoped grant"
+		t.lastError = ""
+		return t, approveBlockedWorkCmd(svc, t.pendingApproval.workID, t.pendingApproval.prompt)
+	}
 	switch msg.String() {
 	case "esc":
 		if t.commandOpen {
@@ -565,6 +615,8 @@ func (t *chatTab) startFreshSession(svc *Service) (tabModel, tea.Cmd) {
 	t.activeTurn = 0
 	t.pendingPrompt = ""
 	t.pendingCommand = chatcmd.None
+	t.pendingApproval = nil
+	t.approvalInFlight = false
 	t.running = false
 	t.stopping = false
 	t.target = ""
@@ -577,6 +629,43 @@ func (t *chatTab) startFreshSession(svc *Service) (tabModel, tea.Cmd) {
 	t.starting = true
 	t.status = "CONNECTING"
 	t.statusDetail = "starting a fresh in-process session"
+	t.refreshViewport()
+	t.viewport.GotoTop()
+	return t, startLiveChatCmd(svc, channelEventObserver{ch: t.eventCh})
+}
+
+func (t *chatTab) startApprovedRetry(svc *Service, prompt string, grant state.SecurityActionGrant) (tabModel, tea.Cmd) {
+	oldEvents := t.eventCh
+	t.closeSession("approval_retry")
+	drainRuntimeEvents(oldEvents)
+
+	// Retry in a fresh model conversation. The blocked turn ended after an
+	// assistant tool call but before its tool result, so reusing that partial
+	// provider transcript would create an invalid message sequence.
+	t.eventCh = make(chan tools.Event, 128)
+	t.messages = nil
+	t.toolCalls = nil
+	t.toolCursor = 0
+	t.toolLineStarts = nil
+	t.toolLineEnds = nil
+	t.activeTurn = 0
+	t.pendingCommand = chatcmd.None
+	t.pendingApproval = nil
+	t.approvalInFlight = false
+	t.running = false
+	t.stopping = false
+	t.target = ""
+	t.verification = "NOT RUN"
+	t.lastError = ""
+	t.memorySources = nil
+	t.markdownWidth = 0
+	t.markdownCache = nil
+	t.closeCommandMenu()
+	t.appendConsoleMessage("APPROVED ONCE  Exact action, host, user, directory, effects, and policy. Expires in 15 minutes.\nRetrying: " + grant.MaskedSummary)
+	t.pendingPrompt = strings.TrimSpace(prompt)
+	t.starting = true
+	t.status = "CONNECTING"
+	t.statusDetail = "approval recorded; starting a clean retry"
 	t.refreshViewport()
 	t.viewport.GotoTop()
 	return t, startLiveChatCmd(svc, channelEventObserver{ch: t.eventCh})
@@ -907,10 +996,31 @@ func (t *chatTab) refreshViewport() {
 			t.appendToolRow(&lines, i)
 		}
 	}
+	if t.pendingApproval != nil {
+		t.appendApprovalPrompt(&lines, t.pendingApproval, maxInt(t.viewport.Width-4, 18))
+	}
 	if t.running {
 		lines = append(lines, "", "  "+renderNamedStatus(t.status)+"  "+styleMuted.Render(t.statusDetail))
 	}
 	t.viewport.SetContent(strings.Join(lines, "\n"))
+}
+
+func (t *chatTab) appendApprovalPrompt(lines *[]string, approval *pendingChatApproval, width int) {
+	if approval == nil {
+		return
+	}
+	*lines = append(*lines, "", "  "+renderNamedStatus("APPROVAL REQUIRED"))
+	appendWrappedBlock(lines, "  ", "Policy reason:", firstNonEmptyText(approval.reason, "policy requires explicit approval"), width, styleMuted, styleBase)
+	appendWrappedBlock(lines, "  ", "Action:", approval.summary, width, styleMuted, styleBright)
+	for _, effect := range approval.effects {
+		detail := strings.TrimSpace(effect.Detail)
+		if effect.Target != "" {
+			detail += " → " + effect.Target
+		}
+		appendWrappedBlock(lines, "  ", "Effect:", effect.Setting+" · "+detail, width, styleMuted, styleBase)
+	}
+	appendWrappedBlock(lines, "  ", "Scope:", "one use, 15 minutes, exact action + host + user + directory + effects + policy", width, styleMuted, styleBase)
+	*lines = append(*lines, "  "+renderKeyHint("a", "approve once + retry"))
 }
 
 func (t *chatTab) appendToolsForTurn(lines *[]string, turn int, rendered []bool) {
@@ -1141,15 +1251,34 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 	t.reconcileToolOutcomes(result.Tools)
 	t.reconcileToolOutputs(result.Observed)
 
+	blockedForApproval := result.TaskState == state.TaskStateBlockedWaitingUser
 	switch result.TaskState {
 	case state.TaskStateBlockedWaitingUser:
 		t.status = "APPROVAL REQUIRED"
 		if result.BlockedWorkID != "" {
-			t.statusDetail = fmt.Sprintf("%s — run: cvkeharness commands approve-work %s", secrets.Mask(result.ApprovalSummary), result.BlockedWorkID)
+			t.pendingApproval = &pendingChatApproval{
+				workID:  result.BlockedWorkID,
+				prompt:  t.latestUserPrompt(),
+				summary: secrets.Mask(result.ApprovalSummary),
+				reason:  strings.TrimSpace(result.ApprovalReason),
+				effects: append([]tools.ShellEffect(nil), result.ApprovalEffects...),
+			}
+			t.statusDetail = firstNonEmptyText(strings.TrimSpace(result.ApprovalReason), "policy requires explicit approval")
 		} else {
 			t.statusDetail = "work is persisted and remains blocked until explicitly approved"
 		}
+		for i := len(t.toolCalls) - 1; i >= 0; i-- {
+			if t.toolCalls[i].turn != t.activeTurn {
+				continue
+			}
+			t.toolCalls[i].status = "APPROVAL REQUIRED"
+			t.toolCalls[i].approvalReason = strings.TrimSpace(result.ApprovalReason)
+			t.toolCalls[i].err = ""
+			t.toolCalls[i].expanded = true
+			break
+		}
 	case state.TaskStateCompleted:
+		t.pendingApproval = nil
 		t.status = "READY"
 		t.statusDetail = "turn completed"
 	default:
@@ -1168,9 +1297,11 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 	} else if result.TaskState == state.TaskStateCompleted {
 		t.verification = "NOT REPORTED"
 	}
-	if err != nil && !errors.Is(err, context.Canceled) {
+	if err != nil && !errors.Is(err, context.Canceled) && !blockedForApproval {
 		t.lastError = err.Error()
 		t.messages = append(t.messages, liveChatMessage{role: "error", content: err.Error(), at: time.Now(), turn: t.activeTurn})
+	} else if blockedForApproval {
+		t.lastError = ""
 	}
 	if result.CurationError != nil {
 		t.messages = append(t.messages, liveChatMessage{
@@ -1183,6 +1314,15 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 	if strings.TrimSpace(result.Output) != "" {
 		t.messages = append(t.messages, liveChatMessage{role: "assistant", content: result.Output, at: time.Now(), turn: t.activeTurn})
 	}
+}
+
+func (t *chatTab) latestUserPrompt() string {
+	for i := len(t.messages) - 1; i >= 0; i-- {
+		if t.messages[i].role == "user" {
+			return strings.TrimSpace(t.messages[i].content)
+		}
+	}
+	return ""
 }
 
 func isToolRuntimeEvent(eventType tools.EventType) bool {
@@ -1432,6 +1572,16 @@ func exportChatSessionCmd(svc *Service, sessionID int64) tea.Cmd {
 	}
 }
 
+func approveBlockedWorkCmd(svc *Service, workID, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		if svc == nil {
+			return chatApprovalDoneMsg{workID: workID, prompt: prompt, err: fmt.Errorf("approval service is unavailable")}
+		}
+		grant, err := svc.ApproveBlockedWork(context.Background(), workID)
+		return chatApprovalDoneMsg{workID: workID, prompt: prompt, grant: grant, err: err}
+	}
+}
+
 func runChatTurnCmd(ctx context.Context, session LiveChatSession, prompt string) tea.Cmd {
 	return func() tea.Msg {
 		result, err := session.Turn(ctx, prompt)
@@ -1491,12 +1641,21 @@ func appendLiveToolDetail(lines *[]string, tool liveToolCall, width int) {
 	if len(body) > 0 {
 		body = append(body, "")
 	}
+	if tool.approvalReason != "" {
+		body = append(body, styleWarning.Render("POLICY REASON"))
+		for _, line := range wrapText(tool.approvalReason, contentWidth) {
+			body = append(body, styleBase.Render(line))
+		}
+		body = append(body, "")
+	}
 	body = append(body, styleMuted.Render("RAW OUTPUT  stdout + stderr"))
 	output := strings.TrimSuffix(sanitizeToolOutput(tool.output), "\n")
 	if output == "" {
 		placeholder := "No output emitted."
 		if tool.status == "RUNNING" || tool.status == "APPROVAL CHECK" {
 			placeholder = "Waiting for output…"
+		} else if tool.status == "APPROVAL REQUIRED" {
+			placeholder = "Not run. Waiting for operator approval."
 		}
 		body = append(body, styleMuted.Render(placeholder))
 	} else {
@@ -1594,6 +1753,8 @@ func statusIconText(status string) string {
 	case "READY", "SUCCEEDED", "VERIFIED":
 		return "✓ " + status
 	case "FAILED", "UNAVAILABLE", "INTERRUPTED":
+		return "! " + status
+	case "APPROVAL REQUIRED", "APPROVAL CHECK", "PENDING", "INTERRUPTING":
 		return "! " + status
 	default:
 		return "• " + firstNonEmptyText(status, "WORKING")

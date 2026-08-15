@@ -369,16 +369,41 @@ func TestLiveChatOrdersToolActivityBeforeHighlightedResponse(t *testing.T) {
 	}
 }
 
-func TestBlockedChatShowsExactApprovalCommand(t *testing.T) {
+func TestBlockedChatShowsPolicyReasonAndInlineApprovalAction(t *testing.T) {
 	t.Parallel()
 	tab := newChatTab().(*chatTab)
+	tab.activeTurn = 1
+	tab.messages = append(tab.messages, liveChatMessage{role: "user", content: "inspect disk usage", turn: 1})
+	tab.toolCalls = append(tab.toolCalls, liveToolCall{name: "shell_execute", command: "docker system df", status: "FAILED", err: "approval required", turn: 1})
 	tab.applyTurnResult(agent.ChatTurnResult{
 		TaskState:       state.TaskStateBlockedWaitingUser,
 		BlockedWorkID:   "blocked_123",
-		ApprovalSummary: "schedule_manage add nightly",
+		ApprovalSummary: "docker system df",
+		ApprovalReason:  "untrusted executable docker is ask",
+		ApprovalEffects: []tools.ShellEffect{{Setting: "commands.unknown", Detail: "untrusted executable docker", Target: "docker"}},
 	}, errors.New("approval required"))
-	if tab.status != "APPROVAL REQUIRED" || !strings.Contains(tab.statusDetail, "cvkeharness commands approve-work blocked_123") {
-		t.Fatalf("blocked approval instruction missing: status=%q detail=%q", tab.status, tab.statusDetail)
+	if tab.status != "APPROVAL REQUIRED" || tab.statusDetail != "untrusted executable docker is ask" {
+		t.Fatalf("blocked policy reason missing: status=%q detail=%q", tab.status, tab.statusDetail)
+	}
+	if tab.pendingApproval == nil || tab.pendingApproval.workID != "blocked_123" || tab.pendingApproval.prompt != "inspect disk usage" {
+		t.Fatalf("inline approval action missing: %#v", tab.pendingApproval)
+	}
+	if tab.toolCalls[0].status != "APPROVAL REQUIRED" || tab.toolCalls[0].err != "" || !tab.toolCalls[0].expanded {
+		t.Fatalf("blocked tool should be waiting rather than failed: %#v", tab.toolCalls[0])
+	}
+	if tab.lastError != "" {
+		t.Fatalf("approval wait should not be rendered as an execution error: %q", tab.lastError)
+	}
+	tab.resize(80, 30)
+	tab.viewport.GotoBottom()
+	view := tab.viewport.View()
+	for _, expected := range []string{"Policy reason:", "untrusted executable docker is ask", "commands.unknown", "approve once + retry"} {
+		if !strings.Contains(view, expected) {
+			t.Fatalf("approval prompt missing %q:\n%s", expected, view)
+		}
+	}
+	if hints := strings.Join(tab.StatusHints(), " "); !strings.Contains(hints, "approve once + retry") {
+		t.Fatalf("footer does not expose approval action: %q", hints)
 	}
 }
 
@@ -872,6 +897,36 @@ func TestLiveChatRendererDoesNotOverflowRepresentativeWidths(t *testing.T) {
 		for lineNo, line := range strings.Split(view, "\n") {
 			if got := lipgloss.Width(line); got > width {
 				t.Fatalf("width %d overflow on line %d: got %d\n%s", width, lineNo+1, got, line)
+			}
+		}
+	}
+}
+
+func TestApprovalPromptDoesNotOverflowRepresentativeWidths(t *testing.T) {
+	t.Parallel()
+
+	for _, width := range []int{80, 100, 120} {
+		tab := newChatTab().(*chatTab)
+		tab.pendingApproval = &pendingChatApproval{
+			workID:  "blocked-1",
+			prompt:  "inspect storage",
+			summary: "echo storage && docker system df && du -xhd 2 /Users/operator/.docker | sort -h | tail -30",
+			reason:  "known read-only command echo is allow; untrusted or path-qualified executable docker is ask",
+			effects: []tools.ShellEffect{
+				{Setting: "commands.read", Detail: "known read-only command echo"},
+				{Setting: "commands.unknown", Detail: "untrusted or path-qualified executable docker", Target: "docker"},
+			},
+		}
+		tab.status = "APPROVAL REQUIRED"
+		_ = tab.View(width, 30)
+		tab.viewport.GotoBottom()
+		view := tab.View(width, 30)
+		if !strings.Contains(view, "APPROVAL REQUIRED") || !strings.Contains(view, "approve once + retry") {
+			t.Fatalf("width %d hid the approval action:\n%s", width, view)
+		}
+		for lineNo, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(line); got > width {
+				t.Fatalf("width %d approval overflow on line %d: got %d\n%s", width, lineNo+1, got, line)
 			}
 		}
 	}

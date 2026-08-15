@@ -43,6 +43,8 @@ type ChatTurnResult struct {
 	CurationError     error
 	BlockedWorkID     string
 	ApprovalSummary   string
+	ApprovalReason    string
+	ApprovalEffects   []tools.ShellEffect
 }
 
 // ChatTool describes one capability registered for the current chat runtime.
@@ -128,6 +130,8 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 		if errors.As(execErr, &blocked) {
 			result.BlockedWorkID = blocked.WorkID()
 			result.ApprovalSummary = blocked.request.Command
+			result.ApprovalReason = blocked.request.ValidationError
+			result.ApprovalEffects = append([]tools.ShellEffect(nil), blocked.request.Effects...)
 		}
 		_ = telemetry.Record(telemetry.WithFields(ctx, telemetry.Fields{TaskState: string(state.TaskStateBlockedWaitingUser)}), telemetry.Event{
 			Type:      telemetry.EventTaskBlocked,
