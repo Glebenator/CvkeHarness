@@ -49,6 +49,18 @@ type tabModel interface {
 	StatusHints() []string
 }
 
+// tabActivator lets a tab choose a safe input mode when global navigation
+// lands on it. Most tabs do not need activation-specific behavior.
+type tabActivator interface {
+	Activate()
+}
+
+// horizontalTabNavigator identifies consuming states where left and right are
+// still available for global tab navigation.
+type horizontalTabNavigator interface {
+	HorizontalTabNavigation() bool
+}
+
 // ── root model ──────────────────────────────────────────────────────
 
 type model struct {
@@ -108,31 +120,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// If the active tab is consuming input (e.g. a form), forward
-		// everything except ctrl+c which always quits.
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+
+		// Dismiss help overlay on any key before applying navigation.
+		if m.showHelp {
+			m.showHelp = false
+			return m, nil
+		}
+
+		// Tab and shift+tab are the universal escape from an input-focused tab.
+		// Text editors retain left/right for cursor movement while focused.
+		switch {
+		case key.Matches(msg, keys.Tab):
+			return m, m.switchTab((m.activeTab + 1) % tabCount)
+		case key.Matches(msg, keys.ShiftTab):
+			return m, m.switchTab((m.activeTab - 1 + tabCount) % tabCount)
+		}
+
+		// A consuming tab may explicitly return horizontal arrows to global
+		// navigation, for example while Chat is in its non-editing mode.
 		if m.tabs[m.activeTab].Consuming() {
-			if msg.String() == "ctrl+c" {
-				return m, tea.Quit
+			if nav, ok := m.tabs[m.activeTab].(horizontalTabNavigator); ok && nav.HorizontalTabNavigation() {
+				switch {
+				case key.Matches(msg, keys.Right):
+					return m, m.switchTab((m.activeTab + 1) % tabCount)
+				case key.Matches(msg, keys.Left):
+					return m, m.switchTab((m.activeTab - 1 + tabCount) % tabCount)
+				}
 			}
 			tab, cmd := m.tabs[m.activeTab].Update(msg, m.svc, m.contentWidth(), m.contentHeight())
 			m.tabs[m.activeTab] = tab
 			return m, cmd
 		}
 
-		// Dismiss help overlay on any key.
-		if m.showHelp {
-			m.showHelp = false
-			return m, nil
-		}
-
 		switch {
-		case msg.String() == "ctrl+c":
-			return m, tea.Quit
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
-		case key.Matches(msg, keys.Tab), key.Matches(msg, keys.Right):
+		case key.Matches(msg, keys.Right):
 			return m, m.switchTab((m.activeTab + 1) % tabCount)
-		case key.Matches(msg, keys.ShiftTab), key.Matches(msg, keys.Left):
+		case key.Matches(msg, keys.Left):
 			return m, m.switchTab((m.activeTab - 1 + tabCount) % tabCount)
 		case key.Matches(msg, keys.Tab1):
 			return m, m.switchTab(tabOverview)
@@ -164,6 +192,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // switchTab changes the active tab and triggers a data refresh.
 func (m *model) switchTab(idx int) tea.Cmd {
 	m.activeTab = idx
+	if activator, ok := m.tabs[idx].(tabActivator); ok {
+		activator.Activate()
+	}
 	return m.tabs[idx].Init(m.svc)
 }
 
@@ -231,19 +262,27 @@ func (m model) renderStatusBar() string {
 
 	// Context-sensitive hints from the active tab. Add only what fits so the
 	// dashboard remains horizontally safe at 80 columns.
+	consuming := m.tabs[m.activeTab].Consuming()
 	quitKey := "q"
-	if m.tabs[m.activeTab].Consuming() {
+	if consuming {
 		quitKey = "ctrl+c"
 	}
 	hints := []string{renderKeyHint(quitKey, "quit")}
-	var candidates []string
+	navigationHint := renderKeyHint("←→", "switch")
+	if consuming {
+		navigationHint = renderKeyHint("tab", "switch")
+		if nav, ok := m.tabs[m.activeTab].(horizontalTabNavigator); ok && nav.HorizontalTabNavigation() {
+			navigationHint = renderKeyHint("←→", "switch")
+		}
+	}
+	// Keep the universal escape visible before optional tab-local actions.
+	candidates := []string{navigationHint}
 	if tabHints := m.tabs[m.activeTab].StatusHints(); len(tabHints) > 0 {
 		candidates = append(candidates, tabHints...)
 	}
-	candidates = append(candidates,
-		renderKeyHint("←→", "switch"),
-		renderKeyHint("?", "help"),
-	)
+	if !consuming {
+		candidates = append(candidates, renderKeyHint("?", "help"))
+	}
 
 	for _, candidate := range candidates {
 		next := append(append([]string(nil), hints...), candidate)
@@ -276,7 +315,8 @@ func (m model) renderHelp() string {
 		{
 			"Navigation",
 			[][2]string{
-				{"←/→ or tab/shift+tab", "Cycle through tabs"},
+				{"tab / shift+tab", "Cycle tabs from any input mode"},
+				{"←/→", "Cycle tabs outside text editing"},
 				{"1-5", "Jump to tab directly"},
 				{"↑/k  ↓/j", "Move cursor in lists"},
 				{"enter", "Expand / select item"},
@@ -295,8 +335,11 @@ func (m model) renderHelp() string {
 		{
 			"Chat Tab",
 			[][2]string{
-				{"n", "Start a live chat session"},
-				{"enter", "Open the selected transcript"},
+				{"enter", "Focus the composer or send a message"},
+				{"esc", "Leave the composer or interrupt active work"},
+				{"ctrl+h", "Toggle live chat and saved conversations"},
+				{"↑/↓", "Select tool calls and scroll at list boundaries"},
+				{"space or ctrl+t", "Expand or collapse the selected tool"},
 			},
 		},
 		{

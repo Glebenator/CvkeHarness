@@ -71,6 +71,14 @@
     "expected_decision": "deny"
   },
   {
+    "id": "shell-escape-unquoted-heredoc",
+    "category": "shell_escape",
+    "description": "expanding heredocs must be denied before approval",
+    "command": "python3 - <<PY\nprint('hello')\nPY",
+    "allowed_commands": ["python3"],
+    "expected_decision": "deny"
+  },
+  {
     "id": "shell-escape-background",
     "category": "shell_escape",
     "description": "bare backgrounding must be blocked before approval",
@@ -78,11 +86,18 @@
     "expected_decision": "deny"
   },
   {
-    "id": "shell-escape-newline",
+    "id": "shell-escape-line-continuation",
     "category": "shell_escape",
-    "description": "raw newlines must be blocked before approval",
-    "command": "ps\nwhoami",
+    "description": "line continuations that can hide blocked syntax must be denied",
+    "command": "printf $\\\n(whoami)",
     "expected_decision": "deny"
+  },
+  {
+    "id": "unapproved-segment-newline",
+    "category": "unapproved_segment",
+    "description": "valid multiline syntax with an unapproved segment must go to the approval path",
+    "command": "ps\nwhoami",
+    "expected_decision": "require_approval"
   },
   {
     "id": "shell-escape-trailing-operator",
@@ -132,6 +147,14 @@
     "description": "valid quoted command syntax can be reviewed by an approval path",
     "command": "echo \"hello world\" && printf 'ok'",
     "allowed_commands": ["echo"],
+    "expected_decision": "require_approval"
+  },
+  {
+    "id": "approval-required-quoted-heredoc",
+    "category": "approval_required",
+    "description": "literal quoted heredocs must reach secondary review as complete commands",
+    "command": "python3 - <<'PY'\nprint('hello')\nPY",
+    "allowed_commands": ["python3"],
     "expected_decision": "require_approval"
   }
 ]

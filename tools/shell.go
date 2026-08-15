@@ -37,6 +37,7 @@ type ShellArgs struct {
 type ShellSegment struct {
 	Command    string
 	Normalized string
+	Heredoc    bool
 }
 
 // ParsedShellCommand captures the supported chained command structure.
@@ -117,7 +118,7 @@ func NewShellToolWithApprovals(allowed, approved []string, approver ShellApprove
 	}
 	pmap := make(map[string]bool)
 	for _, item := range approved {
-		normalized := normalizeShellWhitespace(item)
+		normalized := normalizeApprovedShellCommand(item)
 		if normalized == "" {
 			continue
 		}
@@ -155,7 +156,7 @@ func (s *ShellTool) Parameters() json.RawMessage {
 }
 
 // ValidateShellCommand rejects unsupported shell syntax while allowing simple
-// command chaining through &&, ||, ;, and pipelines.
+// command chaining through newlines, &&, ||, ;, and pipelines.
 func ValidateShellCommand(command string) error {
 	_, err := ParseShellCommand(command)
 	return err
@@ -209,6 +210,9 @@ func validateShellSegment(segment ShellSegment, allowedCommands, approvedCommand
 	}
 
 	if allowedCommands[baseCmd] {
+		if segment.Heredoc && (approvedCommands == nil || !approvedCommands[segment.Normalized]) {
+			return "", fmt.Errorf("command %q uses a quoted heredoc and requires secondary approval", segment.Normalized)
+		}
 		return baseCmd, nil
 	}
 	if approvedCommands != nil && approvedCommands[segment.Normalized] {
@@ -219,16 +223,10 @@ func validateShellSegment(segment ShellSegment, allowedCommands, approvedCommand
 }
 
 // ParseShellCommand tokenizes a shell command into approved segments and
-// control operators while rejecting unsupported shell features.
+// control operators while rejecting unsupported shell features. Unquoted line
+// breaks are command separators, matching normal shell behavior; line breaks
+// inside quotes are preserved as command content.
 func ParseShellCommand(command string) (ParsedShellCommand, error) {
-	if strings.ContainsAny(command, "\n\r") {
-		for _, ch := range command {
-			if ch == '\n' || ch == '\r' {
-				return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", string(ch))
-			}
-		}
-	}
-
 	cmd := strings.TrimSpace(command)
 	if cmd == "" {
 		return ParsedShellCommand{}, fmt.Errorf("command cannot be empty")
@@ -239,6 +237,7 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 	inSingle := false
 	inDouble := false
 	escaped := false
+	currentHeredoc := false
 
 	flush := func(operator string) error {
 		raw := strings.TrimSpace(current.String())
@@ -251,11 +250,20 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 			}
 			return nil
 		}
+		normalized := normalizeShellWhitespace(raw)
+		if currentHeredoc {
+			// Heredoc bodies can be whitespace-sensitive programs or data.
+			// Remembered approval must bind to the exact body, not a collapsed
+			// representation that could alias a different script.
+			normalized = raw
+		}
 		parsed.Segments = append(parsed.Segments, ShellSegment{
 			Command:    raw,
-			Normalized: normalizeShellWhitespace(raw),
+			Normalized: normalized,
+			Heredoc:    currentHeredoc,
 		})
 		current.Reset()
+		currentHeredoc = false
 		if operator != "" {
 			parsed.Operators = append(parsed.Operators, operator)
 		}
@@ -267,6 +275,9 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 
 		switch {
 		case escaped:
+			if ch == '\n' || ch == '\r' {
+				return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "line continuation")
+			}
 			current.WriteByte(ch)
 			escaped = false
 			continue
@@ -278,8 +289,6 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 			continue
 		case inDouble:
 			switch ch {
-			case '\n', '\r':
-				return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", string(ch))
 			case '`':
 				return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "`")
 			case '$':
@@ -310,7 +319,17 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 			current.WriteByte(ch)
 			inDouble = true
 		case '\n', '\r':
-			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", string(ch))
+			// Treat line breaks like semicolons, but tolerate blank lines and
+			// line breaks after another operator (for example, "cmd &&\nnext").
+			// A CRLF pair represents one separator.
+			if ch == '\r' && i+1 < len(cmd) && cmd[i+1] == '\n' {
+				i++
+			}
+			if strings.TrimSpace(current.String()) != "" {
+				if err := flush("\n"); err != nil {
+					return ParsedShellCommand{}, err
+				}
+			}
 		case '`':
 			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "`")
 		case '$':
@@ -321,7 +340,15 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 		case '>':
 			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", ">")
 		case '<':
-			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "<")
+			heredoc, end, err := parseQuotedHeredoc(cmd, i)
+			if err != nil {
+				return ParsedShellCommand{}, err
+			}
+			current.WriteString(heredoc)
+			// The heredoc body is opaque input, so shell-looking text inside it
+			// is intentionally not interpreted as another command segment.
+			currentHeredoc = true
+			i = end
 		case '|':
 			if i+1 < len(cmd) && cmd[i+1] == '|' {
 				if err := flush("||"); err != nil {
@@ -365,6 +392,75 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 	}
 
 	return parsed, nil
+}
+
+func normalizeApprovedShellCommand(command string) string {
+	parsed, err := ParseShellCommand(command)
+	if err == nil && len(parsed.Segments) == 1 && len(parsed.Operators) == 0 {
+		return parsed.Segments[0].Normalized
+	}
+	return normalizeShellWhitespace(command)
+}
+
+// parseQuotedHeredoc accepts the deliberately narrow heredoc form used to
+// pass literal scripts or data to a command: <<'TAG' or <<"TAG", followed by a
+// newline and a line containing only TAG. Quoting the delimiter disables shell
+// expansion in the body. Other redirection forms remain unsupported.
+func parseQuotedHeredoc(command string, start int) (string, int, error) {
+	if start+2 >= len(command) || command[start:start+2] != "<<" || command[start+2] == '<' {
+		return "", 0, fmt.Errorf("blocked shell syntax %q", "<")
+	}
+
+	i := start + 2
+	for i < len(command) && (command[i] == ' ' || command[i] == '\t') {
+		i++
+	}
+	if i >= len(command) || (command[i] != '\'' && command[i] != '"') {
+		return "", 0, fmt.Errorf("blocked shell syntax %q", "unquoted heredoc")
+	}
+	quote := command[i]
+	delimiterStart := i + 1
+	delimiterEnd := strings.IndexByte(command[delimiterStart:], quote)
+	if delimiterEnd < 0 {
+		return "", 0, fmt.Errorf("unterminated quoted heredoc delimiter")
+	}
+	delimiterEnd += delimiterStart
+	delimiter := command[delimiterStart:delimiterEnd]
+	if delimiter == "" || strings.ContainsAny(delimiter, " \t\r\n\\`$<>&|;\"'") {
+		return "", 0, fmt.Errorf("unsupported heredoc delimiter %q", delimiter)
+	}
+
+	headerEnd := delimiterEnd + 1
+	for headerEnd < len(command) && (command[headerEnd] == ' ' || command[headerEnd] == '\t') {
+		headerEnd++
+	}
+	if headerEnd >= len(command) || (command[headerEnd] != '\n' && command[headerEnd] != '\r') {
+		return "", 0, fmt.Errorf("quoted heredoc delimiter must end the command line")
+	}
+	if command[headerEnd] == '\r' && headerEnd+1 < len(command) && command[headerEnd+1] == '\n' {
+		headerEnd++
+	}
+
+	bodyStart := headerEnd + 1
+	lineStart := bodyStart
+	for lineStart <= len(command) {
+		lineEnd := lineStart
+		for lineEnd < len(command) && command[lineEnd] != '\n' && command[lineEnd] != '\r' {
+			lineEnd++
+		}
+		if command[lineStart:lineEnd] == delimiter {
+			return command[start:lineEnd], lineEnd - 1, nil
+		}
+		if lineEnd == len(command) {
+			break
+		}
+		if command[lineEnd] == '\r' && lineEnd+1 < len(command) && command[lineEnd+1] == '\n' {
+			lineEnd++
+		}
+		lineStart = lineEnd + 1
+	}
+
+	return "", 0, fmt.Errorf("unterminated quoted heredoc %q", delimiter)
 }
 
 func normalizeShellWhitespace(segment string) string {

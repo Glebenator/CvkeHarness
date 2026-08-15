@@ -19,9 +19,6 @@ func FuzzParseShellCommand(f *testing.F) {
 			return
 		}
 
-		if strings.ContainsAny(command, "\n\r") {
-			t.Fatalf("accepted command with raw newline: %q", command)
-		}
 		if containsBlockedShellSyntax(command) {
 			t.Fatalf("accepted command with blocked shell syntax: %q", command)
 		}
@@ -53,9 +50,6 @@ func FuzzValidateAllowedShellCommand(f *testing.F) {
 		parsed, err := ParseShellCommand(command)
 		if err != nil {
 			t.Fatalf("allowed command failed parsing: %q: %v", command, err)
-		}
-		if strings.ContainsAny(command, "\n\r") {
-			t.Fatalf("allowed command with raw newline: %q", command)
 		}
 		if containsBlockedShellSyntax(command) {
 			t.Fatalf("allowed command with blocked shell syntax: %q", command)
@@ -138,8 +132,14 @@ func containsBlockedShellSyntax(command string) bool {
 			inSingle = true
 		case '"':
 			inDouble = true
-		case '`', '<', '>':
+		case '`', '>':
 			return true
+		case '<':
+			_, end, err := parseQuotedHeredoc(command, i)
+			if err != nil {
+				return true
+			}
+			i = end
 		case '$':
 			if i+1 < len(command) && command[i+1] == '(' {
 				return true
