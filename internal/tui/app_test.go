@@ -8,6 +8,34 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func TestParseInitialViewAndTabSelection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		view  InitialView
+		tab   int
+	}{
+		{input: "overview", view: InitialViewOverview, tab: tabOverview},
+		{input: " Jobs ", view: InitialViewJobs, tab: tabJobs},
+		{input: "runs", view: InitialViewRuns, tab: tabRuns},
+		{input: "CHAT", view: InitialViewChat, tab: tabChat},
+		{input: "settings", view: InitialViewSettings, tab: tabConfig},
+	}
+	for _, test := range tests {
+		view, err := ParseInitialView(test.input)
+		if err != nil {
+			t.Fatalf("ParseInitialView(%q) returned error: %v", test.input, err)
+		}
+		if view != test.view || view.tabIndex() != test.tab {
+			t.Fatalf("ParseInitialView(%q) = %q/tab %d, want %q/tab %d", test.input, view, view.tabIndex(), test.view, test.tab)
+		}
+	}
+	if _, err := ParseInitialView("terminal"); err == nil {
+		t.Fatal("expected an unknown initial view to fail")
+	}
+}
+
 type tallTab struct{}
 
 func (t tallTab) Init(*Service) tea.Cmd { return nil }

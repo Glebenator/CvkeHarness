@@ -1,18 +1,19 @@
 # CvkeHarness
 
-CvkeHarness is a provider-agnostic Go CLI for running a tool-using LLM agent against local DevOps-style workflows.
+CvkeHarness is a provider-agnostic Go operations agent with two deliberate modes: a bounded `run` command for one task and an interactive `console` for ongoing operator work.
 
 The runtime is phase-routed, approval-aware, and now uses a target-aware operational memory model. It distinguishes the machine running the harness from the system being operated on, remembers verified host facts and proven procedures for the active target, and injects only a compact retrieval brief into the prompt.
 
 ## What It Does
 
 - Runs a local agent loop with a compact layered system prompt and tool access
+- Separates one-shot execution from the stateful operations console
 - Supports multiple providers behind a shared provider interface
 - Tracks run history, tool outcomes, routing stats, approvals, and operational memory in SQLite
 - Maintains human-readable managed memory files under `~/.cvkeharness/`
 - Distinguishes the runtime host from remote SSH targets
 - Retrieves target-specific playbooks, cautions, and findings with strict prompt budget caps
-- Falls back gracefully to file-backed memory when the state DB is unavailable
+- Lets bounded runs fall back to file-backed memory when the state DB is unavailable
 
 ## Runtime Model
 
@@ -22,7 +23,7 @@ The main `run` flow is split into three routed phases:
 2. `execution`
 3. `memory_curation`
 
-Interactive chat uses the same runtime stack with a pinned `chat` phase selection and the same target-aware retrieval/call loop.
+The Chat workspace inside `console` uses the same runtime stack with a pinned `chat` phase selection and the same target-aware retrieval/call loop.
 
 For each run, the harness:
 
@@ -204,7 +205,7 @@ The setup wizard configures:
 - optional Tavily-backed public web search tools
 - bootstrap of the structured memory files
 
-`setup` creates the readable managed memory files up front in `~/.cvkeharness/`. If they are missing later, `run`, `chat`, and `memory reindex` bootstrap them again automatically before retrieval.
+`setup` creates the readable managed memory files up front in `~/.cvkeharness/`. If they are missing later, `run`, the console Chat workspace, and `memory reindex` bootstrap them again automatically before retrieval.
 
 ### Run a task
 
@@ -218,6 +219,18 @@ Show why routing chose a model:
 ./cvkeharness run --explain-routing "debug why journalctl output is empty"
 ```
 
+### Open the operations console
+
+```bash
+./cvkeharness console
+```
+
+Open directly on the Chat workspace:
+
+```bash
+./cvkeharness console --view chat
+```
+
 ## CLI Commands
 
 ### Core commands
@@ -227,9 +240,11 @@ Show why routing chose a model:
 - `cvkeharness settings`
   Interactive settings editor for updating an existing configuration
 - `cvkeharness run [task]`
-  Execute a task through the routed agent runtime
-- `cvkeharness chat`
-  Start an interactive chat session with the same target-aware runtime
+  Run one bounded task through the routed agent runtime, then exit
+- `cvkeharness console`
+  Open the interactive workspace for Chat, approvals, tool activity, verification, history, jobs, runs, and settings
+  - `--view overview|jobs|runs|chat|settings` selects the initial workspace
+  - `cvkeharness tui` remains a compatibility alias during the command transition
 - `cvkeharness redteam`
   Run a live red-team evaluation harness
 - `cvkeharness scorecard`
@@ -237,7 +252,7 @@ Show why routing chose a model:
 
 ### Chat slash commands
 
-Slash commands are handled locally and are never sent to the model. In the Guided Console, type `/` at the start of the composer to open the filtered command palette; use the arrow keys to select and Enter to complete or run a command. Prefix a prompt with `//` to send a literal leading slash.
+Slash commands are handled locally and are never sent to the model. In the operations console, type `/` at the start of the Chat composer to open the filtered command palette; use the arrow keys to select and Enter to complete or run a command. Prefix a prompt with `//` to send a literal leading slash.
 
 - `/new` (`/clear` remains an alias)
   Close the current logical session and start a fresh conversation
@@ -248,11 +263,9 @@ Slash commands are handled locally and are never sent to the model. In the Guide
 - `/tools`
   List registered capabilities and the current safety mode without implying authorization
 - `/history`
-  Browse saved conversations in the Guided Console
+  Browse saved conversations in the operations console
 - `/help`
-  Show commands available on the current chat surface
-- `/exit`
-  End the line-oriented CLI chat
+  Show commands available in the Chat workspace
 
 Exports use private file permissions and mask obvious credential patterns. They may still contain private operational context, so review them before sharing.
 

@@ -402,18 +402,34 @@ func TestRootIncludesSettingsCommand(t *testing.T) {
 	}
 }
 
-func TestRootIncludesChatCommand(t *testing.T) {
+func TestRootIncludesConsoleCommandAndTUIAlias(t *testing.T) {
 	t.Parallel()
 
-	cmd, _, err := rootCmd.Find([]string{"chat"})
+	cmd, _, err := rootCmd.Find([]string{"console"})
 	if err != nil {
 		t.Fatalf("Find returned error: %v", err)
 	}
 	if cmd == nil {
-		t.Fatal("expected chat command to be registered")
+		t.Fatal("expected console command to be registered")
 	}
-	if cmd.Use != "chat" {
-		t.Fatalf("expected chat command, got %q", cmd.Use)
+	if cmd.Use != "console" {
+		t.Fatalf("expected console command, got %q", cmd.Use)
+	}
+
+	alias, _, err := rootCmd.Find([]string{"tui"})
+	if err != nil {
+		t.Fatalf("Find alias returned error: %v", err)
+	}
+	if alias != cmd {
+		t.Fatalf("expected tui to resolve to console command, got %#v", alias)
+	}
+}
+
+func TestRootDoesNotIncludeChatCommand(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := rootCmd.Find([]string{"chat"}); err == nil {
+		t.Fatal("expected removed chat command to be unknown")
 	}
 }
 
@@ -448,7 +464,7 @@ func TestDefaultHelpListsRegisteredCommands(t *testing.T) {
 	helpText := out.String() + errOut.String()
 	expectedSnippets := []string{
 		"Available Commands:",
-		"chat",
+		"console",
 		"commands",
 		"memory",
 		"models",
@@ -460,5 +476,8 @@ func TestDefaultHelpListsRegisteredCommands(t *testing.T) {
 		if !strings.Contains(helpText, snippet) {
 			t.Fatalf("expected help output to contain %q, got:\n%s", snippet, helpText)
 		}
+	}
+	if strings.Contains(helpText, "\n  chat") || strings.Contains(helpText, "\n  tui") {
+		t.Fatalf("expected removed and compatibility command names to stay out of root help, got:\n%s", helpText)
 	}
 }

@@ -5,33 +5,30 @@ import (
 	"testing"
 )
 
-func TestParseResolvesSharedAndSurfaceSpecificCommands(t *testing.T) {
+func TestParseResolvesConsoleCommands(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		input   string
-		surface Surface
-		want    Action
+		name  string
+		input string
+		want  Action
 	}{
-		{name: "cli new", input: "/new", surface: CLI, want: New},
-		{name: "cli clear alias", input: "  /CLEAR  ", surface: CLI, want: New},
-		{name: "tui memory", input: "/Memory", surface: TUI, want: Memory},
-		{name: "cli export", input: "/export", surface: CLI, want: Export},
-		{name: "tui tools", input: "/tools", surface: TUI, want: Tools},
-		{name: "cli exit", input: "/exit", surface: CLI, want: Exit},
-		{name: "tui history", input: "/history", surface: TUI, want: History},
-		{name: "history unavailable in cli", input: "/history", surface: CLI, want: None},
-		{name: "exit unavailable in tui", input: "/exit", surface: TUI, want: None},
-		{name: "prompt", input: "hello", surface: TUI, want: None},
-		{name: "command with arguments is not exact", input: "/new now", surface: CLI, want: None},
+		{name: "new", input: "/new", want: New},
+		{name: "clear alias", input: "  /CLEAR  ", want: New},
+		{name: "memory", input: "/Memory", want: Memory},
+		{name: "export", input: "/export", want: Export},
+		{name: "tools", input: "/tools", want: Tools},
+		{name: "history", input: "/history", want: History},
+		{name: "removed cli exit", input: "/exit", want: None},
+		{name: "prompt", input: "hello", want: None},
+		{name: "command with arguments is not exact", input: "/new now", want: None},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if got := Parse(test.input, test.surface); got != test.want {
-				t.Fatalf("Parse(%q, %d) = %q, want %q", test.input, test.surface, got, test.want)
+			if got := Parse(test.input); got != test.want {
+				t.Fatalf("Parse(%q) = %q, want %q", test.input, got, test.want)
 			}
 		})
 	}
@@ -40,19 +37,19 @@ func TestParseResolvesSharedAndSurfaceSpecificCommands(t *testing.T) {
 func TestMatchesFiltersCommandsAndAliases(t *testing.T) {
 	t.Parallel()
 
-	all := Matches("/", TUI)
+	all := Matches("/")
 	if len(all) != 6 {
 		t.Fatalf("TUI command count = %d, want 6: %#v", len(all), all)
 	}
-	memory := Matches("/mem", TUI)
+	memory := Matches("/mem")
 	if len(memory) != 1 || memory[0].Action != Memory {
 		t.Fatalf("unexpected /mem matches: %#v", memory)
 	}
-	clear := Matches("/cl", TUI)
+	clear := Matches("/cl")
 	if len(clear) != 1 || clear[0].Action != New {
 		t.Fatalf("expected /clear alias to match /new, got %#v", clear)
 	}
-	if got := Matches("//literal", TUI); len(got) != 0 {
+	if got := Matches("//literal"); len(got) != 0 {
 		t.Fatalf("escaped prompt should not autocomplete, got %#v", got)
 	}
 }
@@ -60,10 +57,10 @@ func TestMatchesFiltersCommandsAndAliases(t *testing.T) {
 func TestUnknownSlashAndLiteralEscape(t *testing.T) {
 	t.Parallel()
 
-	if !IsUnknownSlash("/missing", TUI) {
+	if !IsUnknownSlash("/missing") {
 		t.Fatal("expected unknown slash command to be recognized locally")
 	}
-	if IsUnknownSlash("//var/log", TUI) {
+	if IsUnknownSlash("//var/log") {
 		t.Fatal("expected double slash to escape local command parsing")
 	}
 	if got := PromptText("//var/log"); got != "/var/log" {
@@ -71,15 +68,13 @@ func TestUnknownSlashAndLiteralEscape(t *testing.T) {
 	}
 }
 
-func TestSummariesDocumentSharedCommands(t *testing.T) {
+func TestSummaryDocumentsConsoleCommands(t *testing.T) {
 	t.Parallel()
 
-	for _, surface := range []Surface{CLI, TUI} {
-		summary := Summary(surface, ", ")
-		for _, want := range []string{"/new (/clear)", "/memory", "/export", "/tools", "/help"} {
-			if !strings.Contains(summary, want) {
-				t.Fatalf("summary for surface %d missing %q: %s", surface, want, summary)
-			}
+	summary := Summary(", ")
+	for _, want := range []string{"/new (/clear)", "/memory", "/export", "/tools", "/history", "/help"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %s", want, summary)
 		}
 	}
 }
@@ -87,9 +82,9 @@ func TestSummariesDocumentSharedCommands(t *testing.T) {
 func TestAvailableReturnsDefensiveAliasCopies(t *testing.T) {
 	t.Parallel()
 
-	first := Available(CLI)
+	first := Available()
 	first[0].Aliases[0] = "/changed"
-	second := Available(CLI)
+	second := Available()
 	if got := second[0].Aliases[0]; got != "/clear" {
 		t.Fatalf("expected registry aliases to remain immutable, got %q", got)
 	}

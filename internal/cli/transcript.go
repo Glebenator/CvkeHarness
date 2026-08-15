@@ -47,14 +47,14 @@ func (r *TranscriptRenderer) Observe(event tools.Event) {
 
 	switch event.Type {
 	case tools.EventMemoryInjected:
-		if strings.TrimSpace(event.Output) != "" {
-			fmt.Fprintln(r.out, r.label("memory", event.Output))
+		if message := memoryEventSummary(event); message != "" {
+			fmt.Fprintln(r.out, r.label("done", message))
 		}
 	case tools.EventToolCallStarted:
 		if event.ToolName == "shell_execute" {
 			return
 		}
-		fmt.Fprintln(r.out, r.label("tool", event.ToolName))
+		fmt.Fprintln(r.out, r.label("running", event.ToolName))
 	case tools.EventToolCallFinished:
 		if event.ToolName == "shell_execute" {
 			return
@@ -66,12 +66,14 @@ func (r *TranscriptRenderer) Observe(event tools.Event) {
 		fmt.Fprintln(r.out, r.label("fail", compactError(event.ToolName, event.ErrorMessage)))
 	case tools.EventShellCommandStarted:
 		fmt.Fprintln(r.out)
-		fmt.Fprintln(r.out, r.sectionLine("shell", "command"))
+		fmt.Fprintln(r.out, r.label("running", "Shell command"))
 		fmt.Fprintf(r.out, "%s %s\n\n", r.commandPrefix(), event.Command)
 	case tools.EventShellApproval:
 		if event.ApprovalMode != "" && event.ApprovalMode != "allowlist" {
-			fmt.Fprintln(r.out, r.metaLine("approval", strings.ReplaceAll(event.ApprovalMode, "_", " ")))
+			fmt.Fprintln(r.out, r.label("approved", strings.ReplaceAll(event.ApprovalMode, "_", " ")))
 		}
+	case tools.EventApprovalRequired:
+		fmt.Fprintln(r.out, r.label("stopped", "Protected action not executed"))
 	case tools.EventShellOutput:
 		state := r.shellState(event)
 		r.writeShellOutput(state, event.Output)
@@ -86,6 +88,11 @@ func (r *TranscriptRenderer) Observe(event tools.Event) {
 		}
 		fmt.Fprintln(r.out)
 		fmt.Fprintln(r.out, r.label(status, message))
+	case tools.EventVerificationActivity:
+		kind, message := verificationEventSummary(event.Verification)
+		if message != "" {
+			fmt.Fprintln(r.out, r.label(kind, message))
+		}
 	}
 }
 
@@ -99,7 +106,7 @@ func (r *TranscriptRenderer) Write(p []byte) (int, error) {
 	r.logPending = lines[len(lines)-1]
 	for _, line := range lines[:len(lines)-1] {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || suppressTranscriptLog(line) {
 			continue
 		}
 		fmt.Fprintf(r.out, "%s%s\n", r.logPrefix(), simplifyLogLine(line))
@@ -143,36 +150,36 @@ func (r *TranscriptRenderer) flushPending(state *shellRenderState) {
 }
 
 func (r *TranscriptRenderer) label(kind, message string) string {
-	if r.mode == streamModeRich {
-		switch kind {
-		case "tool":
-			return colorize("38;5;250", "[tool]") + " " + bold(message)
-		case "done":
-			return colorize("38;5;108", "[done]") + " " + message
-		case "fail":
-			return colorize("38;5;167", "[fail]") + " " + message
-		}
-	}
-	return "[" + kind + "] " + message
-}
-
-func (r *TranscriptRenderer) sectionLine(kind, label string) string {
+	status := strings.ToUpper(kind)
+	color := "38;5;244"
 	switch kind {
-	case "shell":
-		if r.mode == streamModeRich {
-			return colorize("38;5;250", "shell") + " " + colorize("38;5;240", label)
-		}
-		return "--- shell: " + label + " ---"
-	default:
-		return label
+	case "running":
+		status = "RUNNING"
+		color = "38;5;179"
+	case "approved":
+		status = "APPROVED"
+		color = "38;5;108"
+	case "done":
+		status = "DONE"
+		color = "38;5;108"
+	case "verified":
+		status = "VERIFIED"
+		color = "38;5;108"
+	case "repairing":
+		status = "REPAIRING"
+		color = "38;5;179"
+	case "stopped":
+		status = "STOPPED"
+		color = "38;5;179"
+	case "fail":
+		status = "FAILED"
+		color = "38;5;167"
 	}
-}
-
-func (r *TranscriptRenderer) metaLine(label, value string) string {
+	prefix := fmt.Sprintf("%-10s", status)
 	if r.mode == streamModeRich {
-		return colorize("38;5;240", "  "+label+":") + " " + value
+		return colorize(color, prefix) + message
 	}
-	return "  " + label + ": " + value
+	return prefix + message
 }
 
 func (r *TranscriptRenderer) commandPrefix() string {
@@ -191,9 +198,80 @@ func (r *TranscriptRenderer) outputPrefix() string {
 
 func (r *TranscriptRenderer) logPrefix() string {
 	if r.mode == streamModeRich {
-		return colorize("38;5;240", "· log ")
+		return colorize("38;5;240", "LOG       ")
 	}
-	return "[log] "
+	return "LOG       "
+}
+
+func memoryEventSummary(event tools.Event) string {
+	if len(event.MemorySources) == 0 {
+		if output := strings.TrimSpace(event.Output); output != "" {
+			return "Load execution context | " + output
+		}
+		return ""
+	}
+	seen := make(map[string]bool)
+	var names []string
+	for _, source := range event.MemorySources {
+		name := strings.TrimSpace(source.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return "Load execution context"
+	}
+	return "Load execution context | " + strings.Join(names, ", ")
+}
+
+func verificationEventSummary(activity tools.VerificationActivity) (string, string) {
+	reason := strings.TrimSpace(activity.Reason)
+	switch activity.Phase {
+	case tools.VerificationPhaseChecking:
+		return "running", "Verify completion"
+	case tools.VerificationPhaseRepairing:
+		message := "Repair completion"
+		if activity.RepairLimit > 0 {
+			message += fmt.Sprintf(" | attempt %d/%d", activity.RepairAttempt, activity.RepairLimit)
+		}
+		return "repairing", message
+	case tools.VerificationPhaseCompleted:
+		if reason == "" {
+			reason = strings.TrimSpace(activity.Status)
+		}
+		if reason == "" {
+			reason = "Completion evidence satisfied"
+		}
+		return "verified", reason
+	case tools.VerificationPhaseStopped:
+		if reason == "" {
+			reason = strings.ReplaceAll(string(activity.StopReason), "_", " ")
+		}
+		if reason == "" {
+			reason = "Verification stopped safely"
+		}
+		return "stopped", reason
+	default:
+		return "", ""
+	}
+}
+
+func suppressTranscriptLog(line string) bool {
+	for _, message := range []string{
+		`msg="CvkeHarness starting up"`,
+		`msg="CvkeHarness starting task"`,
+		`msg="memory injected"`,
+		`msg="agent finished task`,
+		`msg="executing shell command"`,
+		`msg="command approved by secondary gate"`,
+	} {
+		if strings.Contains(line, message) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeChunk(chunk string) string {
@@ -261,8 +339,4 @@ func simplifyLogLine(line string) string {
 
 func colorize(code, text string) string {
 	return "\033[" + code + "m" + text + "\033[0m"
-}
-
-func bold(text string) string {
-	return colorize("1", text)
 }
