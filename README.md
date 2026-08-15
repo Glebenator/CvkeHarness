@@ -456,6 +456,18 @@ GOCACHE=/tmp/cvke-go-build go test ./...
 
 Using a local `GOCACHE` is helpful in sandboxed environments where the default Go build cache path is not writable.
 
+### Run end-to-end user journeys
+
+```bash
+./scripts/test-e2e.sh
+```
+
+The tagged end-to-end suite builds the real executable, drives setup through a
+pseudo-terminal at representative widths, exercises local chat commands and an
+allowlisted tool-backed conversation against a local mock model, and verifies
+SQLite/export artifacts in an isolated temporary home. See
+[e2e/README.md](e2e/README.md) for the journey matrix and safety boundaries.
+
 ### Format code
 
 ```bash
