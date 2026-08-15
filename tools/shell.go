@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/internal/log"
+	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/securitypolicy"
 	"github.com/coolcake/cvkeharness/state"
 )
 
@@ -26,6 +28,10 @@ type ShellTool struct {
 	approvalStore    *state.Store
 	approvalRequired bool
 	unrestricted     bool
+	securityPolicy   *securitypolicy.EffectivePolicy
+	humanApprover    ShellApprover
+	llmApprover      ShellApprover
+	maxOutput        int
 }
 
 // ShellArgs represents the LLM-provided arguments for the shell tool.
@@ -66,11 +72,6 @@ func (w *streamCaptureWriter) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	EmitEvent(w.ctx, Event{
-		Type:   EventShellOutput,
-		Output: string(p),
-	})
-
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -92,9 +93,12 @@ func (w *streamCaptureWriter) Result() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	result := w.buf.String()
+	result := secrets.Mask(w.buf.String())
 	if w.truncated {
 		result += "\n... (output truncated)"
+	}
+	if result != "" {
+		EmitEvent(w.ctx, Event{Type: EventShellOutput, Output: result})
 	}
 	return result
 }
@@ -131,7 +135,17 @@ func NewShellToolWithApprovals(allowed, approved []string, approver ShellApprove
 		approver:         approver,
 		primaryModel:     primaryModel,
 		approvalStore:    approvalStore,
+		maxOutput:        4096,
 	}
+}
+
+func (s *ShellTool) applySecurityPolicy(policy securitypolicy.EffectivePolicy, human, llm ShellApprover) {
+	copyPolicy := policy
+	s.securityPolicy = &copyPolicy
+	s.humanApprover = human
+	s.llmApprover = llm
+	s.timeout = time.Duration(policy.Int(securitypolicy.SettingTimeoutSeconds)) * time.Second
+	s.maxOutput = policy.Int(securitypolicy.SettingMaxOutputBytes)
 }
 
 func (s *ShellTool) Name() string {
@@ -193,6 +207,13 @@ func validateAllowedShellCommand(command string, allowedCommands, approvedComman
 }
 
 func validateShellSegment(segment ShellSegment, allowedCommands, approvedCommands map[string]bool) (string, error) {
+	if !segment.Heredoc {
+		if _, redirects, err := tokenizePolicySegment(segment.Command); err != nil {
+			return "", err
+		} else if len(redirects) > 0 {
+			return "", fmt.Errorf("command %q uses redirection and requires effect-aware approval", segment.Normalized)
+		}
+	}
 	parts := strings.Fields(segment.Command)
 	if len(parts) == 0 {
 		return "", fmt.Errorf("command cannot be empty")
@@ -338,17 +359,25 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 			}
 			current.WriteByte(ch)
 		case '>':
-			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", ">")
-		case '<':
-			heredoc, end, err := parseQuotedHeredoc(cmd, i)
-			if err != nil {
-				return ParsedShellCommand{}, err
+			current.WriteByte(ch)
+			if i+1 < len(cmd) && cmd[i+1] == '>' {
+				current.WriteByte(cmd[i+1])
+				i++
 			}
-			current.WriteString(heredoc)
-			// The heredoc body is opaque input, so shell-looking text inside it
-			// is intentionally not interpreted as another command segment.
-			currentHeredoc = true
-			i = end
+		case '<':
+			if i+1 < len(cmd) && cmd[i+1] == '<' {
+				heredoc, end, err := parseQuotedHeredoc(cmd, i)
+				if err != nil {
+					return ParsedShellCommand{}, err
+				}
+				current.WriteString(heredoc)
+				// The heredoc body is opaque input, so shell-looking text inside it
+				// is intentionally not interpreted as another command segment.
+				currentHeredoc = true
+				i = end
+				continue
+			}
+			current.WriteByte(ch)
 		case '|':
 			if i+1 < len(cmd) && cmd[i+1] == '|' {
 				if err := flush("||"); err != nil {
@@ -366,6 +395,10 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 					return ParsedShellCommand{}, err
 				}
 				i++
+				continue
+			}
+			if strings.HasSuffix(strings.TrimSpace(current.String()), ">") {
+				current.WriteByte(ch)
 				continue
 			}
 			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "&")
@@ -558,15 +591,16 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	exitCodeKnown := false
 
 	if cmdStr != "" {
+		maskedCommand := secrets.Mask(cmdStr)
 		EmitEvent(ctx, Event{
 			Type:    EventShellCommandStarted,
-			Command: cmdStr,
+			Command: maskedCommand,
 			Success: true,
 		})
 		defer func() {
 			EmitEvent(ctx, Event{
 				Type:          EventShellCommandFinished,
-				Command:       cmdStr,
+				Command:       maskedCommand,
 				ApprovalMode:  approvalMode,
 				Success:       execErr == nil,
 				ExitCode:      exitCode,
@@ -582,12 +616,63 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		return "", fmt.Errorf("security violation: %w", err)
 	}
 
-	if s.unrestricted {
+	if s.securityPolicy != nil {
+		assessment, policyErr := AssessShellCommand(cmdStr, *s.securityPolicy)
+		if policyErr != nil {
+			return "", fmt.Errorf("security violation: %w", policyErr)
+		}
+		approvalMode = "profile:" + string(s.securityPolicy.Profile)
+		if assessment.Decision == securitypolicy.DecisionDeny {
+			return "", fmt.Errorf("security violation: %s", assessment.Reason)
+		}
+		if assessment.Decision == securitypolicy.DecisionAsk && allSegmentsApproved(parsedCommand, s.approvedCommands) {
+			assessment.Decision = securitypolicy.DecisionAllow
+			approvalMode = "session_approval"
+		}
+		if assessment.Decision == securitypolicy.DecisionAsk || assessment.Decision == securitypolicy.DecisionLLMReview {
+			approver := s.humanApprover
+			if assessment.Decision == securitypolicy.DecisionLLMReview {
+				approver = s.llmApprover
+				if approver == nil {
+					approver = s.humanApprover
+				}
+			}
+			logger.Warn("shell effects require approval", "command", secrets.Mask(cmdStr), "decision", assessment.Decision, "reason", assessment.Reason)
+			payload, _ := json.Marshal(map[string]any{
+				"tool_name": "shell_execute",
+				"command":   secrets.Mask(cmdStr),
+				"decision":  assessment.Decision,
+				"reason":    assessment.Reason,
+				"effects":   assessment.Effects,
+				"policy":    s.securityPolicy.Hash,
+			})
+			_ = telemetry.Record(ctx, telemetry.Event{Type: telemetry.EventApprovalRequested, Payload: payload})
+			if approver == nil {
+				return "", ApprovalRequiredError{Request: ShellApprovalRequest{Command: cmdStr, ValidationError: assessment.Reason, Effects: assessment.Effects}}
+			}
+			decision, approvalErr := approver.Approve(ctx, ShellApprovalRequest{
+				Command:         cmdStr,
+				ValidationError: assessment.Reason,
+				Effects:         assessment.Effects,
+			})
+			if approvalErr != nil {
+				return "", approvalErr
+			}
+			if !decision.Approved {
+				return "", fmt.Errorf("security violation: approval gate did not approve command")
+			}
+			approvalMode = decision.Mode
+			historyNote = strings.TrimSpace(decision.HistoryNote)
+			if decision.Remember && s.securityPolicy.Bool(securitypolicy.SettingRememberApprovals) && assessment.Decision == securitypolicy.DecisionAsk {
+				s.rememberApprovedSegments(ctx, parsedCommand, decision)
+			}
+		}
+	} else if s.unrestricted {
 		approvalMode = SafetyModeUnrestricted
 	} else {
 		_, err = validateAllowedShellCommand(cmdStr, s.allowedCommands, s.approvedCommands)
 	}
-	if !s.unrestricted && (err != nil || s.approvalRequired) {
+	if s.securityPolicy == nil && !s.unrestricted && (err != nil || s.approvalRequired) {
 		validationMessage := "safety mode requires user approval before every command"
 		if err != nil {
 			validationMessage = err.Error()
@@ -625,13 +710,13 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	}
 	EmitEvent(ctx, Event{
 		Type:         EventShellApproval,
-		Command:      cmdStr,
+		Command:      secrets.Mask(cmdStr),
 		ApprovalMode: approvalMode,
 		Success:      true,
 	})
 	payload, _ := json.Marshal(map[string]any{
 		"tool_name":     "shell_execute",
-		"command":       cmdStr,
+		"command":       secrets.Mask(cmdStr),
 		"approval_mode": approvalMode,
 	})
 	_ = telemetry.Record(ctx, telemetry.Event{
@@ -639,14 +724,17 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		Payload: payload,
 	})
 
-	logger.Info("executing shell command", "command", cmdStr)
+	logger.Info("executing shell command", "command", secrets.Mask(cmdStr))
 
 	// Wrap context with timeout
 	cmdCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, "sh", "-c", cmdStr)
-	const maxOutput = 4096
+	maxOutput := s.maxOutput
+	if maxOutput <= 0 {
+		maxOutput = 4096
+	}
 	stream := newStreamCaptureWriter(ctx, maxOutput)
 	cmd.Stdout = stream
 	cmd.Stderr = stream
@@ -692,6 +780,11 @@ func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedS
 			continue
 		}
 		s.approvedCommands[segment.Normalized] = true
+		if s.securityPolicy != nil {
+			// New policy approvals are deliberately process-local. Legacy durable
+			// command strings lack target, policy, and expiry binding.
+			continue
+		}
 
 		if s.approvalStore == nil || !s.approvalStore.Available() {
 			continue
@@ -706,6 +799,18 @@ func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedS
 			log.FromContext(ctx).Warn("failed to persist command approval", "command", segment.Normalized, "error", err)
 		}
 	}
+}
+
+func allSegmentsApproved(parsed ParsedShellCommand, approved map[string]bool) bool {
+	if len(parsed.Segments) == 0 {
+		return false
+	}
+	for _, segment := range parsed.Segments {
+		if !approved[segment.Normalized] {
+			return false
+		}
+	}
+	return true
 }
 
 func errorString(err error) string {

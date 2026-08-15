@@ -7,6 +7,7 @@ import (
 	"github.com/coolcake/cvkeharness/internal/promptdump"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/securitypolicy"
 	"github.com/coolcake/cvkeharness/state"
 )
 
@@ -22,6 +23,7 @@ type DefaultRegistryOptions struct {
 	PromptDumper         *promptdump.Dumper
 	WebSearch            WebSearchOptions
 	BlockManualApprovals bool
+	SecurityPolicy       *securitypolicy.EffectivePolicy
 }
 
 // NewDefaultRegistry creates the standard tool registry used by the CLI.
@@ -63,25 +65,24 @@ func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, erro
 	registry := NewRegistry()
 
 	var approver ShellApprover
+	var humanApprover ShellApprover
+	if opts.BlockManualApprovals {
+		humanApprover = NewBlockingApprover()
+	} else {
+		humanApprover = NewUserPromptApprover(os.Stdin, os.Stdout)
+	}
+	llmApprover := NewLLMJudgeApproverWithPromptDumper(opts.Judge, opts.SafetyModel, opts.PromptDumper)
 	switch opts.SafetyMode {
 	case "", SafetyModeLLMJudge:
-		approver = NewLLMJudgeApproverWithPromptDumper(opts.Judge, opts.SafetyModel, opts.PromptDumper)
+		approver = llmApprover
 	case SafetyModeUserConfirm:
-		if opts.BlockManualApprovals {
-			approver = NewBlockingApprover()
-		} else {
-			approver = NewUserPromptApprover(os.Stdin, os.Stdout)
-		}
+		approver = humanApprover
 	case SafetyModeUserConfirmAll:
-		if opts.BlockManualApprovals {
-			approver = NewBlockingApprover()
-		} else {
-			approver = NewUserPromptApprover(os.Stdin, os.Stdout)
-		}
+		approver = humanApprover
 	}
 
 	var approvedCommands []string
-	if opts.Store != nil && opts.Store.Available() {
+	if opts.SecurityPolicy == nil && opts.Store != nil && opts.Store.Available() {
 		if approvals, err := opts.Store.ListApprovedCommandApprovals(context.Background()); err == nil {
 			for _, approval := range approvals {
 				approvedCommands = append(approvedCommands, approval.Command)
@@ -104,6 +105,9 @@ func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, erro
 		}
 	}
 	shell := NewShellToolWithApprovals(opts.AllowedCommands, approvedCommands, approver, opts.PrimaryModel, opts.Store)
+	if opts.SecurityPolicy != nil {
+		shell.applySecurityPolicy(*opts.SecurityPolicy, humanApprover, llmApprover)
+	}
 	switch opts.SafetyMode {
 	case SafetyModeUserConfirmAll:
 		shell.approvalRequired = true

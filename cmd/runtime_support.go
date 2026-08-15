@@ -105,6 +105,10 @@ func routingConfigFromConfig(cfg *config.Config, store *state.Store) core.Routin
 }
 
 func defaultRegistryFromConfig(cfg *config.Config, store *state.Store, mem *memory.Manager, judge provider.Provider, promptDumper *promptdump.Dumper, blockManualApprovals bool) (*tools.Registry, error) {
+	securityPolicy, err := cfg.EffectiveSecurity()
+	if err != nil {
+		return nil, fmt.Errorf("resolve security policy: %w", err)
+	}
 	return tools.NewDefaultRegistryFromOptions(tools.DefaultRegistryOptions{
 		AllowedCommands:      cfg.AllowedCommands,
 		Store:                store,
@@ -115,6 +119,7 @@ func defaultRegistryFromConfig(cfg *config.Config, store *state.Store, mem *memo
 		PrimaryModel:         cfg.PrimaryModel(),
 		PromptDumper:         promptDumper,
 		BlockManualApprovals: blockManualApprovals,
+		SecurityPolicy:       &securityPolicy,
 		WebSearch: tools.WebSearchOptions{
 			Enabled:         cfg.WebSearch.Enabled,
 			Provider:        cfg.WebSearch.Provider,

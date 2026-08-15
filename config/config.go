@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/coolcake/cvkeharness/securitypolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -15,32 +16,33 @@ type Config struct {
 	// APIKeys stores credentials keyed by provider name (e.g. "openrouter",
 	// "anthropic"). All providers are preserved so a user switching providers
 	// never has to re-enter a key they already validated.
-	APIKeys                 map[string]string `yaml:"api_keys,omitempty"`
-	BaseURL                 string            `yaml:"base_url,omitempty"` // Used for local providers (e.g. LM Studio)
-	Model                   string            `yaml:"model,omitempty"`    // legacy read compatibility only
-	DefaultModel            string            `yaml:"default_model,omitempty"`
-	PlanningModel           string            `yaml:"planning_model,omitempty"`
-	ExecutionModel          string            `yaml:"execution_model,omitempty"`
-	CurationModel           string            `yaml:"curation_model,omitempty"`
-	SafetyMode              string            `yaml:"safety_mode,omitempty"`
-	SafetyModel             string            `yaml:"safety_model"`
-	MaxTokens               int               `yaml:"max_tokens"`
-	MaxIterations           int               `yaml:"max_iterations"`
-	LogLevel                string            `yaml:"log_level"`
-	AllowedCommands         []string          `yaml:"allowed_commands"`
-	RoutingEnabled          bool              `yaml:"routing_enabled,omitempty"`
-	RoutingMode             string            `yaml:"routing_mode,omitempty"`
-	ApprovedModels          []string          `yaml:"approved_models,omitempty"`
-	FavoriteModels          []string          `yaml:"favorite_models,omitempty"`
-	MemoryDir               string            `yaml:"memory_dir,omitempty"`
-	StateDBPath             string            `yaml:"state_db_path,omitempty"`
-	DebugPromptDumps        bool              `yaml:"debug_prompt_dumps,omitempty"`
-	PromptDumpDir           string            `yaml:"prompt_dump_dir,omitempty"`
-	PromptDumpRetentionDays int               `yaml:"prompt_dump_retention_days,omitempty"`
-	RoutingMinConfidence    float64           `yaml:"routing_min_confidence,omitempty"`
-	SetupAgentMode          string            `yaml:"setup_agent_mode,omitempty"`
-	CapabilityPolicy        CapabilityPolicy  `yaml:"capability_policy,omitempty"`
-	WebSearch               WebSearchConfig   `yaml:"web_search,omitempty"`
+	APIKeys                 map[string]string         `yaml:"api_keys,omitempty"`
+	BaseURL                 string                    `yaml:"base_url,omitempty"` // Used for local providers (e.g. LM Studio)
+	Model                   string                    `yaml:"model,omitempty"`    // legacy read compatibility only
+	DefaultModel            string                    `yaml:"default_model,omitempty"`
+	PlanningModel           string                    `yaml:"planning_model,omitempty"`
+	ExecutionModel          string                    `yaml:"execution_model,omitempty"`
+	CurationModel           string                    `yaml:"curation_model,omitempty"`
+	SafetyMode              string                    `yaml:"safety_mode,omitempty"`
+	SafetyModel             string                    `yaml:"safety_model"`
+	MaxTokens               int                       `yaml:"max_tokens"`
+	MaxIterations           int                       `yaml:"max_iterations"`
+	LogLevel                string                    `yaml:"log_level"`
+	AllowedCommands         []string                  `yaml:"allowed_commands"`
+	RoutingEnabled          bool                      `yaml:"routing_enabled,omitempty"`
+	RoutingMode             string                    `yaml:"routing_mode,omitempty"`
+	ApprovedModels          []string                  `yaml:"approved_models,omitempty"`
+	FavoriteModels          []string                  `yaml:"favorite_models,omitempty"`
+	MemoryDir               string                    `yaml:"memory_dir,omitempty"`
+	StateDBPath             string                    `yaml:"state_db_path,omitempty"`
+	DebugPromptDumps        bool                      `yaml:"debug_prompt_dumps,omitempty"`
+	PromptDumpDir           string                    `yaml:"prompt_dump_dir,omitempty"`
+	PromptDumpRetentionDays int                       `yaml:"prompt_dump_retention_days,omitempty"`
+	RoutingMinConfidence    float64                   `yaml:"routing_min_confidence,omitempty"`
+	SetupAgentMode          string                    `yaml:"setup_agent_mode,omitempty"`
+	CapabilityPolicy        CapabilityPolicy          `yaml:"capability_policy,omitempty"`
+	WebSearch               WebSearchConfig           `yaml:"web_search,omitempty"`
+	Security                *securitypolicy.Selection `yaml:"security,omitempty"`
 }
 
 // CapabilityPolicy captures durable user preferences collected during setup.
@@ -174,6 +176,11 @@ func (c *Config) Normalize() {
 	if c.CapabilityPolicy.InstallMissingTools == "" {
 		c.CapabilityPolicy.InstallMissingTools = "ask"
 	}
+	if c.Security == nil {
+		c.Security = c.migrateLegacySecurity()
+	}
+	c.Security.Normalize()
+	c.projectLegacySecurity()
 	c.normalizeWebSearch()
 	if len(c.ApprovedModels) == 0 && c.DefaultModel != "" && c.Provider != "" {
 		c.ApprovedModels = []string{c.Provider + "/" + c.DefaultModel}
@@ -181,6 +188,44 @@ func (c *Config) Normalize() {
 	c.ApprovedModels = normalizeModelRefList(c.ApprovedModels)
 	c.FavoriteModels = normalizeModelRefList(c.FavoriteModels)
 	ensureAllowedCommand(c, "echo")
+}
+
+// Validate rejects invalid security settings instead of silently falling back
+// to a weaker profile.
+func (c *Config) Validate() error {
+	if c.Security == nil {
+		return fmt.Errorf("security configuration is required")
+	}
+	return c.Security.Validate()
+}
+
+// EffectiveSecurity returns the single resolved policy used by runtimes.
+func (c *Config) EffectiveSecurity() (securitypolicy.EffectivePolicy, error) {
+	if c == nil {
+		return securitypolicy.EffectivePolicy{}, fmt.Errorf("configuration is required")
+	}
+	return securitypolicy.Resolve(c.Security)
+}
+
+// Clone returns a deep copy suitable for an immutable session snapshot.
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.Security = c.Security.Clone()
+	if c.APIKeys != nil {
+		out.APIKeys = make(map[string]string, len(c.APIKeys))
+		for key, value := range c.APIKeys {
+			out.APIKeys[key] = value
+		}
+	}
+	out.AllowedCommands = append([]string(nil), c.AllowedCommands...)
+	out.ApprovedModels = append([]string(nil), c.ApprovedModels...)
+	out.FavoriteModels = append([]string(nil), c.FavoriteModels...)
+	out.WebSearch.AllowedDomains = append([]string(nil), c.WebSearch.AllowedDomains...)
+	out.WebSearch.BlockedDomains = append([]string(nil), c.WebSearch.BlockedDomains...)
+	return &out
 }
 
 // ConfigPath returns the path to the config file (~/.cvkeharness/config.yaml).
@@ -239,6 +284,9 @@ func (c *Config) Save() error {
 	}
 
 	c.Normalize()
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
 	// Keep reading legacy `model`, but stop actively persisting it.
 	c.Model = ""
 
@@ -247,7 +295,36 @@ func (c *Config) Save() error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0600)
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	if handle, err := os.Open(dir); err == nil {
+		_ = handle.Sync()
+		_ = handle.Close()
+	}
+	return nil
 }
 
 // DefaultConfig provides sensible defaults for a new setup.
@@ -267,6 +344,7 @@ func DefaultConfig() *Config {
 		PromptDumpRetentionDays: 7,
 		RoutingMinConfidence:    0.55,
 		SetupAgentMode:          "guided",
+		Security:                securitypolicy.DefaultSelection(),
 		CapabilityPolicy: CapabilityPolicy{
 			PythonScripts:         "ask",
 			ScriptWriteDir:        defaultHarnessPath("scripts"),
@@ -285,6 +363,60 @@ func DefaultConfig() *Config {
 		AllowedCommands: []string{
 			"df", "echo", "free", "uptime", "ps", "netstat", "systemctl", "journalctl",
 		},
+	}
+}
+
+func (c *Config) migrateLegacySecurity() *securitypolicy.Selection {
+	selection := securitypolicy.DefaultSelection()
+	switch c.SafetyMode {
+	case "user_confirm_all":
+		selection.Profile = securitypolicy.ProfileExtraStrict
+	case "unrestricted":
+		selection.Profile = securitypolicy.ProfileYOLO
+	}
+	legacyOverrides := map[string]string{
+		securitypolicy.SettingScriptExecution: c.CapabilityPolicy.PythonScripts,
+		securitypolicy.SettingReadCommands:    c.CapabilityPolicy.AutonomousDiagnostics,
+		securitypolicy.SettingNetworkAccess:   c.CapabilityPolicy.NetworkProbes,
+		securitypolicy.SettingPackageChanges:  c.CapabilityPolicy.InstallMissingTools,
+	}
+	for id, value := range legacyOverrides {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" || value == "ask" {
+			continue
+		}
+		_ = selection.SetOverride(id, value)
+	}
+	return selection
+}
+
+func (c *Config) projectLegacySecurity() {
+	effective, err := securitypolicy.Resolve(c.Security)
+	if err != nil {
+		return
+	}
+	switch effective.Profile {
+	case securitypolicy.ProfileExtraStrict:
+		c.SafetyMode = "user_confirm_all"
+	case securitypolicy.ProfileYOLO:
+		c.SafetyMode = "unrestricted"
+	default:
+		c.SafetyMode = "llm_judge"
+	}
+	c.CapabilityPolicy.PythonScripts = legacyDecision(effective.Decision(securitypolicy.SettingScriptExecution))
+	c.CapabilityPolicy.AutonomousDiagnostics = legacyDecision(effective.Decision(securitypolicy.SettingReadCommands))
+	c.CapabilityPolicy.NetworkProbes = legacyDecision(effective.Decision(securitypolicy.SettingNetworkAccess))
+	c.CapabilityPolicy.InstallMissingTools = legacyDecision(effective.Decision(securitypolicy.SettingPackageChanges))
+}
+
+func legacyDecision(decision securitypolicy.Decision) string {
+	switch decision {
+	case securitypolicy.DecisionAllow:
+		return "allow"
+	case securitypolicy.DecisionDeny:
+		return "deny"
+	default:
+		return "ask"
 	}
 }
 

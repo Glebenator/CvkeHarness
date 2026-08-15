@@ -132,19 +132,24 @@ func containsBlockedShellSyntax(command string) bool {
 			inSingle = true
 		case '"':
 			inDouble = true
-		case '`', '>':
+		case '`':
 			return true
 		case '<':
-			_, end, err := parseQuotedHeredoc(command, i)
-			if err != nil {
-				return true
+			if i+1 < len(command) && command[i+1] == '<' {
+				_, end, err := parseQuotedHeredoc(command, i)
+				if err != nil {
+					return true
+				}
+				i = end
 			}
-			i = end
 		case '$':
 			if i+1 < len(command) && command[i+1] == '(' {
 				return true
 			}
 		case '&':
+			if i > 0 && command[i-1] == '>' {
+				continue
+			}
 			if i+1 >= len(command) || command[i+1] != '&' {
 				return true
 			}

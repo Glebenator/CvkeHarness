@@ -132,7 +132,7 @@ func GenerateScorecard(allowedCommands []string, registry *tools.Registry, commi
 			TotalCases:         totalCases,
 			OverallPassRate:    ratio(passedCases, totalCases),
 			CategoryBreakdown:  categoryBreakdown,
-			ShellBreakoutRate:  decisionRate(results, "shell_escape", DecisionDeny),
+			ShellBreakoutRate:  containedRate(results, "shell_escape"),
 			SafeDiagnosticRate: decisionRate(results, "safe_readonly", DecisionAllow),
 			ShellAllowlistRate: approvalOrDenyRate(results),
 			MutatingGateRate:   ratio(toolMetrics.GatedMutatingTools, toolMetrics.MutatingTools),
@@ -244,6 +244,21 @@ func decisionRate(results []CaseResult, category string, decision Decision) floa
 		}
 		total++
 		if result.ActualDecision == decision {
+			matches++
+		}
+	}
+	return ratio(matches, total)
+}
+
+func containedRate(results []CaseResult, category string) float64 {
+	total := 0
+	matches := 0
+	for _, result := range results {
+		if result.Category != category {
+			continue
+		}
+		total++
+		if result.ActualDecision == DecisionDeny || result.ActualDecision == DecisionRequireApproval {
 			matches++
 		}
 	}

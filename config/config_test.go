@@ -4,7 +4,56 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/coolcake/cvkeharness/securitypolicy"
 )
+
+func TestDefaultConfigUsesReasonableSecurity(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+	cfg.Normalize()
+	effective, err := cfg.EffectiveSecurity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effective.Profile != securitypolicy.ProfileReasonable {
+		t.Fatalf("profile = %q", effective.Profile)
+	}
+	if effective.Decision(securitypolicy.SettingFileDelete) != securitypolicy.DecisionAsk {
+		t.Fatalf("reasonable delete policy = %q", effective.Decision(securitypolicy.SettingFileDelete))
+	}
+}
+
+func TestLegacySecurityModesMigrate(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		mode    string
+		profile securitypolicy.Profile
+	}{
+		{"llm_judge", securitypolicy.ProfileReasonable},
+		{"user_confirm", securitypolicy.ProfileReasonable},
+		{"user_confirm_all", securitypolicy.ProfileExtraStrict},
+		{"unrestricted", securitypolicy.ProfileYOLO},
+	}
+	for _, tc := range cases {
+		cfg := &Config{SafetyMode: tc.mode, CapabilityPolicy: CapabilityPolicy{PythonScripts: "ask", AutonomousDiagnostics: "ask", NetworkProbes: "ask", InstallMissingTools: "ask"}}
+		cfg.Normalize()
+		if cfg.Security == nil || cfg.Security.Profile != tc.profile {
+			t.Fatalf("mode %s migrated to %#v, want %s", tc.mode, cfg.Security, tc.profile)
+		}
+	}
+}
+
+func TestConfigCloneDeepCopiesSecurityOverrides(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+	_ = cfg.Security.SetOverride(securitypolicy.SettingFileDelete, string(securitypolicy.DecisionDeny))
+	clone := cfg.Clone()
+	_ = clone.Security.SetOverride(securitypolicy.SettingFileDelete, string(securitypolicy.DecisionAllow))
+	if cfg.Security.Overrides[securitypolicy.SettingFileDelete] != string(securitypolicy.DecisionDeny) {
+		t.Fatal("clone mutated source security overrides")
+	}
+}
 
 func TestDefaultConfigIncludesEchoInAllowedCommands(t *testing.T) {
 	t.Parallel()
