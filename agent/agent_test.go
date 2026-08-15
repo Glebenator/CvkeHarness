@@ -115,3 +115,25 @@ func TestClassifyPolicyDenialIgnoresWebValidationErrors(t *testing.T) {
 		t.Fatalf("expected web validation error to avoid shell policy classification, got denied=%v class=%q", denied, denialClass)
 	}
 }
+
+func TestRedactedBlockedApprovalMasksOperatorFacingFields(t *testing.T) {
+	t.Parallel()
+
+	secret := "sk-blockedapprovalvalue123456789"
+	approval := redactedBlockedApproval(tools.ShellApprovalRequest{
+		Command:         "curl https://example.com api_key=" + secret,
+		ValidationError: "credential " + secret + " requires approval",
+		Effects: []tools.ShellEffect{{
+			Setting: "network_access",
+			Detail:  "send token " + secret,
+			Target:  "example.com/" + secret,
+		}},
+	})
+	serialized := fmt.Sprintf("%#v", approval)
+	if strings.Contains(serialized, secret) {
+		t.Fatalf("blocked approval leaked secret: %s", serialized)
+	}
+	if !strings.Contains(serialized, "[REDACTED]") {
+		t.Fatalf("expected blocked approval to preserve a redaction marker: %s", serialized)
+	}
+}

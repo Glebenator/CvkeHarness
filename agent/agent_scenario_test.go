@@ -106,6 +106,7 @@ func TestRunScenarioApprovalWaitBecomesBlockedStateWithoutVerifierLoop(t *testin
 	defer store.Close()
 	registry := tools.NewRegistry()
 	registry.Register(tools.NewShellToolWithApprover([]string{"ps"}, tools.NewBlockingApprover(), "primary"))
+	observer := &memoryEventObserver{}
 
 	result, err := New(Options{
 		Provider:                      provider,
@@ -117,12 +118,32 @@ func TestRunScenarioApprovalWaitBecomesBlockedStateWithoutVerifierLoop(t *testin
 		DisableCompletionVerification: true,
 		MemoryRetriever:               &memoryStub{},
 		BlockedWorkStore:              store,
+		EventObserver:                 observer,
 	}).Run(context.Background(), "run echo")
 	if err == nil {
 		t.Fatal("expected approval wait to return a blocked error")
 	}
 	if result.Run.TaskState != state.TaskStateBlockedWaitingUser || result.Run.Success {
 		t.Fatalf("expected blocked task state, got %#v", result.Run)
+	}
+	if result.BlockedWorkID == "" {
+		t.Fatal("expected blocked run result to expose the persisted work id")
+	}
+	if result.BlockedApproval == nil || result.BlockedApproval.Action != "echo hello" || strings.TrimSpace(result.BlockedApproval.Reason) == "" {
+		t.Fatalf("expected redacted approval context, got %#v", result.BlockedApproval)
+	}
+	if len(result.Run.Tools) != 1 || result.Run.Tools[0].DenialClass != "approval_required" {
+		t.Fatalf("expected blocked tool outcome to be retained, got %#v", result.Run.Tools)
+	}
+	var approvalEvent tools.Event
+	for _, event := range observer.events {
+		if event.Type == tools.EventApprovalRequired {
+			approvalEvent = event
+			break
+		}
+	}
+	if approvalEvent.BlockedWorkID == "" || approvalEvent.Command != "echo hello" || strings.TrimSpace(approvalEvent.ApprovalReason) == "" {
+		t.Fatalf("expected structured approval-required event, got %#v", approvalEvent)
 	}
 	provider.AssertComplete(t)
 

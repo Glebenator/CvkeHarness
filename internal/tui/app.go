@@ -28,6 +28,43 @@ var tabNames = [tabCount]string{
 	"Settings",
 }
 
+// InitialView identifies the console workspace shown at startup.
+type InitialView string
+
+const (
+	InitialViewOverview InitialView = "overview"
+	InitialViewJobs     InitialView = "jobs"
+	InitialViewRuns     InitialView = "runs"
+	InitialViewChat     InitialView = "chat"
+	InitialViewSettings InitialView = "settings"
+)
+
+// ParseInitialView validates a user-facing console view name.
+func ParseInitialView(value string) (InitialView, error) {
+	view := InitialView(strings.ToLower(strings.TrimSpace(value)))
+	switch view {
+	case InitialViewOverview, InitialViewJobs, InitialViewRuns, InitialViewChat, InitialViewSettings:
+		return view, nil
+	default:
+		return "", fmt.Errorf("unknown console view %q; choose overview, jobs, runs, chat, or settings", value)
+	}
+}
+
+func (v InitialView) tabIndex() int {
+	switch v {
+	case InitialViewJobs:
+		return tabJobs
+	case InitialViewRuns:
+		return tabRuns
+	case InitialViewChat:
+		return tabChat
+	case InitialViewSettings:
+		return tabConfig
+	default:
+		return tabOverview
+	}
+}
+
 // ── messages ────────────────────────────────────────────────────────
 
 type tickMsg time.Time
@@ -73,8 +110,8 @@ type model struct {
 	showHelp   bool
 }
 
-// Run starts the Bubble Tea TUI.
-func Run(svc *Service, binaryName string) error {
+// Run starts the Bubble Tea operations console.
+func Run(svc *Service, binaryName string, initialView InitialView) error {
 	if svc != nil {
 		svc.SetBinaryName(binaryName)
 	}
@@ -83,6 +120,7 @@ func Run(svc *Service, binaryName string) error {
 		binaryName: binaryName,
 		width:      80,
 		height:     24,
+		activeTab:  initialView.tabIndex(),
 		tabs: [tabCount]tabModel{
 			newOverviewTab(),
 			newJobsTab(),
@@ -90,6 +128,9 @@ func Run(svc *Service, binaryName string) error {
 			newChatTab(),
 			newConfigTab(),
 		},
+	}
+	if activator, ok := m.tabs[m.activeTab].(tabActivator); ok {
+		activator.Activate()
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	finalModel, err := p.Run()

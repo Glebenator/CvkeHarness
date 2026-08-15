@@ -1,4 +1,4 @@
-# CvkeHarness Guided Console Design System
+# CvkeHarness Operations Console Design System
 
 ## Physical scene and theme
 
@@ -28,7 +28,7 @@ Use the terminal's native monospace. Establish hierarchy through weight, spacing
 - Setup has four grouped stages: Connect, Safety, Capabilities, Ready.
 - At 80 columns use one column, compact spacing, wrapped row descriptions, and no horizontal clipping.
 - At 100 columns provide wider explanations and calmer spacing.
-- At 120 columns chat may show a secondary context pane.
+- At 120 columns the Chat workspace may show a secondary context pane.
 - Avoid containers unless they establish an actual interaction boundary, such as the composer or expanded tool output.
 
 ## Components

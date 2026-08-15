@@ -10,9 +10,9 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "cvkeharness",
-	Short: "CvkeHarness is a lightweight LLM DevOps agent",
-	Long: `A provider-agnostic Go harness that wires LLM reasoning to DevOps tooling
-(Docker, healthchecks, shell) via a robust agentic loop.`,
+	Short: "CvkeHarness is a local-first operations agent",
+	Long: `Run one bounded operations task and exit, or open the interactive console
+for ongoing chat, approvals, tool activity, verification, history, and jobs.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Initialize default logger just in case, setup/run commands will re-init with config
 		log.Init("info", "text")

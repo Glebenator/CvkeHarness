@@ -13,9 +13,9 @@ import (
 	"github.com/coolcake/cvkeharness/tools"
 )
 
-// newChatAgent constructs the shared chat runtime used by both the line-oriented
-// CLI and the Bubble Tea console. UI-specific input and rendering stay outside
-// this boundary.
+// newChatAgent constructs the in-process conversation runtime used by the
+// operations console. UI-specific input and rendering stay outside this
+// boundary.
 func newChatAgent(
 	ctx context.Context,
 	cfg *config.Config,

@@ -1,6 +1,6 @@
 # CvkeHarness Architecture
 
-This document maps the current architecture of CvkeHarness as implemented in the repository on 2026-04-22.
+This document maps the current architecture of CvkeHarness as implemented in the repository on 2026-08-15.
 
 It focuses on:
 
@@ -15,7 +15,7 @@ It focuses on:
 | Package / Area | Responsibility |
 | --- | --- |
 | `main.go` | Thin executable entrypoint that delegates to Cobra. |
-| `cmd/` | CLI surface: setup/settings wizard, runtime execution, chat, memory/model/command admin, safety commands. |
+| `cmd/` | Command surface: setup/settings wizard, bounded runtime execution, interactive operations console, memory/model/command admin, and safety commands. |
 | `agent/` | Main orchestration loop for routed planning, execution, chat, and deterministic memory curation. |
 | `core/` | Shared domain types for phases, routing, task classes, model refs, and retrieval context. |
 | `provider/` | Provider abstraction plus concrete Codex ChatGPT, OpenRouter, OpenAI, and LM Studio adapters. |
@@ -39,7 +39,7 @@ flowchart TB
     subgraph CLI["CLI Command Surface (`cmd/`)"]
         setup["setup / settings\nInteractive wizard"]
         run["run [task]\nPrimary agent runtime"]
-        chat["chat\nInteractive session"]
+        console["console [--view]\nInteractive operations workspace"]
         memoryCmd["memory show|rollback|reindex"]
         modelsCmd["models shortlist|approve|stats"]
         commandsCmd["commands list|approve"]
@@ -135,7 +135,7 @@ flowchart TB
     user --> main --> root
     root --> setup
     root --> run
-    root --> chat
+    root --> console
     root --> memoryCmd
     root --> modelsCmd
     root --> commandsCmd
@@ -157,14 +157,14 @@ flowchart TB
     run --> agent
     run --> slog
 
-    chat --> configPkg
-    chat --> providerResolver
-    chat --> routingCfg
-    chat --> store
-    chat --> manager
-    chat --> registry
-    chat --> router
-    chat --> agent
+    console --> configPkg
+    console --> providerResolver
+    console --> routingCfg
+    console --> store
+    console --> manager
+    console --> registry
+    console --> router
+    console --> agent
 
     routingCfg --> configPkg
     routingCfg --> store
@@ -375,7 +375,7 @@ sequenceDiagram
 - `main.go` is intentionally thin and hands control to Cobra.
 - `cmd/root.go` initializes default logging in `PersistentPreRun`.
 - `cmd/run.go` is the composition root for the main runtime.
-- `cmd/chat.go` assembles the same runtime components for interactive work.
+- `cmd/tui.go`, `cmd/chat_agent.go`, and `cmd/chat_session.go` assemble the interactive console and its persisted conversation runtime.
 - `cmd/setup.go` and `cmd/setup_soul.go` form a full-screen setup wizard that:
   - selects the provider
   - validates Codex CLI ChatGPT login, OpenRouter/OpenAI credentials, or LM Studio base URLs
@@ -546,7 +546,7 @@ The red-team harness deliberately reuses `agent.Agent`, which means the safety w
 
 ## Key Architectural Strengths
 
-- clear composition roots in `cmd/run.go` and `cmd/chat.go`
+- clear composition roots for bounded work in `cmd/run.go` and interactive work in `cmd/tui.go`
 - good separation between orchestration, routing, tools, memory, persistence, and providers
 - target-aware memory balances human readability with deterministic retrieval
 - routing is adaptive but still approval-bounded

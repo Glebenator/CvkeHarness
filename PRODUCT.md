@@ -4,7 +4,7 @@ register: product
 
 ## Product purpose
 
-CvkeHarness is a local-first Go operations agent. The Guided Console should help an operator reach a safe working agent quickly, then converse with it while keeping the active target, model, tools, approval posture, and verification state legible.
+CvkeHarness is a local-first Go operations agent with two deliberate interaction contracts. `run` executes one bounded task and exits. The operations console supports ongoing conversation and control while keeping the active target, model, tools, approval posture, and verification state legible.
 
 ## Users
 
@@ -17,6 +17,7 @@ Calm, precise, and trustworthy. Copy should explain consequences without alarmis
 ## Strategic principles
 
 - Preserve existing safety, approval, routing, memory, state, and telemetry boundaries.
+- Keep one-shot execution distinct from the stateful operations console.
 - Make target and execution context persistently visible.
 - Distinguish saving configuration from installing dependencies or starting a daemon.
 - Present one primary setup decision at a time with safe recommended defaults.
@@ -30,4 +31,4 @@ Avoid cyberpunk or Matrix terminal styling, generic card dashboards, long step r
 
 ## Scope
 
-This branch covers the four-stage setup experience, integrated chat, and shared reusable TUI foundations. Settings is not fully redesigned here, but foundations should support that later work.
+The current product surface covers the four-stage setup experience, the operations console with integrated Chat, and the bounded `run` command. Settings is not fully redesigned here, but the foundations should support that later work.

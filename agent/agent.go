@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -107,12 +108,27 @@ type Agent struct {
 	opts Options
 }
 
+// BlockedApproval is the redacted operator-facing context for work that is
+// waiting on an exact, one-use approval.
+type BlockedApproval struct {
+	Action           string
+	Reason           string
+	ActionKind       string
+	Effects          []tools.ShellEffect
+	Host             string
+	Principal        string
+	WorkingDirectory string
+}
+
 // RunResult contains the user-facing output plus structured execution details.
 type RunResult struct {
-	Output       string
-	Run          state.RunRecord
-	Routing      []core.RoutingSelection
-	Verification CompletionVerification
+	Output          string
+	Run             state.RunRecord
+	Routing         []core.RoutingSelection
+	Verification    CompletionVerification
+	Target          memory.TargetResolution
+	BlockedWorkID   string
+	BlockedApproval *BlockedApproval
 }
 
 // New creates a new Agent.
@@ -208,8 +224,16 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 	result.Output = output
 	result.Routing = routingSelections
 	result.Verification = verification
+	result.Target = targetResolution
 	if execErr != nil {
 		err = execErr
+		if isBlockedTaskError(execErr) {
+			var blocked blockedTaskError
+			if errors.As(execErr, &blocked) {
+				result.BlockedWorkID = blocked.workID
+				result.BlockedApproval = redactedBlockedApproval(blocked.request)
+			}
+		}
 	}
 
 	if a.opts.MemoryCurator != nil && !isBlockedTaskError(execErr) {
@@ -518,10 +542,30 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 
 				if approvalErr, ok := tools.IsApprovalRequired(toolErr); ok {
 					phaseRecord.Success = false
+					outcome.PolicyDenied = true
+					outcome.DenialClass = "approval_required"
 					workID, persistErr := a.persistBlockedWork(iterCtx, prompt, taskClass, targetResolution, chat.Messages(), call, approvalErr)
 					if persistErr != nil {
 						return output, phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, persistErr
 					}
+					tools.EmitEvent(toolCtx, tools.Event{
+						Type:            tools.EventApprovalRequired,
+						BlockedWorkID:   workID,
+						Command:         secrets.Mask(strings.TrimSpace(approvalErr.Request.Command)),
+						ApprovalReason:  secrets.Mask(strings.TrimSpace(approvalErr.Request.ValidationError)),
+						ApprovalEffects: redactedApprovalEffects(approvalErr.Request.Effects),
+					})
+					outcome.OutputInline, outcome.OutputOriginalBytes, outcome.OutputStoredBytes, outcome.OutputTruncated, outcome.OutputDigest = state.SummarizeToolOutput(resultStr)
+					toolOutcomes = append(toolOutcomes, outcome)
+					observedCalls = append(observedCalls, memory.ObservedToolCall{
+						ToolName:     call.Function.Name,
+						Command:      command,
+						Result:       resultStr,
+						Success:      false,
+						PolicyDenied: outcome.PolicyDenied,
+						DenialClass:  outcome.DenialClass,
+						DurationMs:   durationMs,
+					})
 					_ = telemetry.Record(telemetry.WithFields(iterCtx, telemetry.Fields{TaskState: string(state.TaskStateBlockedWaitingUser)}), telemetry.Event{
 						Type:      telemetry.EventTaskBlocked,
 						TaskState: string(state.TaskStateBlockedWaitingUser),
@@ -611,6 +655,30 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	latestVerification.StopReason = tools.VerificationStopIterationLimit
 	emitVerificationActivity(ctx, latestVerification, tools.VerificationPhaseStopped, true)
 	return output, phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("agent exceeded max iterations (%d) without completing the task", a.opts.MaxIterations)
+}
+
+func redactedBlockedApproval(request tools.ShellApprovalRequest) *BlockedApproval {
+	return &BlockedApproval{
+		Action:           secrets.Mask(strings.TrimSpace(request.Command)),
+		Reason:           secrets.Mask(strings.TrimSpace(request.ValidationError)),
+		ActionKind:       strings.TrimSpace(request.ActionKind),
+		Effects:          redactedApprovalEffects(request.Effects),
+		Host:             secrets.Mask(strings.TrimSpace(request.Grant.Host)),
+		Principal:        secrets.Mask(strings.TrimSpace(request.Grant.Principal)),
+		WorkingDirectory: secrets.Mask(strings.TrimSpace(request.Grant.WorkingDirectory)),
+	}
+}
+
+func redactedApprovalEffects(effects []tools.ShellEffect) []tools.ShellEffect {
+	redacted := make([]tools.ShellEffect, 0, len(effects))
+	for _, effect := range effects {
+		redacted = append(redacted, tools.ShellEffect{
+			Setting: strings.TrimSpace(effect.Setting),
+			Detail:  secrets.Mask(strings.TrimSpace(effect.Detail)),
+			Target:  secrets.Mask(strings.TrimSpace(effect.Target)),
+		})
+	}
+	return redacted
 }
 
 func (a *Agent) withRunTelemetry(ctx context.Context) context.Context {

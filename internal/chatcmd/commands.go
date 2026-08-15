@@ -1,5 +1,5 @@
-// Package chatcmd defines the local slash commands shared by CvkeHarness chat
-// surfaces. Commands are parsed before prompts reach the agent runtime.
+// Package chatcmd defines local slash commands for the interactive operations
+// console. Commands are parsed before prompts reach the agent runtime.
 package chatcmd
 
 import "strings"
@@ -15,15 +15,6 @@ const (
 	Export  Action = "export"
 	Tools   Action = "tools"
 	History Action = "history"
-	Exit    Action = "exit"
-)
-
-// Surface identifies a chat UI with its own supported command set.
-type Surface uint8
-
-const (
-	CLI Surface = 1 << iota
-	TUI
 )
 
 // Command is display metadata for one canonical slash command.
@@ -34,99 +25,62 @@ type Command struct {
 	Description string
 }
 
-type definition struct {
-	command  Command
-	surfaces Surface
-}
-
-var definitions = []definition{
+var definitions = []Command{
 	{
-		command: Command{
-			Action:      New,
-			Name:        "/new",
-			Aliases:     []string{"/clear"},
-			Description: "Start a fresh in-process chat session",
-		},
-		surfaces: CLI | TUI,
+		Action:      New,
+		Name:        "/new",
+		Aliases:     []string{"/clear"},
+		Description: "Start a fresh in-process chat session",
 	},
 	{
-		command: Command{
-			Action:      Memory,
-			Name:        "/memory",
-			Description: "Show memory used by the latest model call",
-		},
-		surfaces: CLI | TUI,
+		Action:      Memory,
+		Name:        "/memory",
+		Description: "Show memory used by the latest model call",
 	},
 	{
-		command: Command{
-			Action:      Export,
-			Name:        "/export",
-			Description: "Write a private, redacted Markdown transcript",
-		},
-		surfaces: CLI | TUI,
+		Action:      Export,
+		Name:        "/export",
+		Description: "Write a private, redacted Markdown transcript",
 	},
 	{
-		command: Command{
-			Action:      Tools,
-			Name:        "/tools",
-			Description: "List registered tools and the authorization boundary",
-		},
-		surfaces: CLI | TUI,
+		Action:      Tools,
+		Name:        "/tools",
+		Description: "List registered tools and the authorization boundary",
 	},
 	{
-		command: Command{
-			Action:      History,
-			Name:        "/history",
-			Description: "Browse saved conversations",
-		},
-		surfaces: TUI,
+		Action:      History,
+		Name:        "/history",
+		Description: "Browse saved conversations",
 	},
 	{
-		command: Command{
-			Action:      Help,
-			Name:        "/help",
-			Description: "Show the available chat commands",
-		},
-		surfaces: CLI | TUI,
-	},
-	{
-		command: Command{
-			Action:      Exit,
-			Name:        "/exit",
-			Description: "End chat",
-		},
-		surfaces: CLI,
+		Action:      Help,
+		Name:        "/help",
+		Description: "Show the available chat commands",
 	},
 }
 
-// Parse resolves an exact, case-insensitive slash command available on the
-// requested surface. Unrecognized input is not treated as a command.
-func Parse(input string, surface Surface) Action {
+// Parse resolves an exact, case-insensitive slash command. Unrecognized input
+// is not treated as a command.
+func Parse(input string) Action {
 	input = strings.ToLower(strings.TrimSpace(input))
-	for _, def := range definitions {
-		if def.surfaces&surface == 0 {
-			continue
+	for _, command := range definitions {
+		if input == command.Name {
+			return command.Action
 		}
-		if input == def.command.Name {
-			return def.command.Action
-		}
-		for _, alias := range def.command.Aliases {
+		for _, alias := range command.Aliases {
 			if input == alias {
-				return def.command.Action
+				return command.Action
 			}
 		}
 	}
 	return None
 }
 
-// Available returns ordered command metadata for a surface.
-func Available(surface Surface) []Command {
+// Available returns ordered command metadata for the console.
+func Available() []Command {
 	commands := make([]Command, 0, len(definitions))
-	for _, def := range definitions {
-		if def.surfaces&surface == 0 {
-			continue
-		}
-		command := def.command
+	for _, definition := range definitions {
+		command := definition
 		command.Aliases = append([]string(nil), command.Aliases...)
 		commands = append(commands, command)
 	}
@@ -136,12 +90,12 @@ func Available(surface Surface) []Command {
 // Matches returns commands whose canonical name or alias begins with input.
 // It is intended for a local command palette while the first composer token is
 // being entered.
-func Matches(input string, surface Surface) []Command {
+func Matches(input string) []Command {
 	input = strings.ToLower(strings.TrimSpace(input))
 	if input == "" || !strings.HasPrefix(input, "/") || strings.HasPrefix(input, "//") || strings.ContainsAny(input, " \t\r\n") {
 		return nil
 	}
-	commands := Available(surface)
+	commands := Available()
 	matches := make([]Command, 0, len(commands))
 	for _, command := range commands {
 		if strings.HasPrefix(command.Name, input) {
@@ -159,11 +113,11 @@ func Matches(input string, surface Surface) []Command {
 }
 
 // IsUnknownSlash reports whether input looks like a local command but does not
-// resolve on the requested surface. A leading double slash escapes command
-// parsing so literal slash-prefixed prompts remain possible.
-func IsUnknownSlash(input string, surface Surface) bool {
+// resolve. A leading double slash escapes command parsing so literal
+// slash-prefixed prompts remain possible.
+func IsUnknownSlash(input string) bool {
 	input = strings.TrimSpace(input)
-	return strings.HasPrefix(input, "/") && !strings.HasPrefix(input, "//") && Parse(input, surface) == None
+	return strings.HasPrefix(input, "/") && !strings.HasPrefix(input, "//") && Parse(input) == None
 }
 
 // PromptText removes the double-slash escape used for literal slash-prefixed
@@ -185,8 +139,8 @@ func Label(command Command) string {
 }
 
 // Summary formats the available command names for compact banners and help.
-func Summary(surface Surface, separator string) string {
-	commands := Available(surface)
+func Summary(separator string) string {
+	commands := Available()
 	labels := make([]string, 0, len(commands))
 	for _, command := range commands {
 		labels = append(labels, Label(command))

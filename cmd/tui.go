@@ -18,10 +18,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var tuiCmd = &cobra.Command{
-	Use:   "tui",
-	Short: "Open the interactive CvkeHarness operations dashboard",
+var consoleView string
+
+var consoleCmd = &cobra.Command{
+	Use:     "console",
+	Aliases: []string{"tui"},
+	Short:   "Open the interactive CvkeHarness operations console",
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		initialView, err := dashboard.ParseInitialView(consoleView)
+		if err != nil {
+			return err
+		}
+
 		setupMode := false
 		cfg, err := config.LoadConfig()
 		if err != nil {
@@ -72,13 +81,12 @@ var tuiCmd = &cobra.Command{
 				cfg:          cfg,
 				store:        store,
 				sessionID:    sessionID,
-				stats:        newChatSessionStats(conversation.Selection()),
 			}, nil
 		})
 		if setupMode {
 			service.MarkSetupMode()
 		}
-		return dashboard.Run(service, os.Args[0])
+		return dashboard.Run(service, os.Args[0], initialView)
 	},
 }
 
@@ -87,7 +95,6 @@ type dashboardChatSession struct {
 	cfg          *config.Config
 	store        *state.Store
 	sessionID    int64
-	stats        *chatSessionStats
 	closed       bool
 }
 
@@ -101,13 +108,7 @@ func (s *dashboardChatSession) Tools() []agent.ChatTool { return s.conversation.
 
 func (s *dashboardChatSession) Turn(ctx context.Context, prompt string) (agent.ChatTurnResult, error) {
 	result, err := s.conversation.Turn(ctx, prompt)
-	current := &chatSessionState{
-		session:   s.conversation,
-		sessionID: s.sessionID,
-		stats:     s.stats,
-	}
-	recordChatTurn(ctx, s.store, current, prompt, result)
-	s.sessionID = current.sessionID
+	recordChatTurn(ctx, s.store, s.sessionID, prompt, result)
 	return result, err
 }
 
@@ -141,5 +142,6 @@ func (s *dashboardChatSession) Close(ctx context.Context, exitReason string) {
 }
 
 func init() {
-	rootCmd.AddCommand(tuiCmd)
+	consoleCmd.Flags().StringVar(&consoleView, "view", "overview", "initial view: overview, jobs, runs, chat, or settings")
+	rootCmd.AddCommand(consoleCmd)
 }

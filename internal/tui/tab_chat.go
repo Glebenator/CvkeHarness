@@ -543,7 +543,7 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		if prompt == "" {
 			return t, nil
 		}
-		if t.commandOpen && chatcmd.Parse(prompt, chatcmd.TUI) == chatcmd.None && len(t.commandMatches) > 0 {
+		if t.commandOpen && chatcmd.Parse(prompt) == chatcmd.None && len(t.commandMatches) > 0 {
 			selected := t.commandMatches[minInt(maxInt(t.commandCursor, 0), len(t.commandMatches)-1)]
 			t.composer.SetValue(selected.Name)
 			t.composer.CursorEnd()
@@ -552,10 +552,10 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		}
 		t.composer.Reset()
 		t.closeCommandMenu()
-		if action := chatcmd.Parse(prompt, chatcmd.TUI); action != chatcmd.None {
+		if action := chatcmd.Parse(prompt); action != chatcmd.None {
 			return t.runLocalCommand(action, svc)
 		}
-		if chatcmd.IsUnknownSlash(prompt, chatcmd.TUI) {
+		if chatcmd.IsUnknownSlash(prompt) {
 			t.appendConsoleMessage("Unknown command: " + prompt + "\nType / to see commands. Prefix with // to send a literal leading slash.")
 			t.refreshViewport()
 			t.viewport.GotoBottom()
@@ -621,7 +621,7 @@ func (t *chatTab) updateCommandMenu() {
 		return
 	}
 	t.commandOpen = true
-	t.commandMatches = chatcmd.Matches(value, chatcmd.TUI)
+	t.commandMatches = chatcmd.Matches(value)
 	if len(t.commandMatches) == 0 {
 		t.commandCursor = 0
 		return
@@ -1707,7 +1707,7 @@ func (t *chatTab) applyPendingRuntimeEvents() {
 func commandHelpText() string {
 	var lines []string
 	lines = append(lines, "Commands")
-	for _, command := range chatcmd.Available(chatcmd.TUI) {
+	for _, command := range chatcmd.Available() {
 		lines = append(lines, fmt.Sprintf("%-15s %s", chatcmd.Label(command), command.Description))
 	}
 	lines = append(lines, "", "Type / to autocomplete. Prefix with // to send a literal leading slash.")

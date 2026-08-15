@@ -19,7 +19,7 @@ It focuses on the parts of the project that matter most when you are trying to r
 ```mermaid
 flowchart TD
     user["User"]
-    cli["CLI surface\ncmd/run.go, cmd/chat.go,\ncmd/memory.go, cmd/models.go,\ncmd/commands.go, cmd/scorecard.go,\ncmd/redteam.go"]
+    cli["Command surfaces\ncmd/run.go, cmd/tui.go,\ncmd/chat_session.go, cmd/memory.go,\ncmd/models.go, cmd/commands.go,\ncmd/scorecard.go, cmd/redteam.go"]
     cfg["config.Config\n~/.cvkeharness/config.yaml"]
     agent["agent.Agent"]
     router["router.Router"]
