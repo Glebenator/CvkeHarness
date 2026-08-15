@@ -230,6 +230,140 @@ func TestLiveChatSelectingOffscreenToolFocusesItsTranscriptArea(t *testing.T) {
 	}
 }
 
+func TestLiveChatDownRecoversFromVisibleAreaWithoutScrollingBackward(t *testing.T) {
+	t.Parallel()
+
+	tab := newChatTab().(*chatTab)
+	for i := 0; i < 12; i++ {
+		tab.toolCalls = append(tab.toolCalls, liveToolCall{
+			name:   fmt.Sprintf("tool_%02d", i+1),
+			status: "SUCCEEDED",
+		})
+	}
+	tab.toolCursor = 0
+	tab.resize(80, 16)
+	tab.viewport.SetYOffset(6)
+	oldOffset := tab.viewport.YOffset
+
+	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeyDown}, nil)
+	selectedLine := tab.toolLineStarts[tab.toolCursor]
+	if selectedLine < oldOffset {
+		t.Fatalf("expected Down to recover at or below viewport offset %d, selected line %d", oldOffset, selectedLine)
+	}
+	if tab.viewport.YOffset < oldOffset {
+		t.Fatalf("expected Down not to scroll backward from %d to %d", oldOffset, tab.viewport.YOffset)
+	}
+	if selectedLine < tab.viewport.YOffset || selectedLine >= tab.viewport.YOffset+tab.viewport.Height {
+		t.Fatalf("expected recovered selection line %d in viewport [%d,%d)", selectedLine, tab.viewport.YOffset, tab.viewport.YOffset+tab.viewport.Height)
+	}
+}
+
+func TestLiveChatUpRecoversFromVisibleAreaWithoutScrollingForward(t *testing.T) {
+	t.Parallel()
+
+	tab := newChatTab().(*chatTab)
+	for i := 0; i < 12; i++ {
+		tab.toolCalls = append(tab.toolCalls, liveToolCall{
+			name:   fmt.Sprintf("tool_%02d", i+1),
+			status: "SUCCEEDED",
+		})
+	}
+	tab.toolCursor = len(tab.toolCalls) - 1
+	tab.resize(80, 16)
+	tab.viewport.SetYOffset(2)
+	oldOffset := tab.viewport.YOffset
+
+	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeyUp}, nil)
+	selectedLine := tab.toolLineStarts[tab.toolCursor]
+	visibleBottom := oldOffset + tab.viewport.Height - 1
+	if selectedLine > visibleBottom {
+		t.Fatalf("expected Up to recover at or above visible line %d, selected line %d", visibleBottom, selectedLine)
+	}
+	if tab.viewport.YOffset > oldOffset {
+		t.Fatalf("expected Up not to scroll forward from %d to %d", oldOffset, tab.viewport.YOffset)
+	}
+}
+
+func TestLiveChatMouseWheelScrollsTranscriptWithoutMovingToolSelection(t *testing.T) {
+	t.Parallel()
+
+	tab := newChatTab().(*chatTab)
+	for i := 0; i < 30; i++ {
+		tab.messages = append(tab.messages, liveChatMessage{
+			role:    "system",
+			content: fmt.Sprintf("transcript line %02d", i),
+		})
+	}
+	for i := 0; i < 5; i++ {
+		tab.toolCalls = append(tab.toolCalls, liveToolCall{name: fmt.Sprintf("tool_%02d", i), status: "SUCCEEDED"})
+	}
+	tab.toolCursor = 4
+	tab.composerFocused = true
+	tab.composer.Focus()
+	tab.resize(80, 16)
+	tab.viewport.GotoBottom()
+	bottom := tab.viewport.YOffset
+	if bottom <= 0 {
+		t.Fatal("expected a scrollable transcript")
+	}
+
+	updated, _ := tab.Update(tea.MouseMsg{
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+		Type:   tea.MouseWheelUp,
+	}, nil, 80, 16)
+	tab = updated.(*chatTab)
+	if tab.viewport.YOffset >= bottom {
+		t.Fatalf("expected wheel up to move above offset %d, got %d", bottom, tab.viewport.YOffset)
+	}
+	if tab.toolCursor != 4 {
+		t.Fatalf("expected wheel scrolling not to move tool selection, got %d", tab.toolCursor)
+	}
+	if !tab.composerFocused {
+		t.Fatal("expected wheel scrolling not to change composer focus")
+	}
+
+	upOffset := tab.viewport.YOffset
+	updated, _ = tab.Update(tea.MouseMsg{
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+		Type:   tea.MouseWheelDown,
+	}, nil, 80, 16)
+	tab = updated.(*chatTab)
+	if tab.viewport.YOffset <= upOffset {
+		t.Fatalf("expected wheel down to move below offset %d, got %d", upOffset, tab.viewport.YOffset)
+	}
+}
+
+func TestExpandedChatHistorySupportsMouseWheelScrolling(t *testing.T) {
+	t.Parallel()
+
+	tab := newChatTab().(*chatTab)
+	tab.history = true
+	tab.expanded = true
+	tab.resize(80, 16)
+
+	updated, _ := tab.Update(tea.MouseMsg{
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+		Type:   tea.MouseWheelDown,
+	}, nil, 80, 16)
+	tab = updated.(*chatTab)
+	if tab.scroll != tab.viewport.MouseWheelDelta {
+		t.Fatalf("expected history wheel delta %d, got %d", tab.viewport.MouseWheelDelta, tab.scroll)
+	}
+
+	updated, _ = tab.Update(tea.MouseMsg{
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+		Type:   tea.MouseWheelUp,
+	}, nil, 80, 16)
+	tab = updated.(*chatTab)
+	if tab.scroll != 0 {
+		t.Fatalf("expected history wheel up to return to top, got %d", tab.scroll)
+	}
+}
+
 func TestLiveChatFocusFramesExpandedToolBlockWithContextOnBothSides(t *testing.T) {
 	t.Parallel()
 

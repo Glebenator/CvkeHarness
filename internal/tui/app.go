@@ -91,7 +91,7 @@ func Run(svc *Service, binaryName string) error {
 			newConfigTab(),
 		},
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	finalModel, err := p.Run()
 	if final, ok := finalModel.(model); ok {
 		if chat, ok := final.tabs[tabChat].(*chatTab); ok {

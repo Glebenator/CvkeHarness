@@ -81,6 +81,43 @@ func TestTabLeavesFocusedChatComposer(t *testing.T) {
 	}
 }
 
+func TestModelForwardsMouseWheelToFocusedChatTranscript(t *testing.T) {
+	t.Parallel()
+
+	chat := newChatTab().(*chatTab)
+	for i := 0; i < 30; i++ {
+		chat.messages = append(chat.messages, liveChatMessage{
+			role:    "system",
+			content: fmt.Sprintf("transcript line %02d", i),
+		})
+	}
+	chat.composerFocused = true
+	chat.composer.Focus()
+	m := model{
+		width:     80,
+		height:    20,
+		activeTab: tabChat,
+	}
+	m.tabs[tabChat] = chat
+	chat.resize(m.contentWidth(), m.contentHeight())
+	chat.viewport.GotoBottom()
+	bottom := chat.viewport.YOffset
+
+	updated, _ := m.Update(tea.MouseMsg{
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+		Type:   tea.MouseWheelUp,
+	})
+	m = updated.(model)
+	chat = m.tabs[tabChat].(*chatTab)
+	if chat.viewport.YOffset >= bottom {
+		t.Fatalf("expected app to forward wheel event above offset %d, got %d", bottom, chat.viewport.YOffset)
+	}
+	if !chat.composerFocused {
+		t.Fatal("expected app-level wheel scrolling to retain composer focus")
+	}
+}
+
 func TestFocusedInputStatusBarPrioritizesRealEscapeHint(t *testing.T) {
 	t.Parallel()
 
