@@ -22,6 +22,86 @@ func (t tallTab) View(int, int) string {
 	return b.String()
 }
 
+func TestHorizontalNavigationCrossesChatWithoutFocusingComposer(t *testing.T) {
+	t.Parallel()
+
+	chat := newChatTab().(*chatTab)
+	m := model{
+		width:     100,
+		height:    30,
+		activeTab: tabConfig,
+		tabs: [tabCount]tabModel{
+			tallTab{},
+			tallTab{},
+			tallTab{},
+			chat,
+			tallTab{},
+		},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = updated.(model)
+	if m.activeTab != tabChat {
+		t.Fatalf("expected left from Settings to land on Chat, got tab %d", m.activeTab)
+	}
+	if chat.composerFocused || chat.Consuming() {
+		t.Fatal("expected Chat to activate in navigation mode")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m = updated.(model)
+	if m.activeTab != tabRuns {
+		t.Fatalf("expected a second left to continue through Chat to Runs, got tab %d", m.activeTab)
+	}
+}
+
+func TestTabLeavesFocusedChatComposer(t *testing.T) {
+	t.Parallel()
+
+	chat := newChatTab().(*chatTab)
+	chat.composerFocused = true
+	chat.composer.Focus()
+	m := model{
+		width:     100,
+		height:    30,
+		activeTab: tabChat,
+		tabs: [tabCount]tabModel{
+			tallTab{},
+			tallTab{},
+			tallTab{},
+			chat,
+			tallTab{},
+		},
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = updated.(model)
+	if m.activeTab != tabConfig {
+		t.Fatalf("expected tab to leave the focused composer, got tab %d", m.activeTab)
+	}
+}
+
+func TestFocusedInputStatusBarPrioritizesRealEscapeHint(t *testing.T) {
+	t.Parallel()
+
+	chat := newChatTab().(*chatTab)
+	chat.composerFocused = true
+	chat.composer.Focus()
+	m := model{
+		width:     80,
+		activeTab: tabChat,
+	}
+	m.tabs[tabChat] = chat
+
+	status := m.renderStatusBar()
+	if !strings.Contains(status, "tab") || !strings.Contains(status, "switch") {
+		t.Fatalf("expected focused input footer to expose tab switching, got %q", status)
+	}
+	if strings.Contains(status, "?") {
+		t.Fatalf("footer must not advertise help while ? is captured as input, got %q", status)
+	}
+}
+
 func (t tallTab) Consuming() bool { return false }
 
 func (t tallTab) StatusHints() []string { return nil }

@@ -476,6 +476,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				Success:      toolErr == nil,
 				Duration:     time.Duration(durationMs) * time.Millisecond,
 				ErrorMessage: outcome.ErrorMessage,
+				Output:       resultStr,
 			})
 			payload, _ = json.Marshal(map[string]any{
 				"tool_name":   call.Function.Name,

@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/coolcake/cvkeharness/agent"
+	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
 )
@@ -44,6 +47,7 @@ type liveChatMessage struct {
 	role    string
 	content string
 	at      time.Time
+	turn    int
 }
 
 type liveToolCall struct {
@@ -55,6 +59,7 @@ type liveToolCall struct {
 	err      string
 	duration time.Duration
 	expanded bool
+	turn     int
 }
 
 type channelEventObserver struct{ ch chan tools.Event }
@@ -91,7 +96,10 @@ type chatTab struct {
 	eventWaitStop   chan struct{}
 	messages        []liveChatMessage
 	toolCalls       []liveToolCall
-	toolsExpanded   bool
+	toolCursor      int
+	toolLineStarts  []int
+	toolLineEnds    []int
+	activeTurn      int
 	status          string
 	statusDetail    string
 	target          string
@@ -111,18 +119,29 @@ func newChatTab() tabModel {
 	composer.Prompt = ""
 	composer.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	composer.BlurredStyle.CursorLine = lipgloss.NewStyle()
-	composer.Focus()
+	composer.Blur()
 
 	vp := viewport.New(76, 12)
 	return &chatTab{
 		composer:        composer,
 		viewport:        vp,
-		composerFocused: true,
+		composerFocused: false,
 		eventCh:         make(chan tools.Event, 128),
 		status:          "READY",
 		verification:    "NOT RUN",
 		controlsReady:   true,
 	}
+}
+
+// Activate lands in navigation mode so moving across the tab bar with left or
+// right never drops the operator into an input trap. Enter focuses the composer.
+func (t *chatTab) Activate() {
+	t.composerFocused = false
+	t.composer.Blur()
+}
+
+func (t *chatTab) HorizontalTabNavigation() bool {
+	return !t.history && !t.composerFocused
 }
 
 func (t *chatTab) Init(svc *Service) tea.Cmd {
@@ -154,11 +173,29 @@ func (t *chatTab) StatusHints() []string {
 		}
 	}
 	if t.running {
-		return []string{
+		hints := []string{
 			renderKeyHint("esc", "interrupt"),
-			renderKeyHint("↑↓", "scroll"),
-			renderKeyHint("ctrl+t", "tool detail"),
 		}
+		if len(t.toolCalls) > 0 {
+			hints = append(hints,
+				renderKeyHint("space", "tool detail"),
+				renderKeyHint("↑↓", "tools + scroll"),
+			)
+		} else {
+			hints = append(hints, renderKeyHint("↑↓", "scroll"))
+		}
+		return hints
+	}
+	if !t.composerFocused {
+		hints := []string{
+			renderKeyHint("enter", "compose"),
+			renderKeyHint("↑↓", "scroll"),
+		}
+		if len(t.toolCalls) > 0 {
+			hints[1] = renderKeyHint("↑↓", "tools + scroll")
+			hints = append(hints, renderKeyHint("space", "tool detail"))
+		}
+		return append(hints, renderKeyHint("ctrl+h", "history"))
 	}
 	return []string{
 		renderKeyHint("enter", "send"),
@@ -217,6 +254,7 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 			close(t.eventWaitStop)
 			t.eventWaitStop = nil
 		}
+		t.applyPendingRuntimeEvents()
 		t.running = false
 		t.cancelTurn = nil
 		t.applyTurnResult(msg.result, msg.err)
@@ -263,11 +301,23 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		t.composer.Blur()
 		return t, nil
 	case "ctrl+t":
-		t.toolsExpanded = !t.toolsExpanded
-		for i := range t.toolCalls {
-			t.toolCalls[i].expanded = t.toolsExpanded
+		if len(t.toolCalls) > 0 {
+			t.toolCursor = minInt(maxInt(t.toolCursor, 0), len(t.toolCalls)-1)
+			t.toolCalls[t.toolCursor].expanded = !t.toolCalls[t.toolCursor].expanded
 		}
 		t.refreshViewport()
+		t.ensureSelectedToolVisible(true)
+		return t, nil
+	case " ":
+		if t.composerFocused {
+			break
+		}
+		if len(t.toolCalls) > 0 {
+			t.toolCursor = minInt(maxInt(t.toolCursor, 0), len(t.toolCalls)-1)
+			t.toolCalls[t.toolCursor].expanded = !t.toolCalls[t.toolCursor].expanded
+		}
+		t.refreshViewport()
+		t.ensureSelectedToolVisible(true)
 		return t, nil
 	case "pgup":
 		t.viewport.HalfViewUp()
@@ -276,13 +326,25 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		t.viewport.HalfViewDown()
 		return t, nil
 	case "up":
-		if !t.composerFocused || t.composer.Line() == 0 {
-			t.viewport.LineUp(1)
+		if !t.composerFocused {
+			if len(t.toolCalls) > 0 && t.toolCursor > 0 {
+				t.toolCursor--
+				t.refreshViewport()
+				t.focusSelectedTool()
+			} else {
+				t.viewport.LineUp(1)
+			}
 			return t, nil
 		}
 	case "down":
 		if !t.composerFocused {
-			t.viewport.LineDown(1)
+			if len(t.toolCalls) > 0 && t.toolCursor < len(t.toolCalls)-1 {
+				t.toolCursor++
+				t.refreshViewport()
+				t.focusSelectedTool()
+			} else {
+				t.viewport.LineDown(1)
+			}
 			return t, nil
 		}
 	case "ctrl+j":
@@ -310,6 +372,8 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 			t.closeSession("cleared")
 			t.messages = nil
 			t.toolCalls = nil
+			t.toolCursor = 0
+			t.activeTurn = 0
 			t.target = ""
 			t.verification = "NOT RUN"
 			t.status = "READY"
@@ -340,6 +404,8 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 }
 
 func (t *chatTab) beginTurn(prompt string) (tabModel, tea.Cmd) {
+	drainRuntimeEvents(t.eventCh)
+	t.activeTurn++
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelTurn = cancel
 	t.eventWaitStop = make(chan struct{})
@@ -349,7 +415,9 @@ func (t *chatTab) beginTurn(prompt string) (tabModel, tea.Cmd) {
 	t.statusDetail = "waiting for a complete provider response"
 	t.lastError = ""
 	t.verification = "PENDING"
-	t.messages = append(t.messages, liveChatMessage{role: "user", content: prompt, at: time.Now()})
+	t.composerFocused = false
+	t.composer.Blur()
+	t.messages = append(t.messages, liveChatMessage{role: "user", content: prompt, at: time.Now(), turn: t.activeTurn})
 	t.refreshViewport()
 	t.viewport.GotoBottom()
 	return t, tea.Batch(runChatTurnCmd(ctx, t.session, prompt), waitChatEventCmd(t.eventCh, t.eventWaitStop))
@@ -425,11 +493,7 @@ func (t *chatTab) viewLive(width, height int) string {
 
 	conversation := t.viewport.View()
 	composerWidth := maxInt(width-6, 20)
-	if width >= 120 {
-		paneWidth := 29
-		mainWidth := maxInt(width-paneWidth-3, 50)
-		t.viewport.Width = mainWidth - 2
-		t.composer.SetWidth(mainWidth - 4)
+	if split, mainWidth, paneWidth := liveChatColumns(width); split {
 		conversation = lipgloss.JoinHorizontal(
 			lipgloss.Top,
 			lipgloss.NewStyle().Width(mainWidth).Render(t.viewport.View()),
@@ -443,6 +507,10 @@ func (t *chatTab) viewLive(width, height int) string {
 	b.WriteString(header)
 	b.WriteString(conversation)
 	b.WriteString("\n")
+	if selection := t.renderToolSelection(composerWidth); selection != "" {
+		b.WriteString(selection)
+		b.WriteString("\n")
+	}
 	b.WriteString(t.renderComposer(composerWidth))
 	return b.String()
 }
@@ -487,6 +555,8 @@ func (t *chatTab) renderComposer(width int) string {
 	label := styleSectionTitle.Render("MESSAGE")
 	if t.running {
 		label = styleMuted.Render("MESSAGE  locked while the agent is working")
+	} else if !t.composerFocused {
+		label = styleMuted.Render("MESSAGE  press Enter to compose")
 	}
 	body := t.composer.View()
 	if t.lastError != "" {
@@ -499,6 +569,26 @@ func (t *chatTab) renderComposer(width int) string {
 		Padding(0, 1).
 		Render(body)
 	return "  " + label + "\n  " + strings.ReplaceAll(box, "\n", "\n  ")
+}
+
+func (t *chatTab) renderToolSelection(width int) string {
+	if len(t.toolCalls) == 0 {
+		return ""
+	}
+	index := minInt(maxInt(t.toolCursor, 0), len(t.toolCalls)-1)
+	tool := t.toolCalls[index]
+	action := "Space: open"
+	if tool.expanded {
+		action = "Space: close"
+	}
+	text := fmt.Sprintf(
+		"TOOL %d/%d  %s  |  %s  |  ↑↓ select",
+		index+1,
+		len(t.toolCalls),
+		firstNonEmptyText(tool.name, "tool"),
+		action,
+	)
+	return "  " + styleSelectedRow.Render(truncate(text, maxInt(width-4, 16)))
 }
 
 func (t *chatTab) contextLine(width int) string {
@@ -550,6 +640,12 @@ func (t *chatTab) contextPane(width int) string {
 
 func (t *chatTab) refreshViewport() {
 	var lines []string
+	t.toolLineStarts = make([]int, len(t.toolCalls))
+	t.toolLineEnds = make([]int, len(t.toolCalls))
+	for i := range t.toolLineStarts {
+		t.toolLineStarts[i] = -1
+		t.toolLineEnds[i] = -1
+	}
 	if len(t.messages) == 0 {
 		lines = append(lines,
 			styleBright.Render("  Ready for a task"),
@@ -559,7 +655,13 @@ func (t *chatTab) refreshViewport() {
 			"  "+renderKeyHint("/help", "commands"),
 		)
 	}
+	renderedTools := make([]bool, len(t.toolCalls))
 	for _, message := range t.messages {
+		if message.role == "assistant" {
+			t.appendToolsForTurn(&lines, message.turn, renderedTools)
+			t.appendAssistantResponse(&lines, message.content)
+			continue
+		}
 		label := "CVKEHARNESS"
 		labelStyle := styleSectionTitle
 		switch message.role {
@@ -581,14 +683,9 @@ func (t *chatTab) refreshViewport() {
 		}
 		lines = append(lines, "")
 	}
-	for _, tool := range t.toolCalls {
-		pointer := "▸"
-		if tool.expanded {
-			pointer = "▾"
-		}
-		lines = append(lines, "  "+pointer+" "+renderNamedStatus(tool.status)+"  "+styleBright.Render(firstNonEmptyText(tool.name, "tool")))
-		if tool.expanded {
-			appendLiveToolDetail(&lines, tool, maxInt(t.viewport.Width-6, 18))
+	for i := range t.toolCalls {
+		if !renderedTools[i] {
+			t.appendToolRow(&lines, i)
 		}
 	}
 	if t.running {
@@ -597,18 +694,131 @@ func (t *chatTab) refreshViewport() {
 	t.viewport.SetContent(strings.Join(lines, "\n"))
 }
 
+func (t *chatTab) appendToolsForTurn(lines *[]string, turn int, rendered []bool) {
+	for i, tool := range t.toolCalls {
+		if !rendered[i] && tool.turn == turn {
+			t.appendToolRow(lines, i)
+			rendered[i] = true
+		}
+	}
+}
+
+func (t *chatTab) appendToolRow(lines *[]string, index int) {
+	tool := t.toolCalls[index]
+	if index >= 0 && index < len(t.toolLineStarts) {
+		t.toolLineStarts[index] = len(*lines)
+	}
+	selector := "  "
+	if index == t.toolCursor {
+		selector = styleAccent.Render(fmt.Sprintf("▸ %d/%d", index+1, len(t.toolCalls))) + " "
+	}
+	disclosure := "▸"
+	if tool.expanded {
+		disclosure = "▾"
+	}
+	lead := "  " + selector + disclosure + " " + renderNamedStatus(tool.status) + "  " + styleBright.Render(firstNonEmptyText(tool.name, "tool"))
+	if tool.command != "" {
+		remaining := maxInt(t.viewport.Width-lipgloss.Width(lead)-3, 8)
+		lead += styleMuted.Render("  " + truncate(firstLine(tool.command), remaining))
+	}
+	*lines = append(*lines, lead)
+	if tool.expanded {
+		appendLiveToolDetail(lines, tool, maxInt(t.viewport.Width-8, 18))
+	}
+	if index >= 0 && index < len(t.toolLineEnds) {
+		t.toolLineEnds[index] = maxInt(len(*lines)-1, t.toolLineStarts[index])
+	}
+}
+
+func (t *chatTab) ensureSelectedToolVisible(revealDetails bool) {
+	if t.toolCursor < 0 || t.toolCursor >= len(t.toolLineStarts) {
+		return
+	}
+	start := t.toolLineStarts[t.toolCursor]
+	end := start
+	if revealDetails && t.toolCursor < len(t.toolLineEnds) {
+		end = minInt(t.toolLineEnds[t.toolCursor], start+4)
+	}
+	if start < 0 {
+		return
+	}
+	if start < t.viewport.YOffset {
+		t.viewport.SetYOffset(start)
+		return
+	}
+	visibleBottom := t.viewport.YOffset + maxInt(t.viewport.Height-1, 0)
+	if end > visibleBottom {
+		t.viewport.SetYOffset(end - maxInt(t.viewport.Height-1, 0))
+	}
+}
+
+// focusSelectedTool frames the selected row and its disclosure with balanced
+// transcript context above and below whenever the block fits in the viewport.
+func (t *chatTab) focusSelectedTool() {
+	if t.toolCursor < 0 || t.toolCursor >= len(t.toolLineStarts) {
+		return
+	}
+	start := t.toolLineStarts[t.toolCursor]
+	if start < 0 {
+		return
+	}
+	end := start
+	if t.toolCursor < len(t.toolLineEnds) {
+		end = maxInt(t.toolLineEnds[t.toolCursor], start)
+	}
+	height := maxInt(t.viewport.Height, 1)
+	blockHeight := end - start + 1
+	contextAbove := 1
+	if blockHeight < height {
+		contextAbove = (height - blockHeight) / 2
+	}
+	t.viewport.SetYOffset(maxInt(start-contextAbove, 0))
+}
+
+func (t *chatTab) appendAssistantResponse(lines *[]string, content string) {
+	width := maxInt(t.viewport.Width-8, 18)
+	var body []string
+	for _, raw := range strings.Split(content, "\n") {
+		for _, line := range wrapText(raw, width) {
+			body = append(body, styleBright.Render(line))
+		}
+	}
+	box := lipgloss.NewStyle().
+		Width(width).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Background(colorSurface).
+		Padding(0, 1).
+		Render(strings.Join(body, "\n"))
+	*lines = append(*lines, "", "  "+styleSectionTitle.Render("RESPONSE"), "  "+strings.ReplaceAll(box, "\n", "\n  "), "")
+}
+
+func firstLine(text string) string {
+	if before, _, ok := strings.Cut(strings.TrimSpace(text), "\n"); ok {
+		return before
+	}
+	return strings.TrimSpace(text)
+}
+
 func (t *chatTab) applyRuntimeEvent(event tools.Event) {
+	if !isToolRuntimeEvent(event.Type) {
+		return
+	}
 	id := firstNonEmptyText(event.ToolCallID, event.ToolName)
+	if id == "" {
+		return
+	}
 	idx := -1
 	for i := range t.toolCalls {
-		if t.toolCalls[i].id == id {
+		if t.toolCalls[i].id == id && t.toolCalls[i].turn == t.activeTurn {
 			idx = i
 			break
 		}
 	}
 	if idx < 0 {
-		t.toolCalls = append(t.toolCalls, liveToolCall{id: id, name: event.ToolName, status: "RUNNING"})
+		t.toolCalls = append(t.toolCalls, liveToolCall{id: id, name: event.ToolName, status: "RUNNING", turn: t.activeTurn})
 		idx = len(t.toolCalls) - 1
+		t.toolCursor = idx
 	}
 	item := &t.toolCalls[idx]
 	item.name = firstNonEmptyText(event.ToolName, item.name)
@@ -623,10 +833,13 @@ func (t *chatTab) applyRuntimeEvent(event tools.Event) {
 		t.status = "APPROVAL CHECK"
 		t.statusDetail = strings.ReplaceAll(event.ApprovalMode, "_", " ")
 	case tools.EventShellOutput:
-		item.output += event.Output
+		item.output = appendBoundedToolOutput(item.output, event.Output)
 	case tools.EventToolCallFinished, tools.EventShellCommandFinished:
 		item.duration = event.Duration
 		item.err = event.ErrorMessage
+		if event.Output != "" {
+			item.output = boundedToolOutput(event.Output)
+		}
 		if event.Success {
 			item.status = "SUCCEEDED"
 		} else {
@@ -645,28 +858,8 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 		t.target = result.Target.RuntimeHostID
 	}
 
-	if strings.TrimSpace(result.Output) != "" {
-		t.messages = append(t.messages, liveChatMessage{role: "assistant", content: result.Output, at: time.Now()})
-	}
-	for _, outcome := range result.Tools {
-		if !t.hasToolOutcome(outcome) {
-			status := "SUCCEEDED"
-			if outcome.PolicyDenied {
-				status = "DENIED"
-			} else if !outcome.Success {
-				status = "FAILED"
-			}
-			t.toolCalls = append(t.toolCalls, liveToolCall{
-				id:       outcome.ToolName + outcome.Command,
-				name:     outcome.ToolName,
-				command:  firstNonEmptyText(outcome.Command, outcome.Arguments),
-				status:   status,
-				err:      outcome.ErrorMessage,
-				duration: time.Duration(outcome.DurationMs) * time.Millisecond,
-				expanded: status != "SUCCEEDED",
-			})
-		}
-	}
+	t.reconcileToolOutcomes(result.Tools)
+	t.reconcileToolOutputs(result.Observed)
 
 	switch result.TaskState {
 	case state.TaskStateBlockedWaitingUser:
@@ -693,24 +886,135 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		t.lastError = err.Error()
-		t.messages = append(t.messages, liveChatMessage{role: "error", content: err.Error(), at: time.Now()})
+		t.messages = append(t.messages, liveChatMessage{role: "error", content: err.Error(), at: time.Now(), turn: t.activeTurn})
 	}
 	if result.CurationError != nil {
 		t.messages = append(t.messages, liveChatMessage{
 			role:    "system",
 			content: "Memory curation warning: " + result.CurationError.Error(),
 			at:      time.Now(),
+			turn:    t.activeTurn,
 		})
+	}
+	if strings.TrimSpace(result.Output) != "" {
+		t.messages = append(t.messages, liveChatMessage{role: "assistant", content: result.Output, at: time.Now(), turn: t.activeTurn})
 	}
 }
 
-func (t *chatTab) hasToolOutcome(outcome state.ToolOutcome) bool {
-	for _, item := range t.toolCalls {
-		if item.name == outcome.ToolName && (item.command == outcome.Command || outcome.Command == "") {
-			return true
+func isToolRuntimeEvent(eventType tools.EventType) bool {
+	switch eventType {
+	case tools.EventToolCallStarted,
+		tools.EventToolCallFinished,
+		tools.EventShellCommandStarted,
+		tools.EventShellApproval,
+		tools.EventShellOutput,
+		tools.EventShellCommandFinished:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t *chatTab) reconcileToolOutcomes(outcomes []state.ToolOutcome) {
+	claimed := make(map[int]bool, len(outcomes))
+	for _, outcome := range outcomes {
+		command := firstNonEmptyText(outcome.Command, outcome.Arguments)
+		idx := -1
+		for i := len(t.toolCalls) - 1; i >= 0; i-- {
+			item := t.toolCalls[i]
+			if claimed[i] || item.turn != t.activeTurn || item.name != outcome.ToolName {
+				continue
+			}
+			if command == "" || item.command == command {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			for i := len(t.toolCalls) - 1; i >= 0; i-- {
+				item := t.toolCalls[i]
+				if claimed[i] || item.turn != t.activeTurn || item.name != outcome.ToolName {
+					continue
+				}
+				if item.status == "RUNNING" || item.status == "APPROVAL CHECK" || item.command == "" {
+					idx = i
+					break
+				}
+			}
+		}
+
+		status := "SUCCEEDED"
+		if outcome.PolicyDenied {
+			status = "DENIED"
+		} else if !outcome.Success {
+			status = "FAILED"
+		}
+		if idx < 0 {
+			t.toolCalls = append(t.toolCalls, liveToolCall{
+				id:      outcome.ToolName + command,
+				name:    outcome.ToolName,
+				command: command,
+				turn:    t.activeTurn,
+			})
+			idx = len(t.toolCalls) - 1
+			t.toolCursor = idx
+		}
+
+		item := &t.toolCalls[idx]
+		if item.command == "" {
+			item.command = command
+		}
+		item.status = status
+		item.err = outcome.ErrorMessage
+		item.duration = time.Duration(outcome.DurationMs) * time.Millisecond
+		item.expanded = status != "SUCCEEDED"
+		claimed[idx] = true
+	}
+}
+
+func (t *chatTab) reconcileToolOutputs(observed []memory.ObservedToolCall) {
+	claimed := make(map[int]bool, len(observed))
+	for _, call := range observed {
+		for i := range t.toolCalls {
+			item := &t.toolCalls[i]
+			if claimed[i] || item.turn != t.activeTurn || item.name != call.ToolName {
+				continue
+			}
+			if call.Command != "" && item.command != "" && item.command != call.Command {
+				continue
+			}
+			item.output = boundedToolOutput(call.Result)
+			claimed[i] = true
+			break
 		}
 	}
-	return false
+}
+
+func drainRuntimeEvents(ch <-chan tools.Event) {
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (t *chatTab) applyPendingRuntimeEvents() {
+	for {
+		select {
+		case event, ok := <-t.eventCh:
+			if !ok {
+				return
+			}
+			t.applyRuntimeEvent(event)
+		default:
+			return
+		}
+	}
 }
 
 func (t *chatTab) resize(width, height int) {
@@ -722,12 +1026,28 @@ func (t *chatTab) resize(width, height int) {
 		t.controlsReady = true
 	}
 	contentWidth := maxInt(width-4, 20)
+	if split, mainWidth, _ := liveChatColumns(width); split {
+		contentWidth = maxInt(mainWidth-2, 20)
+	}
 	t.viewport.Width = contentWidth
 	composerLines := 7
 	headerLines := 4
-	t.viewport.Height = maxInt(height-composerLines-headerLines, 5)
+	selectionLines := 0
+	if len(t.toolCalls) > 0 {
+		selectionLines = 1
+	}
+	t.viewport.Height = maxInt(height-composerLines-headerLines-selectionLines, 5)
 	t.composer.SetWidth(maxInt(contentWidth-4, 16))
 	t.refreshViewport()
+}
+
+func liveChatColumns(width int) (split bool, mainWidth, paneWidth int) {
+	if width < 120 {
+		return false, width, 0
+	}
+	paneWidth = 29
+	mainWidth = maxInt(width-paneWidth-3, 50)
+	return true, mainWidth, paneWidth
 }
 
 func (t *chatTab) closeSession(reason string) {
@@ -797,26 +1117,101 @@ func classifyChatStartError(err error) string {
 }
 
 func appendLiveToolDetail(lines *[]string, tool liveToolCall, width int) {
+	width = maxInt(width, 18)
+	contentWidth := maxInt(width-2, 14)
+	var body []string
 	if tool.command != "" {
-		for _, line := range wrapText("Command: "+tool.command, width) {
-			*lines = append(*lines, "      "+styleBase.Render(line))
+		body = append(body, styleMuted.Render("COMMAND"))
+		for _, raw := range strings.Split(sanitizeToolOutput(tool.command), "\n") {
+			for _, line := range wrapRawLine(raw, contentWidth) {
+				body = append(body, styleBright.Render(line))
+			}
 		}
 	}
-	if tool.output != "" {
-		for _, raw := range strings.Split(strings.TrimSpace(tool.output), "\n") {
-			for _, line := range wrapText(raw, width) {
-				*lines = append(*lines, "      "+styleMuted.Render(line))
+	if len(body) > 0 {
+		body = append(body, "")
+	}
+	body = append(body, styleMuted.Render("RAW OUTPUT  stdout + stderr"))
+	output := strings.TrimSuffix(sanitizeToolOutput(tool.output), "\n")
+	if output == "" {
+		placeholder := "No output emitted."
+		if tool.status == "RUNNING" || tool.status == "APPROVAL CHECK" {
+			placeholder = "Waiting for output…"
+		}
+		body = append(body, styleMuted.Render(placeholder))
+	} else {
+		for _, raw := range strings.Split(output, "\n") {
+			for _, line := range wrapRawLine(raw, contentWidth) {
+				body = append(body, styleBase.Render(line))
 			}
 		}
 	}
 	if tool.err != "" {
-		for _, line := range wrapText("Error: "+tool.err, width) {
-			*lines = append(*lines, "      "+styleError.Render(line))
+		body = append(body, "", styleError.Render("ERROR"))
+		for _, line := range wrapRawLine(sanitizeToolOutput(tool.err), contentWidth) {
+			body = append(body, styleError.Render(line))
 		}
 	}
 	if tool.duration > 0 {
-		*lines = append(*lines, "      "+styleMuted.Render("Duration: "+tool.duration.Round(time.Millisecond).String()))
+		body = append(body, "", styleMuted.Render("DURATION  "+tool.duration.Round(time.Millisecond).String()))
 	}
+	box := lipgloss.NewStyle().
+		Width(width).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorSubtle).
+		Background(colorSurface).
+		Padding(0, 1).
+		Render(strings.Join(body, "\n"))
+	*lines = append(*lines, "    "+strings.ReplaceAll(box, "\n", "\n    "))
+}
+
+const (
+	maxLiveToolOutputRunes = 64 * 1024
+	toolOutputTruncated    = "\n… (live output truncated)"
+)
+
+func appendBoundedToolOutput(current, addition string) string {
+	if strings.HasSuffix(current, toolOutputTruncated) {
+		return current
+	}
+	return boundedToolOutput(current + addition)
+}
+
+func boundedToolOutput(output string) string {
+	runes := []rune(output)
+	if len(runes) <= maxLiveToolOutputRunes {
+		return output
+	}
+	return string(runes[:maxLiveToolOutputRunes]) + toolOutputTruncated
+}
+
+func sanitizeToolOutput(output string) string {
+	output = ansi.Strip(output)
+	output = strings.ReplaceAll(output, "\r\n", "\n")
+	output = strings.ReplaceAll(output, "\r", "\n")
+	output = strings.ReplaceAll(output, "\t", "    ")
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || !unicode.IsControl(r) {
+			return r
+		}
+		return -1
+	}, output)
+}
+
+func wrapRawLine(line string, width int) []string {
+	if width <= 0 {
+		return []string{line}
+	}
+	runes := []rune(line)
+	if len(runes) == 0 {
+		return []string{""}
+	}
+	lines := make([]string, 0, (len(runes)+width-1)/width)
+	for len(runes) > width {
+		lines = append(lines, string(runes[:width]))
+		runes = runes[width:]
+	}
+	return append(lines, string(runes))
 }
 
 func renderNamedStatus(status string) string {

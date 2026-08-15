@@ -46,6 +46,11 @@ func TestValidateShellCommand_AllowsSafeDiagnostics(t *testing.T) {
 		"ps aux; uptime",
 		"uptime || df -h",
 		"ps aux | grep docker",
+		"ps aux\nuptime",
+		"ps aux\r\nuptime",
+		"printf 'hello\nworld'",
+		"printf \"hello\nworld\"",
+		"python3 - <<'PY'\nprint('hello')\nPY",
 	}
 
 	for _, command := range safeCommands {
@@ -68,10 +73,14 @@ func TestValidateShellCommand_BlocksBreakoutSyntax(t *testing.T) {
 		"ps < /etc/passwd",
 		"ps `whoami`",
 		"ps $(whoami)",
+		"ps \\\naux",
+		"printf $\\\n(whoami)",
 		"ps & whoami",
-		"ps\nwhoami",
-		"ps\rwhoami",
 		"ps &&",
+		"cat <<EOF\n$(whoami)\nEOF",
+		"cat <<< 'data'",
+		"cat <<'EOF' trailing\ndata\nEOF",
+		"cat <<'EOF'\ndata",
 	}
 
 	for _, command := range attackCommands {
@@ -99,6 +108,9 @@ func TestValidateAllowedShellCommand_UsesAllowlist(t *testing.T) {
 	}
 	if err := ValidateAllowedShellCommand("ps aux | journalctl -n 50", allowed); err != nil {
 		t.Fatalf("expected piped allowed commands to pass validation: %v", err)
+	}
+	if err := ValidateAllowedShellCommand("ps <<'EOF'\naux\nEOF", allowed); err == nil {
+		t.Fatal("expected an allowlisted command with a heredoc to require secondary approval")
 	}
 
 	if err := ValidateAllowedShellCommand("df -h", allowed); err == nil {
@@ -202,6 +214,45 @@ func TestParseShellCommand_Regressions(t *testing.T) {
 			},
 		},
 		{
+			name:     "multiline commands",
+			command:  "ps aux\nuptime\r\ndf -h",
+			segments: []string{"ps aux", "uptime", "df -h"},
+			operators: []string{
+				"\n",
+				"\n",
+			},
+		},
+		{
+			name:     "blank lines and operator continuation",
+			command:  "ps aux &&\n\nuptime",
+			segments: []string{"ps aux", "uptime"},
+			operators: []string{
+				"&&",
+			},
+		},
+		{
+			name:     "quoted multiline strings",
+			command:  "printf 'hello\nworld' && printf \"goodbye\nworld\"",
+			segments: []string{"printf 'hello\nworld'", "printf \"goodbye\nworld\""},
+			operators: []string{
+				"&&",
+			},
+		},
+		{
+			name:      "quoted heredoc body is opaque",
+			command:   "python3 - <<'PY'\nimport os\nprint('a | b && c > d < e $(f)')\nPY",
+			segments:  []string{"python3 - <<'PY'\nimport os\nprint('a | b && c > d < e $(f)')\nPY"},
+			operators: nil,
+		},
+		{
+			name:     "quoted heredoc followed by command",
+			command:  "python3 - <<\"PY\"\nprint('hello')\nPY\nuptime",
+			segments: []string{"python3 - <<\"PY\"\nprint('hello')\nPY", "uptime"},
+			operators: []string{
+				"\n",
+			},
+		},
+		{
 			name:      "trailing semicolon",
 			command:   "ps aux;",
 			wantError: true,
@@ -238,9 +289,37 @@ func TestParseShellCommand_Regressions(t *testing.T) {
 	}
 }
 
+func TestQuotedHeredocApprovalIdentityPreservesBodyWhitespace(t *testing.T) {
+	t.Parallel()
+
+	withOneSpace, err := ParseShellCommand("python3 - <<'PY'\nif True:\n print('x')\nPY")
+	if err != nil {
+		t.Fatalf("ParseShellCommand returned unexpected error: %v", err)
+	}
+	withFourSpaces, err := ParseShellCommand("python3 - <<'PY'\nif True:\n    print('x')\nPY")
+	if err != nil {
+		t.Fatalf("ParseShellCommand returned unexpected error: %v", err)
+	}
+	if withOneSpace.Segments[0].Normalized == withFourSpaces.Segments[0].Normalized {
+		t.Fatal("expected indentation changes in a heredoc body to produce distinct approval identities")
+	}
+	if got := normalizeApprovedShellCommand(withFourSpaces.Segments[0].Normalized); got != withFourSpaces.Segments[0].Normalized {
+		t.Fatalf("expected persisted heredoc approval identity to round-trip exactly, got %q", got)
+	}
+}
+
 type staticApprover struct {
 	decision ShellApprovalDecision
 	err      error
+}
+
+type requestRecordingApprover struct {
+	request ShellApprovalRequest
+}
+
+func (a *requestRecordingApprover) Approve(_ context.Context, req ShellApprovalRequest) (ShellApprovalDecision, error) {
+	a.request = req
+	return ShellApprovalDecision{Approved: true, Mode: SafetyModeLLMJudge}, nil
 }
 
 func (a staticApprover) Approve(context.Context, ShellApprovalRequest) (ShellApprovalDecision, error) {
@@ -268,6 +347,55 @@ func TestShellTool_UsesManualApprovalPath(t *testing.T) {
 	}
 	if !strings.Contains(result, "hello") {
 		t.Fatalf("expected command output to be preserved, got %q", result)
+	}
+}
+
+func TestShellTool_RoutesMultilineCommandThroughApprovalGate(t *testing.T) {
+	t.Parallel()
+
+	approver := &requestRecordingApprover{}
+	tool := NewShellToolWithApprover([]string{"printf"}, approver, "primary")
+	command := "printf 'first\\n'\nuname -s"
+	args, err := json.Marshal(ShellArgs{Command: command})
+	if err != nil {
+		t.Fatalf("Marshal returned unexpected error: %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+	if approver.request.Command != command {
+		t.Fatalf("expected approval gate to receive multiline command %q, got %q", command, approver.request.Command)
+	}
+	if !strings.Contains(result, "first") {
+		t.Fatalf("expected multiline command output, got %q", result)
+	}
+}
+
+func TestShellTool_RoutesQuotedHeredocThroughApprovalGate(t *testing.T) {
+	t.Parallel()
+
+	approver := &requestRecordingApprover{}
+	tool := NewShellToolWithApprover([]string{"python3"}, approver, "primary")
+	command := "python3 - <<'PY'\nprint('heredoc reached judge')\nPY"
+	args, err := json.Marshal(ShellArgs{Command: command})
+	if err != nil {
+		t.Fatalf("Marshal returned unexpected error: %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), args)
+	if err != nil {
+		t.Fatalf("Execute returned unexpected error: %v", err)
+	}
+	if approver.request.Command != command {
+		t.Fatalf("expected approval gate to receive complete heredoc %q, got %q", command, approver.request.Command)
+	}
+	if !strings.Contains(approver.request.ValidationError, "requires secondary approval") {
+		t.Fatalf("expected heredoc to require secondary approval, got %q", approver.request.ValidationError)
+	}
+	if !strings.Contains(result, "heredoc reached judge") {
+		t.Fatalf("expected heredoc output, got %q", result)
 	}
 }
 
