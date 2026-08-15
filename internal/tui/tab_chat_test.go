@@ -63,8 +63,33 @@ func TestChatTabIgnoresPriorTurnAndPriorSessionEvents(t *testing.T) {
 		SessionID:  "session_1",
 		TurnID:     "turn_2",
 	})
+	tab.applyRuntimeEvent(tools.Event{
+		Type:      tools.EventVerificationActivity,
+		SessionID: "session_2",
+		TurnID:    "turn_1",
+		Verification: tools.VerificationActivity{
+			Phase: tools.VerificationPhaseRepairing,
+		},
+	})
+	tab.applyRuntimeEvent(tools.Event{
+		Type:      tools.EventVerificationActivity,
+		SessionID: "session_1",
+		TurnID:    "turn_2",
+		Verification: tools.VerificationActivity{
+			Phase: tools.VerificationPhaseRepairing,
+		},
+	})
+	tab.applyRuntimeEvent(tools.Event{
+		Type: tools.EventVerificationActivity,
+		Verification: tools.VerificationActivity{
+			Phase: tools.VerificationPhaseRepairing,
+		},
+	})
 	if len(tab.toolCalls) != 0 {
 		t.Fatalf("expected stale runtime events to be ignored, got %#v", tab.toolCalls)
+	}
+	if len(tab.verifierActivity) != 0 {
+		t.Fatalf("expected stale and uncorrelated verifier events to be ignored, got %#v", tab.verifierActivity)
 	}
 
 	tab.applyRuntimeEvent(tools.Event{
@@ -76,6 +101,19 @@ func TestChatTabIgnoresPriorTurnAndPriorSessionEvents(t *testing.T) {
 	})
 	if len(tab.toolCalls) != 1 || tab.toolCalls[0].id != "current" {
 		t.Fatalf("expected current-turn runtime event, got %#v", tab.toolCalls)
+	}
+	tab.applyRuntimeEvent(tools.Event{
+		Type:      tools.EventVerificationActivity,
+		SessionID: "session_2",
+		TurnID:    "turn_2",
+		Verification: tools.VerificationActivity{
+			Phase:         tools.VerificationPhaseChecking,
+			RepairAttempt: 0,
+			RepairLimit:   2,
+		},
+	})
+	if activity, ok := tab.verifierActivity[2]; !ok || activity.Phase != tools.VerificationPhaseChecking {
+		t.Fatalf("expected current-turn verifier event, got %#v", tab.verifierActivity)
 	}
 }
 
@@ -102,6 +140,14 @@ func TestLiveChatNewCommandReplacesSessionAndClearsConversationState(t *testing.
 			tab.toolCalls = []liveToolCall{{id: "old-tool", status: "APPROVAL CHECK", turn: 4}}
 			tab.toolLineStarts = []int{7}
 			tab.toolLineEnds = []int{9}
+			tab.verifierActivity[4] = liveVerificationActivity{
+				turn: 4,
+				VerificationActivity: tools.VerificationActivity{
+					Phase:         tools.VerificationPhaseRepairing,
+					RepairAttempt: 1,
+					RepairLimit:   2,
+				},
+			}
 			tab.activeTurn = 4
 			tab.target = "prod-host"
 			tab.verification = "FAILED"
@@ -138,8 +184,8 @@ func TestLiveChatNewCommandReplacesSessionAndClearsConversationState(t *testing.
 			if tab.eventCh == oldEvents {
 				t.Fatal("expected a fresh event channel for the replacement runtime")
 			}
-			if len(tab.messages) != 0 || len(tab.toolCalls) != 0 || len(tab.toolLineStarts) != 0 || len(tab.toolLineEnds) != 0 {
-				t.Fatalf("expected visible transcript and tool state to clear, got messages=%#v tools=%#v", tab.messages, tab.toolCalls)
+			if len(tab.messages) != 0 || len(tab.toolCalls) != 0 || len(tab.toolLineStarts) != 0 || len(tab.toolLineEnds) != 0 || len(tab.verifierActivity) != 0 {
+				t.Fatalf("expected visible transcript, tool, and verifier state to clear, got messages=%#v tools=%#v verifier=%#v", tab.messages, tab.toolCalls, tab.verifierActivity)
 			}
 			if tab.activeTurn != 0 || tab.target != "" || tab.verification != "NOT RUN" || tab.lastError != "" || len(tab.memorySources) != 0 {
 				t.Fatalf("expected conversation metadata to reset, got turn=%d target=%q verification=%q error=%q memory=%#v", tab.activeTurn, tab.target, tab.verification, tab.lastError, tab.memorySources)
@@ -369,6 +415,167 @@ func TestLiveChatRuntimeEventsExposeExplicitToolStatus(t *testing.T) {
 	}
 }
 
+func TestLiveChatVerifierProgressIsExplicitCompactAndRedacted(t *testing.T) {
+	t.Parallel()
+
+	tab := newChatTab().(*chatTab)
+	tab.running = true
+	tab.activeTurn = 1
+	tab.sessionID = "session-live"
+	tab.activeTurnID = "turn-live"
+	tab.messages = append(tab.messages, liveChatMessage{role: "user", content: "finish the task", turn: 1})
+
+	emit := func(activity tools.VerificationActivity) {
+		tab.applyRuntimeEvent(tools.Event{
+			Type:         tools.EventVerificationActivity,
+			SessionID:    "session-live",
+			TurnID:       "turn-live",
+			Verification: activity,
+		})
+		tab.refreshViewport()
+		tab.viewport.GotoBottom()
+	}
+
+	emit(tools.VerificationActivity{
+		Phase:         tools.VerificationPhaseChecking,
+		Status:        "pending",
+		RepairAttempt: 0,
+		RepairLimit:   2,
+	})
+	if view := tab.viewport.View(); !strings.Contains(view, "CHECKING") || !strings.Contains(view, "attempt 0 of 2") || tab.status != "VERIFYING" {
+		t.Fatalf("expected explicit live checking state, status=%q view:\n%s", tab.status, view)
+	}
+
+	emit(tools.VerificationActivity{
+		Phase:                 tools.VerificationPhaseRepairing,
+		Status:                "unsatisfied",
+		RepairAttempt:         1,
+		RepairLimit:           2,
+		Reason:                "Need api_key=supersecretvalue before completion.",
+		MissingActions:        []string{"Run password=anothersecretvalue through the approved path."},
+		CapabilitiesEvaluated: true,
+		CapabilitiesChanged:   false,
+	})
+	view := tab.viewport.View()
+	for _, want := range []string{"REPAIRING", "attempt 1 of 2", "Capabilities: unchanged", "Reason:", "Missing:", "[REDACTED]"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected repair view to contain %q, got:\n%s", want, view)
+		}
+	}
+	for _, forbidden := range []string{"supersecretvalue", "anothersecretvalue"} {
+		if strings.Contains(view, forbidden) {
+			t.Fatalf("repair view exposed secret %q:\n%s", forbidden, view)
+		}
+	}
+
+	emit(tools.VerificationActivity{
+		Phase:                 tools.VerificationPhaseStopped,
+		Status:                "unsatisfied",
+		RepairAttempt:         1,
+		RepairLimit:           2,
+		Reason:                "The repaired answer did not change.",
+		MissingActions:        []string{"Complete the requested action."},
+		CapabilitiesEvaluated: true,
+		CapabilitiesChanged:   false,
+		StopReason:            tools.VerificationStopNoProgress,
+		Final:                 true,
+	})
+	view = tab.viewport.View()
+	for _, want := range []string{"STOPPED", "Stop: no progress detected", "Outcome: UNSATISFIED"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected stopped view to contain %q, got:\n%s", want, view)
+		}
+	}
+	for lineNo, line := range strings.Split(tab.View(80, 28), "\n") {
+		if got := lipgloss.Width(line); got > 80 {
+			t.Fatalf("verifier view overflow on line %d: got %d\n%s", lineNo+1, got, line)
+		}
+	}
+}
+
+func TestLiveChatTurnResultReconcilesDroppedVerifierFinalEvent(t *testing.T) {
+	t.Parallel()
+
+	tab := newChatTab().(*chatTab)
+	tab.activeTurn = 1
+	tab.applyVerificationActivity(tools.VerificationActivity{
+		Phase:                 tools.VerificationPhaseRepairing,
+		Status:                "unsatisfied",
+		RepairAttempt:         1,
+		RepairLimit:           2,
+		CapabilitiesEvaluated: true,
+	})
+	tab.applyTurnResult(agent.ChatTurnResult{
+		TaskState: state.TaskStateCompleted,
+		Output:    "done",
+		Verification: agent.CompletionVerification{
+			Status:                "satisfied",
+			Reason:                "The repair completed the request.",
+			RepairTriggered:       true,
+			RepairAttempts:        1,
+			RepairLimit:           2,
+			CapabilitiesEvaluated: true,
+			CapabilitiesChanged:   false,
+		},
+	}, nil)
+	tab.refreshViewport()
+	view := tab.viewport.View()
+	for _, want := range []string{"SATISFIED", "Outcome: SATISFIED", "attempt 1 of 2", "Capabilities: unchanged", "RESPONSE"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected reconciled final verifier view to contain %q, got:\n%s", want, view)
+		}
+	}
+}
+
+func TestLiveChatVerifierProgressFollowsBottomWithoutStealingManualScroll(t *testing.T) {
+	t.Parallel()
+
+	tab := newChatTab().(*chatTab)
+	tab.running = true
+	tab.activeTurn = 1
+	tab.sessionID = "session-scroll"
+	tab.activeTurnID = "turn-scroll"
+	tab.eventWaitStop = make(chan struct{})
+	for i := 0; i < 20; i++ {
+		tab.messages = append(tab.messages, liveChatMessage{role: "system", content: fmt.Sprintf("prior line %02d", i)})
+	}
+	tab.resize(80, 18)
+	tab.viewport.GotoBottom()
+
+	checking := chatRuntimeEventMsg{event: tools.Event{
+		Type:      tools.EventVerificationActivity,
+		SessionID: "session-scroll",
+		TurnID:    "turn-scroll",
+		Verification: tools.VerificationActivity{
+			Phase:         tools.VerificationPhaseChecking,
+			Status:        "pending",
+			RepairAttempt: 0,
+			RepairLimit:   2,
+		},
+	}}
+	updated, _ := tab.Update(checking, nil, 80, 18)
+	tab = updated.(*chatTab)
+	if !tab.viewport.AtBottom() || !strings.Contains(tab.viewport.View(), "CHECKING") {
+		t.Fatalf("expected an operator at the bottom to follow live verifier progress, offset=%d view:\n%s", tab.viewport.YOffset, tab.viewport.View())
+	}
+
+	tab.viewport.GotoTop()
+	repairing := checking
+	repairing.event.Verification = tools.VerificationActivity{
+		Phase:                 tools.VerificationPhaseRepairing,
+		Status:                "unsatisfied",
+		RepairAttempt:         1,
+		RepairLimit:           2,
+		Reason:                "A repair is needed.",
+		CapabilitiesEvaluated: true,
+	}
+	updated, _ = tab.Update(repairing, nil, 80, 18)
+	tab = updated.(*chatTab)
+	if tab.viewport.YOffset != 0 {
+		t.Fatalf("expected manual transcript position to remain at top, got offset %d", tab.viewport.YOffset)
+	}
+}
+
 func TestLiveChatOrdersToolActivityBeforeHighlightedResponse(t *testing.T) {
 	t.Parallel()
 
@@ -427,6 +634,11 @@ func TestBlockedChatShowsPolicyReasonAndInlineApprovalAction(t *testing.T) {
 	}
 	if tab.toolCalls[0].status != "APPROVAL REQUIRED" || tab.toolCalls[0].err != "" || !tab.toolCalls[0].expanded {
 		t.Fatalf("blocked tool should be waiting rather than failed: %#v", tab.toolCalls[0])
+	}
+	tab.refreshViewport()
+	tab.viewport.GotoBottom()
+	if view := tab.viewport.View(); !strings.Contains(view, "Outcome: NOT RUN") || !strings.Contains(view, "waiting for explicit approval") {
+		t.Fatalf("blocked turn should explain that verification has not run, got:\n%s", view)
 	}
 	if tab.lastError != "" {
 		t.Fatalf("approval wait should not be rendered as an execution error: %q", tab.lastError)
@@ -904,6 +1116,10 @@ func TestLiveChatSurfacesApprovalAndInterruptionStates(t *testing.T) {
 	if tab.status != "INTERRUPTED" {
 		t.Fatalf("expected interrupted state, got %q", tab.status)
 	}
+	tab.refreshViewport()
+	if view := tab.viewport.View(); !strings.Contains(view, "Outcome: NOT RUN") || !strings.Contains(view, "turn canceled before completion verification") {
+		t.Fatalf("expected cancellation-specific verification outcome, got:\n%s", view)
+	}
 }
 
 func TestLiveChatRendererDoesNotOverflowRepresentativeWidths(t *testing.T) {
@@ -925,6 +1141,18 @@ func TestLiveChatRendererDoesNotOverflowRepresentativeWidths(t *testing.T) {
 			Command:      "go test ./...",
 			Success:      false,
 			ErrorMessage: "representative tool failure with enough text to wrap safely",
+		})
+		tab.applyVerificationActivity(tools.VerificationActivity{
+			Phase:                 tools.VerificationPhaseStopped,
+			Status:                "unsatisfied",
+			RepairAttempt:         2,
+			RepairLimit:           2,
+			Reason:                strings.Repeat("A concise verifier reason that must wrap safely. ", 4),
+			MissingActions:        []string{strings.Repeat("Complete the missing operator-visible action. ", 3)},
+			CapabilitiesEvaluated: true,
+			CapabilitiesChanged:   false,
+			StopReason:            tools.VerificationStopRepairLimit,
+			Final:                 true,
 		})
 		tab.composerFocused = true
 		tab.composer.Focus()
@@ -1072,6 +1300,8 @@ func TestChatDetailRendersFullEvidence(t *testing.T) {
 		"needle_result_visible",
 		"needle_error_visible",
 		"Verification:",
+		"The assistant omitted the tool output.",
+		"Show the exact command and output.",
 		"Tools: 1 persisted outcome",
 		"go test ./...",
 		"Transcript tool evidence:",

@@ -226,7 +226,10 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 	var actualModel = c.selection.Requested.Model
 	var refreshed bool
 	var repairAttempts int
+	repairLimit := c.agent.repairAttemptLimit()
 	var lastRepairFingerprint string
+	var capabilitiesEvaluated bool
+	var capabilitiesChanged bool
 	var latestVerification CompletionVerification
 	var latestVerificationRecord state.PhaseRecord
 	failuresByTool := make(map[string]int)
@@ -294,14 +297,33 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				phaseRecord.Success = true
 				return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, output, nil
 			}
+			checking := latestVerification
+			checking.Status = "pending"
+			checking.RepairTriggered = repairAttempts > 0
+			checking.RepairAttempts = repairAttempts
+			checking.RepairLimit = repairLimit
+			checking.CapabilitiesEvaluated = capabilitiesEvaluated
+			checking.CapabilitiesChanged = capabilitiesChanged
+			checking.StopReason = tools.VerificationStopNone
+			emitVerificationActivity(iterCtx, checking, tools.VerificationPhaseChecking, false)
 			verification, verificationRecord, err := c.agent.verifyCompletion(iterCtx, c.selection, taskClass, prompt, output, observedCalls, nil)
 			verification.RepairTriggered = repairAttempts > 0
+			verification.RepairAttempts = repairAttempts
+			verification.RepairLimit = repairLimit
+			verification.CapabilitiesEvaluated = capabilitiesEvaluated
+			verification.CapabilitiesChanged = capabilitiesChanged
 			latestVerification = verification
 			latestVerificationRecord = verificationRecord
 			if err != nil {
+				verification.Status = "unavailable"
+				verification.Reason = "completion verifier was unavailable"
+				verification.StopReason = tools.VerificationStopVerifierUnavailable
+				latestVerification = verification
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseStopped, true)
 				return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, fmt.Errorf("completion verification failed: %w", err)
 			}
 			if verification.satisfied() {
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseCompleted, true)
 				logger.Info("chat turn finished after verification")
 				c.history.Add(resp.Message)
 				transcript = append(transcript, resp.Message)
@@ -310,17 +332,29 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 			}
 			fingerprint := repairFingerprint(output, toolNames, len(observedCalls), verification)
 			noProgress := lastRepairFingerprint != "" && fingerprint == lastRepairFingerprint
-			if repairAttempts < c.agent.maxRepairAttempts() && iter < c.agent.opts.MaxIterations && !noProgress {
+			if repairAttempts < repairLimit && iter < c.agent.opts.MaxIterations && !noProgress {
+				verification.RepairTriggered = true
+				verification.RepairAttempts = repairAttempts + 1
+				verification.CapabilitiesEvaluated = false
+				verification.CapabilitiesChanged = false
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseRepairing, false)
 				repairContext := c.previousActionable
 				repairContext.RepairInstruction = verification.repairPrompt()
 				reclassified := c.agent.classifyTask(iterCtx, prompt, repairContext)
 				newToolDefs := c.agent.toolDefinitionsForTask(reclassified.Class, prompt+"\n"+verification.repairPrompt())
 				newToolNames := toolNamesFromDefs(newToolDefs)
-				capabilitiesChanged := core.ToolsetKey(newToolNames) != core.ToolsetKey(toolNames)
+				capabilitiesChanged = core.ToolsetKey(newToolNames) != core.ToolsetKey(toolNames)
 				capabilityUnavailable := requiredCapabilityUnavailable(verification, newToolNames)
 				repairAttempts++
+				capabilitiesEvaluated = true
+				verification.RepairAttempts = repairAttempts
+				verification.CapabilitiesEvaluated = true
+				verification.CapabilitiesChanged = capabilitiesChanged
 				emitRepairAttempt(iterCtx, repairAttempts, verification.Reason, capabilitiesChanged, false, capabilityUnavailable, newToolNames)
 				if capabilityUnavailable {
+					verification.StopReason = tools.VerificationStopCapabilityUnavailable
+					latestVerification = verification
+					emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseStopped, true)
 					phaseRecord.Success = false
 					c.history.Add(resp.Message)
 					transcript = append(transcript, resp.Message)
@@ -336,12 +370,15 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 					toolDefs, toolNames, taskClass = newToolDefs, newToolNames, reclassified.Class
 				}
 				lastRepairFingerprint = fingerprint
-				verification.RepairTriggered = true
 				latestVerification = verification
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseRepairing, false)
 				turnChat.AddSystem(verification.repairPrompt())
 				continue
 			}
 			emitRepairAttempt(iterCtx, repairAttempts, verification.Reason, false, noProgress, false, toolNames)
+			verification.StopReason = verificationStopReason(noProgress, repairAttempts, repairLimit, iter, c.agent.opts.MaxIterations)
+			latestVerification = verification
+			emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseStopped, true)
 			phaseRecord.Success = false
 			c.history.Add(resp.Message)
 			transcript = append(transcript, resp.Message)
@@ -481,6 +518,16 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		}
 	}
 
+	if latestVerification.Status == "" {
+		latestVerification = CompletionVerification{
+			Status:         "not_run",
+			Reason:         "iteration limit reached before a final answer could be verified",
+			RepairAttempts: repairAttempts,
+			RepairLimit:    repairLimit,
+		}
+	}
+	latestVerification.StopReason = tools.VerificationStopIterationLimit
+	emitVerificationActivity(ctx, latestVerification, tools.VerificationPhaseStopped, true)
 	return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", fmt.Errorf("agent exceeded max iterations (%d) without completing the task", c.agent.opts.MaxIterations)
 }
 

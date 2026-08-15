@@ -91,6 +91,13 @@ func (a *Agent) maxRepairAttempts() int {
 	return 2
 }
 
+func (a *Agent) repairAttemptLimit() int {
+	if a == nil || a.opts.MaxIterations <= 1 {
+		return 0
+	}
+	return minInt(a.maxRepairAttempts(), a.opts.MaxIterations-1)
+}
+
 // Agent orchestrates routed model execution and tool use.
 type Agent struct {
 	opts Options
@@ -313,7 +320,10 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	var actualModel = selection.Requested.Model
 	var refreshed bool
 	var repairAttempts int
+	repairLimit := a.repairAttemptLimit()
 	var lastRepairFingerprint string
+	var capabilitiesEvaluated bool
+	var capabilitiesChanged bool
 	var latestVerification CompletionVerification
 	var latestVerificationRecord state.PhaseRecord
 	failuresByTool := make(map[string]int)
@@ -372,22 +382,45 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				phaseRecord.Success = true
 				return output, phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, nil
 			}
+			checking := latestVerification
+			checking.Status = "pending"
+			checking.RepairTriggered = repairAttempts > 0
+			checking.RepairAttempts = repairAttempts
+			checking.RepairLimit = repairLimit
+			checking.CapabilitiesEvaluated = capabilitiesEvaluated
+			checking.CapabilitiesChanged = capabilitiesChanged
+			checking.StopReason = tools.VerificationStopNone
+			emitVerificationActivity(iterCtx, checking, tools.VerificationPhaseChecking, false)
 			verification, verificationRecord, err := a.verifyCompletion(iterCtx, selection, taskClass, prompt, output, observedCalls, nil)
+			verification.RepairTriggered = repairAttempts > 0
+			verification.RepairAttempts = repairAttempts
+			verification.RepairLimit = repairLimit
+			verification.CapabilitiesEvaluated = capabilitiesEvaluated
+			verification.CapabilitiesChanged = capabilitiesChanged
 			latestVerification = verification
 			latestVerificationRecord = verificationRecord
 			if err != nil {
+				verification.Status = "unavailable"
+				verification.Reason = "completion verifier was unavailable"
+				verification.StopReason = tools.VerificationStopVerifierUnavailable
+				latestVerification = verification
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseStopped, true)
 				return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("completion verification failed: %w", err)
 			}
-			verification.RepairTriggered = repairAttempts > 0
-			latestVerification = verification
 			if verification.satisfied() {
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseCompleted, true)
 				logger.Info("agent finished task after verification")
 				phaseRecord.Success = true
 				return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, nil
 			}
 			fingerprint := repairFingerprint(output, toolNames, len(observedCalls), verification)
 			noProgress := lastRepairFingerprint != "" && fingerprint == lastRepairFingerprint
-			if repairAttempts < a.maxRepairAttempts() && iter < a.opts.MaxIterations && !noProgress {
+			if repairAttempts < repairLimit && iter < a.opts.MaxIterations && !noProgress {
+				verification.RepairTriggered = true
+				verification.RepairAttempts = repairAttempts + 1
+				verification.CapabilitiesEvaluated = false
+				verification.CapabilitiesChanged = false
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseRepairing, false)
 				reclassified := a.classifyTask(iterCtx, prompt, classificationContext{
 					PreviousActionablePrompt: prompt,
 					PreviousActionableClass:  taskClass,
@@ -396,11 +429,18 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				})
 				newToolDefs := a.toolDefinitionsForTask(reclassified.Class, prompt+"\n"+verification.repairPrompt())
 				newToolNames := toolNamesFromDefs(newToolDefs)
-				capabilitiesChanged := core.ToolsetKey(newToolNames) != core.ToolsetKey(toolNames)
+				capabilitiesChanged = core.ToolsetKey(newToolNames) != core.ToolsetKey(toolNames)
 				capabilityUnavailable := requiredCapabilityUnavailable(verification, newToolNames)
 				repairAttempts++
+				capabilitiesEvaluated = true
+				verification.RepairAttempts = repairAttempts
+				verification.CapabilitiesEvaluated = true
+				verification.CapabilitiesChanged = capabilitiesChanged
 				emitRepairAttempt(iterCtx, repairAttempts, verification.Reason, capabilitiesChanged, false, capabilityUnavailable, newToolNames)
 				if capabilityUnavailable {
+					verification.StopReason = tools.VerificationStopCapabilityUnavailable
+					latestVerification = verification
+					emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseStopped, true)
 					phaseRecord.Success = false
 					return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, incompleteTaskError{verification: verification}
 				}
@@ -414,12 +454,15 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 					toolDefs, toolNames, taskClass = newToolDefs, newToolNames, reclassified.Class
 				}
 				lastRepairFingerprint = fingerprint
-				verification.RepairTriggered = true
 				latestVerification = verification
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseRepairing, false)
 				chat.AddSystem(verification.repairPrompt())
 				continue
 			}
 			emitRepairAttempt(iterCtx, repairAttempts, verification.Reason, false, noProgress, false, toolNames)
+			verification.StopReason = verificationStopReason(noProgress, repairAttempts, repairLimit, iter, a.opts.MaxIterations)
+			latestVerification = verification
+			emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseStopped, true)
 			phaseRecord.Success = false
 			return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, incompleteTaskError{verification: verification}
 		}
@@ -553,6 +596,16 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 		}
 	}
 
+	if latestVerification.Status == "" {
+		latestVerification = CompletionVerification{
+			Status:         "not_run",
+			Reason:         "iteration limit reached before a final answer could be verified",
+			RepairAttempts: repairAttempts,
+			RepairLimit:    repairLimit,
+		}
+	}
+	latestVerification.StopReason = tools.VerificationStopIterationLimit
+	emitVerificationActivity(ctx, latestVerification, tools.VerificationPhaseStopped, true)
 	return output, phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, fmt.Errorf("agent exceeded max iterations (%d) without completing the task", a.opts.MaxIterations)
 }
 
