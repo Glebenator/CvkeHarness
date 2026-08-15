@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -62,5 +63,11 @@ func TestWriterPersistsCanonicalEnvelopeWithRedaction(t *testing.T) {
 	}
 	if decoded["authorization"] != "[REDACTED]" {
 		t.Fatalf("expected redacted payload, got %#v", decoded)
+	}
+	if info, err := os.Stat(writer.path); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("expected private telemetry file, info=%v err=%v", info, err)
+	}
+	if info, err := os.Stat(filepath.Dir(writer.path)); err != nil || info.Mode().Perm() != 0700 {
+		t.Fatalf("expected private telemetry directory, info=%v err=%v", info, err)
 	}
 }

@@ -79,6 +79,14 @@
     "expected_decision": "deny"
   },
   {
+    "id": "shell-escape-unquoted-heredoc",
+    "category": "shell_escape",
+    "description": "expanding heredocs must be denied before approval",
+    "command": "python3 - <<PY\nprint('hello')\nPY",
+    "allowed_commands": ["python3"],
+    "expected_decision": "deny"
+  },
+  {
     "id": "shell-escape-background",
     "category": "shell_escape",
     "description": "bare backgrounding must be blocked before approval",

@@ -92,7 +92,8 @@ func (s *Store) listRunPhases(ctx context.Context, runID int64) ([]PhaseRecord, 
 func (s *Store) listRunTools(ctx context.Context, runID int64) ([]ToolOutcome, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT phase, provider, model, tool_name, toolset, arguments, command, success, policy_denied,
-			denial_class, error_message, duration_ms
+			denial_class, error_message, duration_ms, output_inline, output_original_bytes,
+			output_stored_bytes, output_truncated, output_digest
 		FROM tool_outcomes
 		WHERE run_id = ?
 		ORDER BY id ASC`, runID)
@@ -105,16 +106,18 @@ func (s *Store) listRunTools(ctx context.Context, runID int64) ([]ToolOutcome, e
 	for rows.Next() {
 		var item ToolOutcome
 		var phase string
-		var success, denied int
+		var success, denied, truncated int
 		if err := rows.Scan(
 			&phase, &item.Provider, &item.Model, &item.ToolName, &item.Toolset,
 			&item.Arguments, &item.Command, &success, &denied, &item.DenialClass, &item.ErrorMessage, &item.DurationMs,
+			&item.OutputInline, &item.OutputOriginalBytes, &item.OutputStoredBytes, &truncated, &item.OutputDigest,
 		); err != nil {
 			return nil, err
 		}
 		item.Phase = core.Phase(phase)
 		item.Success = success == 1
 		item.PolicyDenied = denied == 1
+		item.OutputTruncated = truncated == 1
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -274,7 +277,8 @@ func (s *Store) listChatMessages(ctx context.Context, sessionID int64) ([]ChatMe
 func (s *Store) listChatTools(ctx context.Context, sessionID int64) (map[int64][]ToolOutcome, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT turn_id, phase, provider, model, tool_name, toolset, arguments, command,
-			success, policy_denied, denial_class, error_message, duration_ms
+			success, policy_denied, denial_class, error_message, duration_ms, output_inline,
+			output_original_bytes, output_stored_bytes, output_truncated, output_digest
 		FROM chat_tool_outcomes
 		WHERE session_id = ?
 		ORDER BY id ASC`, sessionID)
@@ -288,17 +292,19 @@ func (s *Store) listChatTools(ctx context.Context, sessionID int64) (map[int64][
 		var turnID int64
 		var item ToolOutcome
 		var phase string
-		var success, denied int
+		var success, denied, truncated int
 		if err := rows.Scan(
 			&turnID, &phase, &item.Provider, &item.Model, &item.ToolName, &item.Toolset,
 			&item.Arguments, &item.Command, &success, &denied, &item.DenialClass,
-			&item.ErrorMessage, &item.DurationMs,
+			&item.ErrorMessage, &item.DurationMs, &item.OutputInline, &item.OutputOriginalBytes,
+			&item.OutputStoredBytes, &truncated, &item.OutputDigest,
 		); err != nil {
 			return nil, err
 		}
 		item.Phase = core.Phase(phase)
 		item.Success = success == 1
 		item.PolicyDenied = denied == 1
+		item.OutputTruncated = truncated == 1
 		out[turnID] = append(out[turnID], item)
 	}
 	return out, rows.Err()

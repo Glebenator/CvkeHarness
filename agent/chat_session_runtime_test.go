@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/memory"
@@ -68,6 +69,156 @@ func (f failingTool) Name() string { return "fail_tool" }
 func (f failingTool) Description() string {
 	return "fails"
 }
+
+type fixedOutputTool struct {
+	name   string
+	output string
+}
+
+func (t fixedOutputTool) Name() string        { return t.name }
+func (t fixedOutputTool) Description() string { return t.name }
+func (t fixedOutputTool) Parameters() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
+func (t fixedOutputTool) Execute(context.Context, json.RawMessage) (string, error) {
+	return t.output, nil
+}
+
+func TestChatSpeedTestFollowUpKeepsShellCapability(t *testing.T) {
+	p := &sequenceProvider{fn: func(call int, req *provider.ChatRequest) (*provider.ChatResponse, error) {
+		switch call {
+		case 1:
+			if err := expectToolNames("shell_execute")(req); err != nil {
+				return nil, err
+			}
+			return assistantText("Your speed is 2 Mbps."), nil
+		case 2:
+			if err := expectToolNames("shell_execute")(req); err != nil {
+				return nil, err
+			}
+			return assistantText("That does seem very low."), nil
+		case 3:
+			if err := expectToolNames("shell_execute")(req); err != nil {
+				return nil, err
+			}
+			return assistantToolCall("speed-2", "shell_execute", `{}`), nil
+		case 4:
+			return assistantText("The retest is 95 Mbps."), nil
+		default:
+			return nil, fmt.Errorf("unexpected call %d", call)
+		}
+	}}
+	registry := tools.NewRegistry()
+	registry.Register(fixedOutputTool{name: "shell_execute", output: "95 Mbps"})
+	a := New(Options{Provider: p, ProviderName: "test", ToolRegistry: registry, DefaultModel: "model", MaxIterations: 3, MaxTokens: 256, DisableCompletionVerification: true})
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = session.Turn(context.Background(), "what is my internet speed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = session.Turn(context.Background(), "that seems very low"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.Turn(context.Background(), "test again")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskClass != core.TaskClassInspection || len(result.Tools) != 1 || result.Tools[0].ToolName != "shell_execute" {
+		t.Fatalf("expected inherited shell-backed retest, got class=%s tools=%#v", result.TaskClass, result.Tools)
+	}
+	if result.Tools[0].OutputInline != "95 Mbps" || result.Tools[0].OutputStoredBytes == 0 || result.Tools[0].OutputDigest == "" {
+		t.Fatalf("expected durable output metadata with prompt dumps disabled, got %#v", result.Tools[0])
+	}
+}
+
+func TestTranscriptToStateMessagesMasksPopulatedToolAndAssistantFields(t *testing.T) {
+	argumentSecret := "sk-argumentsecretvalue123456789"
+	toolSecret := "sk-tooloutputsecretvalue123456789"
+	assistantSecret := "sk-assistantsecretvalue123456789"
+	messages := TranscriptToStateMessages(1, 2, 0, time.Now(), []provider.Message{
+		{
+			Role:    "assistant",
+			Content: "calling with " + assistantSecret,
+			ToolCalls: []provider.ToolCall{{
+				ID: "call-1",
+				Function: provider.ToolFunction{
+					Name:      "shell_execute",
+					Arguments: `{"command":"echo ` + argumentSecret + `"}`,
+				},
+			}},
+		},
+		{Role: "tool", ToolCallID: "call-1", Content: "result " + toolSecret},
+	})
+	if len(messages) != 2 {
+		t.Fatalf("expected two messages, got %#v", messages)
+	}
+	all := messages[0].Content + messages[0].ToolArguments + messages[0].ToolCallsJSON + messages[1].Content
+	for _, raw := range []string{argumentSecret, toolSecret, assistantSecret} {
+		if strings.Contains(all, raw) {
+			t.Fatalf("raw secret %q survived transcript conversion: %#v", raw, messages)
+		}
+	}
+	if strings.Count(all, "[REDACTED]") < 4 {
+		t.Fatalf("expected redaction in content, arguments, JSON, and tool output, got %#v", messages)
+	}
+}
+
+func TestChatRepairRebuildsCapabilitiesAndExecutesNewTool(t *testing.T) {
+	p := newScriptedProvider(t,
+		scriptedProviderStep{name: "premature answer", expect: expectToolNames("shell_execute"), resp: assistantText("I cannot look that up.")},
+		scriptedProviderStep{name: "verification requests web", resp: verifierJSON(verificationUnsatisfied, "Current information is missing.", []string{"Use web_search."}, "Use web_search and answer from its result.")},
+		scriptedProviderStep{name: "repair gains web", expect: expectToolNames("shell_execute", "web_search"), resp: assistantToolCall("web-1", "web_search", `{}`)},
+		scriptedProviderStep{name: "answer from tool", expect: expectLastMessage("tool", "current result"), resp: assistantText("The current result is available.")},
+		scriptedProviderStep{name: "satisfied", resp: verifierJSON(verificationSatisfied, "Used the newly available capability.", nil, "")},
+	)
+	registry := tools.NewRegistry()
+	registry.Register(fixedOutputTool{name: "shell_execute", output: "unused"})
+	registry.Register(fixedOutputTool{name: "web_search", output: "current result"})
+	a := New(Options{Provider: p, ProviderName: "test", ToolRegistry: registry, DefaultModel: "model", MaxIterations: 4, MaxTokens: 256, MemoryRetriever: &memoryStub{}})
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.Turn(context.Background(), "tell me the answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.AssertComplete(t)
+	if len(result.Tools) != 1 || result.Tools[0].ToolName != "web_search" || !result.Verification.RepairTriggered {
+		t.Fatalf("expected capability-aware repair tool use, got tools=%#v verification=%#v", result.Tools, result.Verification)
+	}
+}
+
+func TestChatRepairStopsOnNoProgress(t *testing.T) {
+	p := newScriptedProvider(t,
+		scriptedProviderStep{name: "refusal", resp: assistantText("I cannot do that.")},
+		scriptedProviderStep{name: "uncertain", resp: verifierJSON(verificationUnsatisfied, "Action missing.", []string{"Complete it."}, "Complete it.")},
+		scriptedProviderStep{name: "same refusal", resp: assistantText("I cannot do that.")},
+		scriptedProviderStep{name: "same verifier", resp: verifierJSON(verificationUnsatisfied, "Action missing.", []string{"Complete it."}, "Complete it.")},
+	)
+	a := New(Options{Provider: p, ProviderName: "test", ToolRegistry: tools.NewRegistry(), DefaultModel: "model", MaxIterations: 25, MaxTokens: 256, MemoryRetriever: &memoryStub{}})
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.Turn(context.Background(), "do the task")
+	if err == nil || !strings.Contains(err.Error(), "task incomplete") {
+		t.Fatalf("expected bounded incomplete result, got %v", err)
+	}
+	p.AssertComplete(t)
+	assistantMessages := 0
+	for _, message := range result.Transcript {
+		if message.Role == "assistant" {
+			assistantMessages++
+		}
+	}
+	if assistantMessages != 1 {
+		t.Fatalf("expected only final refusal persisted, transcript=%#v", result.Transcript)
+	}
+}
+
 func (f failingTool) Parameters() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{}}`)
 }

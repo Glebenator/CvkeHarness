@@ -30,6 +30,8 @@ type EventType string
 
 const (
 	EventPromptPlanned         EventType = "prompt_planned"
+	EventTaskClassified        EventType = "task_classified"
+	EventRepairAttempted       EventType = "repair_attempted"
 	EventMemoryRetrieved       EventType = "memory_retrieved"
 	EventModelCallCompleted    EventType = "model_call_completed"
 	EventApprovalRequested     EventType = "approval_requested"
@@ -153,11 +155,21 @@ func (w *Writer) Record(ctx context.Context, event Event) (Event, error) {
 	}
 	event = redactEvent(event)
 
-	if err := os.MkdirAll(filepath.Dir(w.path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(w.path), 0700); err != nil {
 		return Event{}, err
 	}
-	f, err := os.OpenFile(w.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err := os.Chmod(filepath.Dir(filepath.Dir(w.path)), 0700); err != nil {
+		return Event{}, err
+	}
+	if err := os.Chmod(filepath.Dir(w.path), 0700); err != nil {
+		return Event{}, err
+	}
+	f, err := os.OpenFile(w.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
+		return Event{}, err
+	}
+	if err := f.Chmod(0600); err != nil {
+		_ = f.Close()
 		return Event{}, err
 	}
 	data, err := json.Marshal(event)

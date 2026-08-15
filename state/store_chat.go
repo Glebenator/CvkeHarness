@@ -67,6 +67,12 @@ func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTu
 	if turn.CreatedAt.IsZero() {
 		turn.CreatedAt = time.Now().UTC()
 	}
+	turn.FinalOutput, turn.ErrorMessage, turn.VerificationReason, turn.VerificationMissingActions = sanitizeModelOutcomeFields(
+		turn.FinalOutput,
+		turn.ErrorMessage,
+		turn.VerificationReason,
+		turn.VerificationMissingActions,
+	)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -132,6 +138,7 @@ func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTu
 	}
 
 	for _, message := range messages {
+		message = sanitizeChatMessage(message)
 		createdAt := message.CreatedAt
 		if createdAt.IsZero() {
 			createdAt = turn.CreatedAt
@@ -158,12 +165,14 @@ func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTu
 	}
 
 	for _, tool := range tools {
+		tool = sanitizeToolOutcome(tool)
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO chat_tool_outcomes (
 				session_id, turn_id, phase, provider, model, tool_name, toolset, arguments,
 				command, success, policy_denied, denial_class, error_message, duration_ms,
-				task_class, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				task_class, created_at, output_inline, output_original_bytes, output_stored_bytes,
+				output_truncated, output_digest
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			sessionID,
 			turnID,
 			string(tool.Phase),
@@ -180,6 +189,11 @@ func (s *Store) AppendChatTurn(ctx context.Context, sessionID int64, turn ChatTu
 			tool.DurationMs,
 			string(turn.TaskClass),
 			turn.CreatedAt.UTC(),
+			tool.OutputInline,
+			tool.OutputOriginalBytes,
+			tool.OutputStoredBytes,
+			boolToInt(tool.OutputTruncated),
+			tool.OutputDigest,
 		); err != nil {
 			return 0, err
 		}

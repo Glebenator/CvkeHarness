@@ -24,8 +24,8 @@ func TestDefinitionsForTaskExcludesIrrelevantTools(t *testing.T) {
 	registry.Register(fakeRegistryTool{name: "web_search"})
 
 	got := definitionNames(registry.DefinitionsForTask(core.TaskClassSummarization, "summarize the last run"))
-	if len(got) != 0 {
-		t.Fatalf("expected summarization turn to exclude irrelevant tools, got %#v", got)
+	if len(got) != 1 || got[0] != "shell_execute" {
+		t.Fatalf("expected summarization turn to advertise shell_execute, got %#v", got)
 	}
 
 	got = definitionNames(registry.DefinitionsForTask(core.TaskClassInspection, "check service status"))
@@ -34,8 +34,8 @@ func TestDefinitionsForTaskExcludesIrrelevantTools(t *testing.T) {
 	}
 
 	got = definitionNames(registry.DefinitionsForTask(core.TaskClassGeneral, "edit the user crontab"))
-	if len(got) != 1 || got[0] != "system_cron_manage" {
-		t.Fatalf("expected explicit crontab turn to keep only system_cron_manage, got %#v", got)
+	if len(got) != 2 || got[0] != "shell_execute" || got[1] != "system_cron_manage" {
+		t.Fatalf("expected explicit crontab turn to keep shell plus system_cron_manage, got %#v", got)
 	}
 }
 
