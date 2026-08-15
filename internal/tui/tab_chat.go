@@ -16,6 +16,7 @@ import (
 	"github.com/coolcake/cvkeharness/agent"
 	"github.com/coolcake/cvkeharness/internal/chatcmd"
 	"github.com/coolcake/cvkeharness/internal/secrets"
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
@@ -124,6 +125,8 @@ type chatTab struct {
 	toolLineStarts   []int
 	toolLineEnds     []int
 	activeTurn       int
+	sessionID        string
+	activeTurnID     string
 	status           string
 	statusDetail     string
 	target           string
@@ -164,6 +167,7 @@ func newChatTab() tabModel {
 		verification:    "NOT RUN",
 		controlsReady:   true,
 		commandRows:     commandMenuLimit,
+		sessionID:       fmt.Sprintf("tui_session_%d", time.Now().UnixNano()),
 	}
 }
 
@@ -613,6 +617,8 @@ func (t *chatTab) startFreshSession(svc *Service) (tabModel, tea.Cmd) {
 	t.toolLineStarts = nil
 	t.toolLineEnds = nil
 	t.activeTurn = 0
+	t.sessionID = fmt.Sprintf("tui_session_%d", time.Now().UnixNano())
+	t.activeTurnID = ""
 	t.pendingPrompt = ""
 	t.pendingCommand = chatcmd.None
 	t.pendingApproval = nil
@@ -649,6 +655,8 @@ func (t *chatTab) startApprovedRetry(svc *Service, prompt string, grant state.Se
 	t.toolLineStarts = nil
 	t.toolLineEnds = nil
 	t.activeTurn = 0
+	t.sessionID = fmt.Sprintf("tui_session_%d", time.Now().UnixNano())
+	t.activeTurnID = ""
 	t.pendingCommand = chatcmd.None
 	t.pendingApproval = nil
 	t.approvalInFlight = false
@@ -676,6 +684,8 @@ func (t *chatTab) beginTurn(prompt string) (tabModel, tea.Cmd) {
 	t.closeCommandMenu()
 	t.activeTurn++
 	ctx, cancel := context.WithCancel(context.Background())
+	t.activeTurnID = fmt.Sprintf("turn_%d", t.activeTurn)
+	ctx = telemetry.WithFields(ctx, telemetry.Fields{SessionID: t.sessionID, TurnID: t.activeTurnID})
 	t.cancelTurn = cancel
 	t.eventWaitStop = make(chan struct{})
 	t.running = true
@@ -1187,6 +1197,12 @@ func firstLine(text string) string {
 }
 
 func (t *chatTab) applyRuntimeEvent(event tools.Event) {
+	if event.SessionID != "" && t.sessionID != "" && event.SessionID != t.sessionID {
+		return
+	}
+	if event.TurnID != "" && t.activeTurnID != "" && event.TurnID != t.activeTurnID {
+		return
+	}
 	if event.Type == tools.EventMemoryInjected {
 		t.memorySources = append([]tools.MemorySource(nil), event.MemorySources...)
 		return

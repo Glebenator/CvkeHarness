@@ -59,25 +59,36 @@ type BlockedWorkStore interface {
 
 // Options configures a new agent.
 type Options struct {
-	Provider         provider.Provider
-	ProviderName     string
-	ProviderResolver ProviderResolver
-	ToolRegistry     *tools.Registry
-	EventObserver    tools.EventObserver
-	DefaultModel     string
-	MaxIterations    int
-	MaxTokens        int
-	RoutingConfig    core.RoutingConfig
-	Router           Router
-	MemoryRetriever  MemoryRetriever
-	MemoryCurator    MemoryCurator
-	RunRecorder      RunRecorder
-	BlockedWorkStore BlockedWorkStore
-	PromptDumper     *promptdump.Dumper
-	TelemetryWriter  *telemetry.Writer
+	Provider           provider.Provider
+	ProviderName       string
+	ProviderResolver   ProviderResolver
+	ToolRegistry       *tools.Registry
+	EventObserver      tools.EventObserver
+	DefaultModel       string
+	MaxIterations      int
+	MaxTokens          int
+	MaxRepairAttempts  int
+	RoutingConfig      core.RoutingConfig
+	Router             Router
+	MemoryRetriever    MemoryRetriever
+	MemoryCurator      MemoryCurator
+	RunRecorder        RunRecorder
+	BlockedWorkStore   BlockedWorkStore
+	PromptDumper       *promptdump.Dumper
+	TelemetryWriter    *telemetry.Writer
+	SafetyMode         string
+	SafetyModel        string
+	ClassifierProvider provider.Provider
 	// DisableCompletionVerification is intended for focused tests and special
 	// harnesses that already evaluate completion externally.
 	DisableCompletionVerification bool
+}
+
+func (a *Agent) maxRepairAttempts() int {
+	if a != nil && a.opts.MaxRepairAttempts > 0 {
+		return a.opts.MaxRepairAttempts
+	}
+	return 2
 }
 
 // Agent orchestrates routed model execution and tool use.
@@ -103,7 +114,8 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 	logger := log.FromContext(ctx)
 	ctx = a.withRunTelemetry(ctx)
 	ctx = tools.WithEventObserver(ctx, a.opts.EventObserver)
-	taskClass := core.ClassifyTask(prompt)
+	classification := a.classifyTask(ctx, prompt, classificationContext{})
+	taskClass := classification.Class
 	toolDefs := a.toolDefinitionsForTask(taskClass, prompt)
 	toolNames := toolNamesFromDefs(toolDefs)
 
@@ -301,6 +313,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	var actualModel = selection.Requested.Model
 	var refreshed bool
 	var repairAttempts int
+	var lastRepairFingerprint string
 	var latestVerification CompletionVerification
 	var latestVerificationRecord state.PhaseRecord
 	failuresByTool := make(map[string]int)
@@ -372,13 +385,41 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				phaseRecord.Success = true
 				return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, nil
 			}
-			if iter < a.opts.MaxIterations {
+			fingerprint := repairFingerprint(output, toolNames, len(observedCalls), verification)
+			noProgress := lastRepairFingerprint != "" && fingerprint == lastRepairFingerprint
+			if repairAttempts < a.maxRepairAttempts() && iter < a.opts.MaxIterations && !noProgress {
+				reclassified := a.classifyTask(iterCtx, prompt, classificationContext{
+					PreviousActionablePrompt: prompt,
+					PreviousActionableClass:  taskClass,
+					PreviousToolNames:        uniqueObservedToolNames(observedCalls),
+					RepairInstruction:        verification.repairPrompt(),
+				})
+				newToolDefs := a.toolDefinitionsForTask(reclassified.Class, prompt+"\n"+verification.repairPrompt())
+				newToolNames := toolNamesFromDefs(newToolDefs)
+				capabilitiesChanged := core.ToolsetKey(newToolNames) != core.ToolsetKey(toolNames)
+				capabilityUnavailable := requiredCapabilityUnavailable(verification, newToolNames)
 				repairAttempts++
+				emitRepairAttempt(iterCtx, repairAttempts, verification.Reason, capabilitiesChanged, false, capabilityUnavailable, newToolNames)
+				if capabilityUnavailable {
+					phaseRecord.Success = false
+					return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, incompleteTaskError{verification: verification}
+				}
+				if capabilitiesChanged {
+					messages := chat.Messages()
+					if len(messages) >= len(plan.SystemMessages) {
+						volatile := append([]provider.Message(nil), messages[len(plan.SystemMessages):]...)
+						plan = buildPromptPlan(retrieved, planningNotes, volatile, newToolDefs)
+						chat = NewChatState(append(append([]provider.Message(nil), plan.SystemMessages...), volatile...)...)
+					}
+					toolDefs, toolNames, taskClass = newToolDefs, newToolNames, reclassified.Class
+				}
+				lastRepairFingerprint = fingerprint
 				verification.RepairTriggered = true
 				latestVerification = verification
 				chat.AddSystem(verification.repairPrompt())
 				continue
 			}
+			emitRepairAttempt(iterCtx, repairAttempts, verification.Reason, false, noProgress, false, toolNames)
 			phaseRecord.Success = false
 			return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, incompleteTaskError{verification: verification}
 		}
@@ -479,12 +520,18 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				ErrorMessage: outcome.ErrorMessage,
 				Output:       resultStr,
 			})
+			outcome.OutputInline, outcome.OutputOriginalBytes, outcome.OutputStoredBytes, outcome.OutputTruncated, outcome.OutputDigest = state.SummarizeToolOutput(resultStr)
 			payload, _ = json.Marshal(map[string]any{
-				"tool_name":   call.Function.Name,
-				"command":     command,
-				"success":     toolErr == nil,
-				"duration_ms": durationMs,
-				"error":       outcome.ErrorMessage,
+				"tool_name":             call.Function.Name,
+				"command":               command,
+				"success":               toolErr == nil,
+				"duration_ms":           durationMs,
+				"error":                 outcome.ErrorMessage,
+				"output_inline":         outcome.OutputInline,
+				"output_original_bytes": outcome.OutputOriginalBytes,
+				"output_stored_bytes":   outcome.OutputStoredBytes,
+				"output_truncated":      outcome.OutputTruncated,
+				"output_digest":         outcome.OutputDigest,
 			})
 			_ = telemetry.Record(toolCtx, telemetry.Event{
 				Type:       telemetry.EventToolFinished,

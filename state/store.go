@@ -28,7 +28,22 @@ func Open(path string) *Store {
 		return &Store{err: fmt.Errorf("state db path is empty")}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return &Store{err: err}
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return &Store{err: err}
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return &Store{err: err}
+	}
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		return &Store{err: err}
+	}
+	if err := file.Close(); err != nil {
 		return &Store{err: err}
 	}
 
@@ -61,6 +76,16 @@ func Open(path string) *Store {
 	if err := migrate(ctx, db); err != nil {
 		_ = db.Close()
 		return &Store{err: err}
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		_ = db.Close()
+		return &Store{err: err}
+	}
+	for _, sidecar := range []string{path + "-wal", path + "-shm"} {
+		if err := os.Chmod(sidecar, 0600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			_ = db.Close()
+			return &Store{err: err}
+		}
 	}
 
 	return &Store{db: db}
@@ -99,6 +124,12 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 			record.TaskState = TaskStateFailed
 		}
 	}
+	record.FinalOutput, record.ErrorMessage, record.VerificationReason, record.VerificationMissingActions = sanitizeModelOutcomeFields(
+		record.FinalOutput,
+		record.ErrorMessage,
+		record.VerificationReason,
+		record.VerificationMissingActions,
+	)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -168,11 +199,13 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 	}
 
 	for _, tool := range record.Tools {
+		tool = sanitizeToolOutcome(tool)
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO tool_outcomes (
 				run_id, phase, provider, model, tool_name, toolset, arguments, command, success,
-				policy_denied, denial_class, error_message, duration_ms, task_class
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				policy_denied, denial_class, error_message, duration_ms, task_class, output_inline,
+				output_original_bytes, output_stored_bytes, output_truncated, output_digest
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			runID,
 			string(tool.Phase),
 			tool.Provider,
@@ -187,6 +220,11 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 			tool.ErrorMessage,
 			tool.DurationMs,
 			string(record.TaskClass),
+			tool.OutputInline,
+			tool.OutputOriginalBytes,
+			tool.OutputStoredBytes,
+			boolToInt(tool.OutputTruncated),
+			tool.OutputDigest,
 		); err != nil {
 			return err
 		}
@@ -461,6 +499,11 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			error_message TEXT NOT NULL DEFAULT '',
 			duration_ms INTEGER NOT NULL DEFAULT 0,
 			task_class TEXT NOT NULL DEFAULT '',
+			output_inline TEXT NOT NULL DEFAULT '',
+			output_original_bytes INTEGER NOT NULL DEFAULT 0,
+			output_stored_bytes INTEGER NOT NULL DEFAULT 0,
+			output_truncated INTEGER NOT NULL DEFAULT 0,
+			output_digest TEXT NOT NULL DEFAULT '',
 			FOREIGN KEY(run_id) REFERENCES runs(id)
 		);`,
 		`CREATE TABLE IF NOT EXISTS model_stats (
@@ -692,6 +735,11 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			error_message TEXT NOT NULL DEFAULT '',
 			duration_ms INTEGER NOT NULL DEFAULT 0,
 			task_class TEXT NOT NULL DEFAULT '',
+			output_inline TEXT NOT NULL DEFAULT '',
+			output_original_bytes INTEGER NOT NULL DEFAULT 0,
+			output_stored_bytes INTEGER NOT NULL DEFAULT 0,
+			output_truncated INTEGER NOT NULL DEFAULT 0,
+			output_digest TEXT NOT NULL DEFAULT '',
 			created_at DATETIME NOT NULL,
 			FOREIGN KEY(session_id) REFERENCES chat_sessions(id),
 			FOREIGN KEY(turn_id) REFERENCES chat_turns(id)
@@ -827,6 +875,16 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`ALTER TABLE chat_turns ADD COLUMN verification_repair_triggered INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE tool_outcomes ADD COLUMN arguments TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE tool_outcomes ADD COLUMN command TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tool_outcomes ADD COLUMN output_inline TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE tool_outcomes ADD COLUMN output_original_bytes INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE tool_outcomes ADD COLUMN output_stored_bytes INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE tool_outcomes ADD COLUMN output_truncated INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE tool_outcomes ADD COLUMN output_digest TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE chat_tool_outcomes ADD COLUMN output_inline TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE chat_tool_outcomes ADD COLUMN output_original_bytes INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE chat_tool_outcomes ADD COLUMN output_stored_bytes INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE chat_tool_outcomes ADD COLUMN output_truncated INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE chat_tool_outcomes ADD COLUMN output_digest TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE scheduled_jobs ADD COLUMN claimed_by TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE scheduled_jobs ADD COLUMN claim_expires_at DATETIME`,
 		`ALTER TABLE scheduled_jobs ADD COLUMN claim_heartbeat_at DATETIME`,

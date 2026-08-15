@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"time"
+
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 )
 
 // EventType identifies a structured runtime event that may be rendered to the
@@ -44,6 +46,8 @@ type Event struct {
 	Duration      time.Duration
 	ErrorMessage  string
 	MemorySources []MemorySource
+	SessionID     string
+	TurnID        string
 }
 
 // EventObserver receives runtime events.
@@ -110,6 +114,13 @@ func EmitEvent(ctx context.Context, event Event) {
 	}
 	if event.ToolName == "" {
 		event.ToolName = meta.Name
+	}
+	fields := telemetry.FieldsFromContext(ctx)
+	if event.SessionID == "" {
+		event.SessionID = fields.SessionID
+	}
+	if event.TurnID == "" {
+		event.TurnID = fields.TurnID
 	}
 	observer.Observe(event)
 }

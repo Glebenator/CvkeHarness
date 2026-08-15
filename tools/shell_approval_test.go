@@ -2,11 +2,25 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/coolcake/cvkeharness/provider"
 )
+
+type failingJudgeProvider struct{}
+
+func (failingJudgeProvider) ChatCompletion(context.Context, *provider.ChatRequest) (*provider.ChatResponse, error) {
+	return nil, fmt.Errorf("judge unavailable")
+}
+
+func TestLLMJudgeFailureRemainsFailClosed(t *testing.T) {
+	approver := NewLLMJudgeApprover(failingJudgeProvider{}, "safety-model")
+	if decision, err := approver.Approve(context.Background(), ShellApprovalRequest{Command: "uname -s"}); err == nil || decision.Approved {
+		t.Fatalf("expected failed safety judge to deny, decision=%#v err=%v", decision, err)
+	}
+}
 
 type fixedJudgeProvider struct {
 	response string

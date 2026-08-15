@@ -57,18 +57,23 @@ type PhaseRecord struct {
 
 // ToolOutcome records an individual tool result.
 type ToolOutcome struct {
-	Phase        core.Phase
-	Provider     string
-	Model        string
-	ToolName     string
-	Toolset      string
-	Arguments    string
-	Command      string
-	Success      bool
-	PolicyDenied bool
-	DenialClass  string
-	ErrorMessage string
-	DurationMs   int64
+	Phase               core.Phase
+	Provider            string
+	Model               string
+	ToolName            string
+	Toolset             string
+	Arguments           string
+	Command             string
+	Success             bool
+	PolicyDenied        bool
+	DenialClass         string
+	ErrorMessage        string
+	DurationMs          int64
+	OutputInline        string
+	OutputOriginalBytes int64
+	OutputStoredBytes   int64
+	OutputTruncated     bool
+	OutputDigest        string
 }
 
 // ModelStats is the normalized aggregate used by routing.

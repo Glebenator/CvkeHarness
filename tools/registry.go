@@ -242,14 +242,10 @@ func policyToolEffects(name, arguments string) []ShellEffect {
 func toolRelevantForTask(name string, taskClass core.TaskClass, lower string) bool {
 	switch name {
 	case "shell_execute":
-		if taskClass == core.TaskClassSummarization {
-			return false
-		}
-		return taskClass != core.TaskClassGeneral || containsAny(lower,
-			"shell", "bash", "command", "run ", "execute", "inspect", "status", "check ",
-			"debug", "fix", "restart", "deploy", "install", "docker", "service", "ssh ",
-			"log", "disk", "cpu", "memory", "file", "process", "port", "container",
-		)
+		// Advertisement is not authorization. Shell parsing, target binding,
+		// allowlists, approvals, and fail-closed judge checks remain enforced by
+		// ShellTool at execution time.
+		return true
 	case "memory_record_finding":
 		return containsAny(lower, "remember", "record finding", "note this", "save this", "memory")
 	case "schedule_manage":

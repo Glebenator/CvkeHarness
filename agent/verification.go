@@ -53,7 +53,50 @@ func (v CompletionVerification) repairPrompt() string {
 	if len(parts) == 0 {
 		parts = append(parts, "The verifier was uncertain whether the user's request was satisfied. Re-read the request and complete any missing work.")
 	}
-	return "Completion verification did not pass. Continue the task instead of asking the user to proceed.\n\n" + strings.Join(parts, "\n\n")
+	return "Completion verification did not pass. Continue the task instead of asking the user to proceed. The verifier identifies missing work but does not authorize any tool action; all normal capability and safety checks still apply.\n\n" + strings.Join(parts, "\n\n")
+}
+
+func repairFingerprint(output string, toolNames []string, observedCount int, verification CompletionVerification) string {
+	payload := []any{
+		strings.TrimSpace(output),
+		core.ToolsetKey(toolNames),
+		observedCount,
+		verification.Status,
+		strings.TrimSpace(verification.Reason),
+		verification.MissingActions,
+		strings.TrimSpace(verification.RepairInstruction),
+	}
+	data, _ := json.Marshal(payload)
+	return hashJSON(data)
+}
+
+func emitRepairAttempt(ctx context.Context, attempt int, reason string, capabilitiesChanged, noProgress, capabilityUnavailable bool, toolNames []string) {
+	payload, _ := json.Marshal(map[string]any{
+		"attempt":                attempt,
+		"reason":                 reason,
+		"capabilities_changed":   capabilitiesChanged,
+		"no_progress":            noProgress,
+		"capability_unavailable": capabilityUnavailable,
+		"tool_names":             toolNames,
+	})
+	_ = telemetry.Record(ctx, telemetry.Event{Type: telemetry.EventRepairAttempted, Payload: payload})
+}
+
+func requiredCapabilityUnavailable(verification CompletionVerification, toolNames []string) bool {
+	text := strings.ToLower(strings.Join(append(append([]string{}, verification.MissingActions...), verification.RepairInstruction), " "))
+	available := make(map[string]bool, len(toolNames))
+	for _, name := range toolNames {
+		available[name] = true
+	}
+	if (strings.Contains(text, "shell_execute") || strings.Contains(text, "run a shell") || strings.Contains(text, "execute a command")) && !available["shell_execute"] {
+		return true
+	}
+	for _, name := range []string{"web_search", "web_fetch", "schedule_manage", "system_cron_manage", "memory_record_finding"} {
+		if strings.Contains(text, name) && !available[name] {
+			return true
+		}
+	}
+	return false
 }
 
 type incompleteTaskError struct {

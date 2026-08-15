@@ -42,6 +42,43 @@ func (f *fakeLiveChatSession) Turn(_ context.Context, prompt string) (agent.Chat
 
 func (f *fakeLiveChatSession) Close(_ context.Context, reason string) { f.closed = reason }
 
+func TestChatTabIgnoresPriorTurnAndPriorSessionEvents(t *testing.T) {
+	t.Parallel()
+
+	tab := newChatTab().(*chatTab)
+	tab.sessionID = "session_2"
+	tab.activeTurn = 2
+	tab.activeTurnID = "turn_2"
+	tab.applyRuntimeEvent(tools.Event{
+		Type:       tools.EventToolCallStarted,
+		ToolCallID: "late-turn",
+		ToolName:   "shell_execute",
+		SessionID:  "session_2",
+		TurnID:     "turn_1",
+	})
+	tab.applyRuntimeEvent(tools.Event{
+		Type:       tools.EventToolCallStarted,
+		ToolCallID: "late-session",
+		ToolName:   "shell_execute",
+		SessionID:  "session_1",
+		TurnID:     "turn_2",
+	})
+	if len(tab.toolCalls) != 0 {
+		t.Fatalf("expected stale runtime events to be ignored, got %#v", tab.toolCalls)
+	}
+
+	tab.applyRuntimeEvent(tools.Event{
+		Type:       tools.EventToolCallStarted,
+		ToolCallID: "current",
+		ToolName:   "shell_execute",
+		SessionID:  "session_2",
+		TurnID:     "turn_2",
+	})
+	if len(tab.toolCalls) != 1 || tab.toolCalls[0].id != "current" {
+		t.Fatalf("expected current-turn runtime event, got %#v", tab.toolCalls)
+	}
+}
+
 func TestLiveChatNewCommandReplacesSessionAndClearsConversationState(t *testing.T) {
 	t.Parallel()
 

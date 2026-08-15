@@ -11,6 +11,7 @@ import (
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/log"
 	"github.com/coolcake/cvkeharness/internal/promptdump"
+	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
@@ -20,9 +21,10 @@ import (
 
 // ChatConversation owns one in-process interactive chat session.
 type ChatConversation struct {
-	agent     *Agent
-	selection core.RoutingSelection
-	history   *ChatState
+	agent              *Agent
+	selection          core.RoutingSelection
+	history            *ChatState
+	previousActionable classificationContext
 }
 
 // ChatTurnResult contains one assistant turn plus transcript and stats.
@@ -109,7 +111,8 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 	ctx = c.agent.withRunTelemetry(ctx)
 	ctx = tools.WithEventObserver(ctx, c.agent.opts.EventObserver)
 
-	taskClass := core.ClassifyTask(prompt)
+	classification := c.agent.classifyTask(ctx, prompt, c.previousActionable)
+	taskClass := classification.Class
 	phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, execErr := c.runChatTurn(ctx, prompt, taskClass)
 	result := ChatTurnResult{
 		Output:            output,
@@ -124,6 +127,13 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 		Routing:           c.selection,
 		Verification:      verification,
 		ExecutionErr:      execErr,
+	}
+	if classification.Actionable || len(toolOutcomes) > 0 {
+		c.previousActionable = classificationContext{
+			PreviousActionablePrompt: prompt,
+			PreviousActionableClass:  taskClass,
+			PreviousToolNames:        uniqueObservedToolNames(observedCalls),
+		}
 	}
 	if isBlockedTaskError(execErr) {
 		var blocked blockedTaskError
@@ -216,6 +226,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 	var actualModel = c.selection.Requested.Model
 	var refreshed bool
 	var repairAttempts int
+	var lastRepairFingerprint string
 	var latestVerification CompletionVerification
 	var latestVerificationRecord state.PhaseRecord
 	failuresByTool := make(map[string]int)
@@ -269,13 +280,17 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		phaseRecord.ActualModel = actualModel
 
 		turnChat.Add(resp.Message)
-		c.history.Add(resp.Message)
-		transcript = append(transcript, resp.Message)
+		if len(resp.Message.ToolCalls) > 0 {
+			c.history.Add(resp.Message)
+			transcript = append(transcript, resp.Message)
+		}
 
 		if len(resp.Message.ToolCalls) == 0 {
 			output := resp.Message.Content
 			if c.agent.opts.DisableCompletionVerification {
 				logger.Info("chat turn finished")
+				c.history.Add(resp.Message)
+				transcript = append(transcript, resp.Message)
 				phaseRecord.Success = true
 				return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, output, nil
 			}
@@ -288,17 +303,48 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 			}
 			if verification.satisfied() {
 				logger.Info("chat turn finished after verification")
+				c.history.Add(resp.Message)
+				transcript = append(transcript, resp.Message)
 				phaseRecord.Success = true
 				return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, nil
 			}
-			if iter < c.agent.opts.MaxIterations {
+			fingerprint := repairFingerprint(output, toolNames, len(observedCalls), verification)
+			noProgress := lastRepairFingerprint != "" && fingerprint == lastRepairFingerprint
+			if repairAttempts < c.agent.maxRepairAttempts() && iter < c.agent.opts.MaxIterations && !noProgress {
+				repairContext := c.previousActionable
+				repairContext.RepairInstruction = verification.repairPrompt()
+				reclassified := c.agent.classifyTask(iterCtx, prompt, repairContext)
+				newToolDefs := c.agent.toolDefinitionsForTask(reclassified.Class, prompt+"\n"+verification.repairPrompt())
+				newToolNames := toolNamesFromDefs(newToolDefs)
+				capabilitiesChanged := core.ToolsetKey(newToolNames) != core.ToolsetKey(toolNames)
+				capabilityUnavailable := requiredCapabilityUnavailable(verification, newToolNames)
 				repairAttempts++
+				emitRepairAttempt(iterCtx, repairAttempts, verification.Reason, capabilitiesChanged, false, capabilityUnavailable, newToolNames)
+				if capabilityUnavailable {
+					phaseRecord.Success = false
+					c.history.Add(resp.Message)
+					transcript = append(transcript, resp.Message)
+					return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, incompleteTaskError{verification: verification}
+				}
+				if capabilitiesChanged {
+					messages := turnChat.Messages()
+					if len(messages) >= len(plan.SystemMessages) {
+						volatile := append([]provider.Message(nil), messages[len(plan.SystemMessages):]...)
+						plan = buildPromptPlan(retrieved, "", volatile, newToolDefs)
+						turnChat = NewChatState(append(append([]provider.Message(nil), plan.SystemMessages...), volatile...)...)
+					}
+					toolDefs, toolNames, taskClass = newToolDefs, newToolNames, reclassified.Class
+				}
+				lastRepairFingerprint = fingerprint
 				verification.RepairTriggered = true
 				latestVerification = verification
 				turnChat.AddSystem(verification.repairPrompt())
 				continue
 			}
+			emitRepairAttempt(iterCtx, repairAttempts, verification.Reason, false, noProgress, false, toolNames)
 			phaseRecord.Success = false
+			c.history.Add(resp.Message)
+			transcript = append(transcript, resp.Message)
 			return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, incompleteTaskError{verification: verification}
 		}
 
@@ -394,12 +440,18 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				ErrorMessage: outcome.ErrorMessage,
 				Output:       resultStr,
 			})
+			outcome.OutputInline, outcome.OutputOriginalBytes, outcome.OutputStoredBytes, outcome.OutputTruncated, outcome.OutputDigest = state.SummarizeToolOutput(resultStr)
 			payload, _ = json.Marshal(map[string]any{
-				"tool_name":   call.Function.Name,
-				"command":     command,
-				"success":     toolErr == nil,
-				"duration_ms": durationMs,
-				"error":       outcome.ErrorMessage,
+				"tool_name":             call.Function.Name,
+				"command":               command,
+				"success":               toolErr == nil,
+				"duration_ms":           durationMs,
+				"error":                 outcome.ErrorMessage,
+				"output_inline":         outcome.OutputInline,
+				"output_original_bytes": outcome.OutputOriginalBytes,
+				"output_stored_bytes":   outcome.OutputStoredBytes,
+				"output_truncated":      outcome.OutputTruncated,
+				"output_digest":         outcome.OutputDigest,
 			})
 			_ = telemetry.Record(toolCtx, telemetry.Event{
 				Type:       telemetry.EventToolFinished,
@@ -467,6 +519,9 @@ func TranscriptToStateMessages(sessionID, turnID int64, startIndex int, at time.
 				item.ToolCallsJSON = string(raw)
 			}
 		}
+		item.Content = secrets.Mask(item.Content)
+		item.ToolArguments = secrets.Mask(item.ToolArguments)
+		item.ToolCallsJSON = secrets.Mask(item.ToolCallsJSON)
 		out = append(out, item)
 		nextIndex++
 	}
