@@ -19,6 +19,16 @@ const (
 	EventMemoryInjected       EventType = "memory_injected"
 )
 
+// MemorySource is a bounded, UI-safe description of one memory section used
+// for a model call. Preview is intentionally compact and may still contain
+// private operational context, so observers must not persist it implicitly.
+type MemorySource struct {
+	Name    string
+	Origin  string
+	Chars   int
+	Preview string
+}
+
 // Event captures a single execution update.
 type Event struct {
 	Type          EventType
@@ -33,6 +43,7 @@ type Event struct {
 	ExitCodeKnown bool
 	Duration      time.Duration
 	ErrorMessage  string
+	MemorySources []MemorySource
 }
 
 // EventObserver receives runtime events.

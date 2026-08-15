@@ -1,13 +1,52 @@
 package cmd
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/coolcake/cvkeharness/agent"
+	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/state"
 )
+
+func TestExportCurrentChatWritesCompletedPersistedTurn(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "state.db")
+	store := state.Open(statePath)
+	defer store.Close()
+	ctx := context.Background()
+	sessionID, err := store.StartChatSession(ctx, state.ChatSession{Provider: "openai", PinnedModel: "test-model"})
+	if err != nil {
+		t.Fatalf("StartChatSession returned error: %v", err)
+	}
+	if _, err := store.AppendChatTurn(ctx, sessionID, state.ChatTurn{
+		UserInput:   "hello",
+		FinalOutput: "world",
+		TaskState:   state.TaskStateCompleted,
+		Success:     true,
+	}, nil, nil); err != nil {
+		t.Fatalf("AppendChatTurn returned error: %v", err)
+	}
+
+	path, err := exportCurrentChat(ctx, store, &chatSessionState{sessionID: sessionID}, &config.Config{StateDBPath: statePath})
+	if err != nil {
+		t.Fatalf("exportCurrentChat returned error: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read export: %v", err)
+	}
+	if !strings.Contains(string(body), "hello") || !strings.Contains(string(body), "world") {
+		t.Fatalf("unexpected export:\n%s", body)
+	}
+}
 
 func TestChatSessionStatsSummaryUsesPinnedModelWhenNoTurns(t *testing.T) {
 	t.Parallel()

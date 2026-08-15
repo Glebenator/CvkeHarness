@@ -234,6 +234,27 @@ Show why routing chose a model:
 - `cvkeharness scorecard`
   Generate a deterministic safety scorecard
 
+### Chat slash commands
+
+Slash commands are handled locally and are never sent to the model. In the Guided Console, type `/` at the start of the composer to open the filtered command palette; use the arrow keys to select and Enter to complete or run a command. Prefix a prompt with `//` to send a literal leading slash.
+
+- `/new` (`/clear` remains an alias)
+  Close the current logical session and start a fresh conversation
+- `/memory`
+  Show bounded previews of the memory sections used by the latest model call
+- `/export`
+  Write the persisted conversation to a private, redacted Markdown file under `~/.cvkeharness/exports/` by default
+- `/tools`
+  List registered capabilities and the current safety mode without implying authorization
+- `/history`
+  Browse saved conversations in the Guided Console
+- `/help`
+  Show commands available on the current chat surface
+- `/exit`
+  End the line-oriented CLI chat
+
+Exports use private file permissions and mask obvious credential patterns. They may still contain private operational context, so review them before sharing.
+
 ### Memory commands
 
 - `cvkeharness memory show`

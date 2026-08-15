@@ -3,8 +3,10 @@ package tui
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/internal/chatexport"
 	"github.com/coolcake/cvkeharness/scheduler"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/systemcron"
@@ -109,6 +111,26 @@ func (s *Service) ChatSessionDetail(ctx context.Context, id int64) (state.ChatSe
 		return state.ChatSessionDetail{}, nil
 	}
 	return s.store.GetChatSessionDetail(ctx, id)
+}
+
+// ExportChatSession writes a private, redacted Markdown copy of a persisted
+// chat session next to the local state database.
+func (s *Service) ExportChatSession(ctx context.Context, id int64) (string, error) {
+	if s == nil || s.cfg == nil {
+		return "", fmt.Errorf("chat export configuration is unavailable")
+	}
+	if s.store == nil || !s.store.Available() {
+		return "", fmt.Errorf("chat history database is unavailable")
+	}
+	detail, err := s.store.GetChatSessionDetail(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	dir, err := chatexport.DirectoryForStateDB(s.cfg.StateDBPath)
+	if err != nil {
+		return "", err
+	}
+	return chatexport.WriteMarkdown(dir, detail, time.Now())
 }
 
 // ScheduledJobs returns all scheduled jobs.

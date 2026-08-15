@@ -9,7 +9,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/coolcake/cvkeharness/agent"
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/chatcmd"
+	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
@@ -49,6 +52,7 @@ type ChatSurface struct {
 	statusSince time.Time
 	statusFrame int
 	statusStop  chan struct{}
+	memory      []tools.MemorySource
 }
 
 // NewChatSurface creates a terminal chat renderer.
@@ -100,6 +104,7 @@ func (c *ChatSurface) Observe(event tools.Event) {
 
 	switch event.Type {
 	case tools.EventMemoryInjected:
+		c.memory = append([]tools.MemorySource(nil), event.MemorySources...)
 		if c.statusRun {
 			c.statusLabel = "Injecting memory"
 			c.statusInfo = truncateRunes(strings.TrimSpace(event.Output), c.width-28)
@@ -169,6 +174,7 @@ func (c *ChatSurface) Observe(event tools.Event) {
 func (c *ChatSurface) RenderBanner(selection core.RoutingSelection) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.resetSessionLocked()
 
 	if c.rich {
 		fmt.Fprint(c.out, termui.ClearScreen)
@@ -176,7 +182,7 @@ func (c *ChatSurface) RenderBanner(selection core.RoutingSelection) {
 			termui.FGWhite + termui.ANSIBold + "CvkeHarness" + termui.ANSIReset + "  " + termui.FGMuted + "interactive chat workspace" + termui.ANSIReset,
 			renderStatusBadges(
 				renderBadge("model", selection.Requested.String(), termui.FGAccent),
-				renderBadge("commands", "/help  /clear  /exit", termui.FGGreen),
+				renderBadge("commands", "/help", termui.FGGreen),
 			),
 		}
 		if reason := strings.TrimSpace(selection.Reason); reason != "" {
@@ -189,19 +195,90 @@ func (c *ChatSurface) RenderBanner(selection core.RoutingSelection) {
 	fmt.Fprintln(c.out)
 	fmt.Fprintln(c.out, "CvkeHarness chat")
 	fmt.Fprintf(c.out, "Pinned model: %s\n", selection.Requested.String())
-	fmt.Fprintln(c.out, "Commands: /help, /clear, /exit")
+	fmt.Fprintln(c.out, "Commands: /help")
 	if reason := strings.TrimSpace(selection.Reason); reason != "" {
 		fmt.Fprintf(c.out, "Reason: %s\n", reason)
 	}
 }
 
+func (c *ChatSurface) resetSessionLocked() {
+	if c.statusRun && c.statusStop != nil {
+		close(c.statusStop)
+	}
+	c.shells = make(map[string]*shellRenderState)
+	c.logPending = ""
+	c.statusRun = false
+	c.statusLabel = ""
+	c.statusInfo = ""
+	c.statusSince = time.Time{}
+	c.statusFrame = 0
+	c.statusStop = nil
+	c.memory = nil
+}
+
 // PrintHelp renders the available slash commands.
 func (c *ChatSurface) PrintHelp() {
-	c.printNote("Commands", termui.FGGreen, []string{
-		"/help  Show the available chat commands",
-		"/clear Start a fresh in-process chat session",
-		"/exit  End chat",
-	})
+	commands := chatcmd.Available(chatcmd.CLI)
+	lines := make([]string, 0, len(commands))
+	for _, command := range commands {
+		lines = append(lines, fmt.Sprintf("%-15s %s", chatcmd.Label(command), command.Description))
+	}
+	c.printNote("Commands", termui.FGGreen, lines)
+}
+
+// PrintMemory shows the bounded source previews used by the latest model call.
+func (c *ChatSurface) PrintMemory() {
+	c.mu.Lock()
+	sources := append([]tools.MemorySource(nil), c.memory...)
+	c.mu.Unlock()
+	if len(sources) == 0 {
+		c.printNote("Memory", termui.FGMuted, []string{"No memory has been retrieved yet. Send a task first; /memory reports the latest model call."})
+		return
+	}
+	lines := []string{"Latest model call:"}
+	for _, source := range sources {
+		label := strings.TrimSpace(source.Name)
+		if source.Origin != "" {
+			label += " (" + strings.TrimSpace(source.Origin) + ")"
+		}
+		line := fmt.Sprintf("%s  %d chars", label, source.Chars)
+		if preview := strings.TrimSpace(secrets.Mask(source.Preview)); preview != "" {
+			line += "  " + preview
+		}
+		lines = append(lines, line)
+	}
+	c.printNote("Memory", termui.FGMuted, lines)
+}
+
+// PrintTools lists registered capabilities without implying authorization.
+func (c *ChatSurface) PrintTools(items []agent.ChatTool, safetyMode string) {
+	safetyMode = strings.TrimSpace(safetyMode)
+	if safetyMode == "" {
+		safetyMode = "unknown"
+	}
+	lines := []string{
+		"Registered capabilities are not authorization. Task filtering, target binding, policy, and approvals still apply.",
+		"Safety mode: " + strings.ReplaceAll(safetyMode, "_", " "),
+	}
+	if len(items) == 0 {
+		lines = append(lines, "No tools are registered for this runtime.")
+	} else {
+		for _, item := range items {
+			lines = append(lines, item.Name+"  "+compactToolDescription(item.Description))
+		}
+	}
+	c.printNote("Tools", termui.FGAccent, lines)
+}
+
+func compactToolDescription(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))
+	if value == "" {
+		return "No description available"
+	}
+	if idx := strings.Index(value, ". "); idx >= 0 {
+		value = value[:idx+1]
+	}
+	return truncateRunes(value, 140)
 }
 
 // PrintInfo renders a compact informational note.

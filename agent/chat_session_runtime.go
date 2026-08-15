@@ -42,6 +42,14 @@ type ChatTurnResult struct {
 	CurationError     error
 }
 
+// ChatTool describes one capability registered for the current chat runtime.
+// Registration only means the capability can be advertised; execution still
+// passes through task filtering, target binding, policy, and approval checks.
+type ChatTool struct {
+	Name        string
+	Description string
+}
+
 // StartChat creates a new interactive chat session with a pinned model.
 func (a *Agent) StartChat(ctx context.Context) (*ChatConversation, core.RoutingSelection, error) {
 	toolNames := []string{}
@@ -70,6 +78,24 @@ func (a *Agent) StartChat(ctx context.Context) (*ChatConversation, core.RoutingS
 		selection: selection,
 		history:   NewChatState(),
 	}, selection, nil
+}
+
+// Tools returns the capabilities registered for this conversation in stable
+// name order. It does not grant or imply authorization to execute them.
+func (c *ChatConversation) Tools() []ChatTool {
+	if c == nil || c.agent == nil || c.agent.opts.ToolRegistry == nil {
+		return nil
+	}
+	names := c.agent.opts.ToolRegistry.Names()
+	items := make([]ChatTool, 0, len(names))
+	for _, name := range names {
+		tool, ok := c.agent.opts.ToolRegistry.Get(name)
+		if !ok {
+			continue
+		}
+		items = append(items, ChatTool{Name: tool.Name(), Description: tool.Description()})
+	}
+	return items
 }
 
 // Turn executes one user prompt inside the active chat session.

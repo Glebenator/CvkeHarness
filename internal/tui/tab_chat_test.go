@@ -17,14 +17,22 @@ import (
 )
 
 type fakeLiveChatSession struct {
+	id        int64
 	selection core.RoutingSelection
 	result    agent.ChatTurnResult
 	err       error
 	prompt    string
 	closed    string
+	tools     []agent.ChatTool
 }
 
+func (f *fakeLiveChatSession) ID() int64 { return f.id }
+
 func (f *fakeLiveChatSession) Selection() core.RoutingSelection { return f.selection }
+
+func (f *fakeLiveChatSession) Tools() []agent.ChatTool {
+	return append([]agent.ChatTool(nil), f.tools...)
+}
 
 func (f *fakeLiveChatSession) Turn(_ context.Context, prompt string) (agent.ChatTurnResult, error) {
 	f.prompt = prompt
@@ -32,6 +40,230 @@ func (f *fakeLiveChatSession) Turn(_ context.Context, prompt string) (agent.Chat
 }
 
 func (f *fakeLiveChatSession) Close(_ context.Context, reason string) { f.closed = reason }
+
+func TestLiveChatNewCommandReplacesSessionAndClearsConversationState(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{"/new", "/clear"} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			oldSession := &fakeLiveChatSession{}
+			freshSession := &fakeLiveChatSession{
+				selection: core.RoutingSelection{Requested: core.NewModelRef("openrouter", "fresh-model")},
+			}
+			svc := &Service{}
+			svc.SetChatStarter(func(context.Context, tools.EventObserver) (LiveChatSession, error) {
+				return freshSession, nil
+			})
+
+			tab := newChatTab().(*chatTab)
+			tab.session = oldSession
+			tab.messages = []liveChatMessage{{role: "assistant", content: "old transcript", turn: 4}}
+			tab.toolCalls = []liveToolCall{{id: "old-tool", status: "APPROVAL CHECK", turn: 4}}
+			tab.toolLineStarts = []int{7}
+			tab.toolLineEnds = []int{9}
+			tab.activeTurn = 4
+			tab.target = "prod-host"
+			tab.verification = "FAILED"
+			tab.status = "APPROVAL REQUIRED"
+			tab.statusDetail = "old approval state"
+			tab.lastError = "old failure"
+			tab.memorySources = []tools.MemorySource{{Name: "targets.md"}}
+			tab.markdownWidth = 80
+			tab.markdownCache = map[string]string{"old": "rendered"}
+			tab.composerFocused = true
+			tab.composer.Focus()
+			tab.composer.SetValue(command)
+			oldEvents := tab.eventCh
+			oldWaiter := make(chan struct{})
+			tab.eventWaitStop = oldWaiter
+			oldEvents <- tools.Event{Type: tools.EventToolCallStarted, ToolCallID: "stale", ToolName: "shell_execute"}
+
+			updated, cmd := tab.updateLive(tea.KeyMsg{Type: tea.KeyEnter}, svc)
+			tab = updated.(*chatTab)
+			if cmd == nil {
+				t.Fatal("expected the new command to start a replacement session")
+			}
+			if oldSession.closed != "new_chat" {
+				t.Fatalf("expected old session to close as new_chat, got %q", oldSession.closed)
+			}
+			if oldSession.prompt != "" {
+				t.Fatalf("expected local command never to reach the old model session, got %q", oldSession.prompt)
+			}
+			select {
+			case <-oldWaiter:
+			default:
+				t.Fatal("expected old runtime-event waiter to stop")
+			}
+			if tab.eventCh == oldEvents {
+				t.Fatal("expected a fresh event channel for the replacement runtime")
+			}
+			if len(tab.messages) != 0 || len(tab.toolCalls) != 0 || len(tab.toolLineStarts) != 0 || len(tab.toolLineEnds) != 0 {
+				t.Fatalf("expected visible transcript and tool state to clear, got messages=%#v tools=%#v", tab.messages, tab.toolCalls)
+			}
+			if tab.activeTurn != 0 || tab.target != "" || tab.verification != "NOT RUN" || tab.lastError != "" || len(tab.memorySources) != 0 {
+				t.Fatalf("expected conversation metadata to reset, got turn=%d target=%q verification=%q error=%q memory=%#v", tab.activeTurn, tab.target, tab.verification, tab.lastError, tab.memorySources)
+			}
+			if !tab.starting || tab.running || tab.stopping || tab.status != "CONNECTING" {
+				t.Fatalf("expected a clean connecting state, got starting=%t running=%t stopping=%t status=%q", tab.starting, tab.running, tab.stopping, tab.status)
+			}
+
+			readyMsg := cmd()
+			ready, ok := readyMsg.(chatSessionReadyMsg)
+			if !ok {
+				t.Fatalf("expected chatSessionReadyMsg, got %T", readyMsg)
+			}
+			updated, _ = tab.Update(ready, svc, 100, 30)
+			tab = updated.(*chatTab)
+			if tab.session != freshSession || tab.starting || tab.status != "READY" {
+				t.Fatalf("expected fresh ready session, got session=%T starting=%t status=%q", tab.session, tab.starting, tab.status)
+			}
+		})
+	}
+}
+
+func TestLiveChatNewCommandWaitsForActiveTurnCancellation(t *testing.T) {
+	t.Parallel()
+
+	session := &fakeLiveChatSession{}
+	tab := newChatTab().(*chatTab)
+	tab.session = session
+	tab.running = true
+	tab.composerFocused = true
+	tab.composer.Focus()
+	tab.composer.SetValue("/new")
+
+	updated, cmd := tab.updateLive(tea.KeyMsg{Type: tea.KeyEnter}, &Service{})
+	tab = updated.(*chatTab)
+	if cmd != nil || session.closed != "" || !tab.running {
+		t.Fatalf("expected Enter to leave an active turn untouched, cmd=%v closed=%q running=%t", cmd != nil, session.closed, tab.running)
+	}
+}
+
+func TestLiveChatNRemainsComposerInputInsteadOfResetShortcut(t *testing.T) {
+	t.Parallel()
+
+	session := &fakeLiveChatSession{}
+	tab := newChatTab().(*chatTab)
+	tab.session = session
+	tab.composerFocused = true
+	tab.composer.Focus()
+
+	updated, _ := tab.updateLive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}}, nil)
+	tab = updated.(*chatTab)
+	if got := tab.composer.Value(); got != "n" {
+		t.Fatalf("expected n to remain normal composer input, got %q", got)
+	}
+	if session.closed != "" {
+		t.Fatalf("expected n not to reset the session, close reason %q", session.closed)
+	}
+}
+
+func TestLiveChatSlashPaletteFiltersAndCompletesCommands(t *testing.T) {
+	t.Parallel()
+
+	tab := newChatTab().(*chatTab)
+	tab.composerFocused = true
+	tab.composer.Focus()
+
+	updated, _ := tab.updateLive(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}, nil)
+	tab = updated.(*chatTab)
+	if !tab.commandOpen || len(tab.commandMatches) != 6 {
+		t.Fatalf("expected slash to open all TUI commands, open=%t matches=%#v", tab.commandOpen, tab.commandMatches)
+	}
+	view := tab.View(80, 28)
+	for _, want := range []string{"COMMANDS", "/new", "Enter complete"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected command palette to contain %q, got:\n%s", want, view)
+		}
+	}
+
+	tab.composer.SetValue("/mem")
+	tab.updateCommandMenu()
+	if len(tab.commandMatches) != 1 || tab.commandMatches[0].Name != "/memory" {
+		t.Fatalf("expected /mem to filter to /memory, got %#v", tab.commandMatches)
+	}
+	updated, cmd := tab.updateLive(tea.KeyMsg{Type: tea.KeyEnter}, nil)
+	tab = updated.(*chatTab)
+	if cmd != nil || tab.composer.Value() != "/memory" || tab.commandOpen {
+		t.Fatalf("expected Enter to complete without running, cmd=%v value=%q open=%t", cmd != nil, tab.composer.Value(), tab.commandOpen)
+	}
+	updated, cmd = tab.updateLive(tea.KeyMsg{Type: tea.KeyEnter}, nil)
+	tab = updated.(*chatTab)
+	if cmd != nil || len(tab.messages) != 1 || !strings.Contains(tab.messages[0].content, "No memory has been retrieved") {
+		t.Fatalf("expected second Enter to run /memory locally, messages=%#v", tab.messages)
+	}
+}
+
+func TestLiveChatSlashPaletteKeepsComposerVisibleInShortTerminal(t *testing.T) {
+	t.Parallel()
+
+	tab := newChatTab().(*chatTab)
+	tab.composerFocused = true
+	tab.composer.Focus()
+	tab.composer.SetValue("/")
+	tab.updateCommandMenu()
+	view := tab.View(80, 16)
+	if !strings.Contains(view, "COMMANDS") || !strings.Contains(view, "MESSAGE") {
+		t.Fatalf("expected short layout to preserve palette and composer, got:\n%s", view)
+	}
+	if lines := strings.Count(view, "\n") + 1; lines > 16 {
+		t.Fatalf("short layout rendered %d lines, want at most 16:\n%s", lines, view)
+	}
+}
+
+func TestLiveChatUnknownSlashStaysLocalAndDoubleSlashEscapes(t *testing.T) {
+	t.Parallel()
+
+	session := &fakeLiveChatSession{}
+	tab := newChatTab().(*chatTab)
+	tab.session = session
+	tab.composerFocused = true
+	tab.composer.Focus()
+	tab.composer.SetValue("/missing")
+
+	updated, cmd := tab.updateLive(tea.KeyMsg{Type: tea.KeyEnter}, nil)
+	tab = updated.(*chatTab)
+	if cmd != nil || session.prompt != "" || len(tab.messages) != 1 || !strings.Contains(tab.messages[0].content, "Unknown command") {
+		t.Fatalf("expected unknown slash input to remain local, cmd=%v prompt=%q messages=%#v", cmd != nil, session.prompt, tab.messages)
+	}
+
+	tab.composer.SetValue("//var/log")
+	updated, cmd = tab.updateLive(tea.KeyMsg{Type: tea.KeyEnter}, nil)
+	tab = updated.(*chatTab)
+	if cmd == nil || len(tab.messages) != 2 || tab.messages[1].content != "/var/log" {
+		t.Fatalf("expected double slash to start a literal prompt turn, cmd=%v messages=%#v", cmd != nil, tab.messages)
+	}
+}
+
+func TestLiveChatMemoryAndToolsCommandsUseLocalRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	session := &fakeLiveChatSession{tools: []agent.ChatTool{{Name: "shell_execute", Description: "Runs a guarded shell command. More detail."}}}
+	tab := newChatTab().(*chatTab)
+	tab.session = session
+	tab.safety = "llm judge"
+	tab.memorySources = []tools.MemorySource{{Name: "targets.md", Origin: "target summary", Chars: 24, Preview: "Target web-01"}}
+	tab.composerFocused = true
+	tab.composer.Focus()
+
+	for _, command := range []string{"/memory", "/tools"} {
+		tab.composer.SetValue(command)
+		updated, cmd := tab.updateLive(tea.KeyMsg{Type: tea.KeyEnter}, nil)
+		tab = updated.(*chatTab)
+		if cmd != nil || session.prompt != "" {
+			t.Fatalf("expected %s to stay local, cmd=%v prompt=%q", command, cmd != nil, session.prompt)
+		}
+	}
+	joined := tab.messages[0].content + "\n" + tab.messages[1].content
+	for _, want := range []string{"targets.md", "Target web-01", "shell_execute", "Availability is not authorization", "llm judge"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected local command output to contain %q, got:\n%s", want, joined)
+		}
+	}
+}
 
 func TestLiveChatCommandsReuseInjectedRuntime(t *testing.T) {
 	t.Parallel()
@@ -506,11 +738,15 @@ func TestLiveChatIgnoresMemoryEventsAsToolCalls(t *testing.T) {
 
 	tab := newChatTab().(*chatTab)
 	tab.applyRuntimeEvent(tools.Event{
-		Type:   tools.EventMemoryInjected,
-		Output: "chat memory injected",
+		Type:          tools.EventMemoryInjected,
+		Output:        "chat memory injected",
+		MemorySources: []tools.MemorySource{{Name: "targets.md", Preview: "runtime host"}},
 	})
 	if len(tab.toolCalls) != 0 {
 		t.Fatalf("expected memory event to leave tool rows empty, got %#v", tab.toolCalls)
+	}
+	if len(tab.memorySources) != 1 || tab.memorySources[0].Name != "targets.md" {
+		t.Fatalf("expected memory event to update command context, got %#v", tab.memorySources)
 	}
 }
 
@@ -614,6 +850,10 @@ func TestLiveChatRendererDoesNotOverflowRepresentativeWidths(t *testing.T) {
 			Success:      false,
 			ErrorMessage: "representative tool failure with enough text to wrap safely",
 		})
+		tab.composerFocused = true
+		tab.composer.Focus()
+		tab.composer.SetValue("/")
+		tab.updateCommandMenu()
 		view := tab.View(width, 30)
 		for lineNo, line := range strings.Split(view, "\n") {
 			if got := lipgloss.Width(line); got > width {

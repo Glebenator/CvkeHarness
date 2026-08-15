@@ -727,6 +727,7 @@ func emitMemoryInjection(ctx context.Context, phase core.Phase, retrieved memory
 	}
 	var parts []string
 	var total int
+	eventSources := make([]tools.MemorySource, 0, len(sources))
 	for _, source := range sources {
 		total += source.Chars
 		label := source.Name
@@ -734,12 +735,19 @@ func emitMemoryInjection(ctx context.Context, phase core.Phase, retrieved memory
 			label += " (" + source.Origin + ")"
 		}
 		parts = append(parts, fmt.Sprintf("%s: %d chars", label, source.Chars))
+		eventSources = append(eventSources, tools.MemorySource{
+			Name:    source.Name,
+			Origin:  source.Origin,
+			Chars:   source.Chars,
+			Preview: source.Preview,
+		})
 	}
 	summary := fmt.Sprintf("%s memory injected: %s", phase, strings.Join(parts, "; "))
 	log.FromContext(ctx).Info("memory injected", "phase", phase, "sections", len(sources), "chars", total, "summary", summary)
 	tools.EmitEvent(ctx, tools.Event{
-		Type:   tools.EventMemoryInjected,
-		Output: summary,
+		Type:          tools.EventMemoryInjected,
+		Output:        summary,
+		MemorySources: eventSources,
 	})
 	payload, _ := json.Marshal(map[string]any{
 		"sections": len(sources),

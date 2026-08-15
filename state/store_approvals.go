@@ -52,7 +52,9 @@ func (s *Store) ListModelApprovals(ctx context.Context) ([]ModelApproval, error)
 	return out, rows.Err()
 }
 
-// ListApprovedModelApprovals returns reusable model approvals only.
+// ListApprovedModelApprovals returns durable reusable model approvals only.
+// One-time approvals are consumed by the flow that created them and must not
+// become authorization for a later run or chat session.
 func (s *Store) ListApprovedModelApprovals(ctx context.Context) ([]ModelApproval, error) {
 	approvals, err := s.ListModelApprovals(ctx)
 	if err != nil {
@@ -61,7 +63,7 @@ func (s *Store) ListApprovedModelApprovals(ctx context.Context) ([]ModelApproval
 
 	out := make([]ModelApproval, 0, len(approvals))
 	for _, approval := range approvals {
-		if approval.Status != ApprovalStatusApproved && approval.Status != ApprovalStatusApprovedOnce {
+		if approval.Status != ApprovalStatusApproved {
 			continue
 		}
 		out = append(out, approval)
@@ -116,7 +118,8 @@ func (s *Store) ListCommandApprovals(ctx context.Context) ([]CommandApproval, er
 	return out, rows.Err()
 }
 
-// ListApprovedCommandApprovals returns reusable command approvals only.
+// ListApprovedCommandApprovals returns durable reusable command approvals
+// only. One-time approvals must never cross a run or chat-session boundary.
 func (s *Store) ListApprovedCommandApprovals(ctx context.Context) ([]CommandApproval, error) {
 	approvals, err := s.ListCommandApprovals(ctx)
 	if err != nil {
@@ -125,7 +128,7 @@ func (s *Store) ListApprovedCommandApprovals(ctx context.Context) ([]CommandAppr
 
 	out := make([]CommandApproval, 0, len(approvals))
 	for _, approval := range approvals {
-		if approval.Status != ApprovalStatusApproved && approval.Status != ApprovalStatusApprovedOnce {
+		if approval.Status != ApprovalStatusApproved {
 			continue
 		}
 		out = append(out, approval)

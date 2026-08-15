@@ -72,6 +72,46 @@ func TestSaveAndListCommandApprovals(t *testing.T) {
 	}
 }
 
+func TestReusableApprovalsExcludeOneTimeAuthorization(t *testing.T) {
+	t.Parallel()
+
+	store := Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+
+	ctx := context.Background()
+	for _, approval := range []CommandApproval{
+		{Command: "echo durable", Status: ApprovalStatusApproved, Source: "test"},
+		{Command: "echo once", Status: ApprovalStatusApprovedOnce, Source: "test"},
+	} {
+		if err := store.SaveCommandApproval(ctx, approval); err != nil {
+			t.Fatalf("SaveCommandApproval returned error: %v", err)
+		}
+	}
+	commands, err := store.ListApprovedCommandApprovals(ctx)
+	if err != nil {
+		t.Fatalf("ListApprovedCommandApprovals returned error: %v", err)
+	}
+	if len(commands) != 1 || commands[0].Command != "echo durable" {
+		t.Fatalf("expected only durable command authorization, got %#v", commands)
+	}
+
+	for _, approval := range []ModelApproval{
+		{Provider: "openrouter", Model: "durable", Status: ApprovalStatusApproved, Source: "test"},
+		{Provider: "openrouter", Model: "once", Status: ApprovalStatusApprovedOnce, Source: "test"},
+	} {
+		if err := store.SaveModelApproval(ctx, approval); err != nil {
+			t.Fatalf("SaveModelApproval returned error: %v", err)
+		}
+	}
+	models, err := store.ListApprovedModelApprovals(ctx)
+	if err != nil {
+		t.Fatalf("ListApprovedModelApprovals returned error: %v", err)
+	}
+	if len(models) != 1 || models[0].Model != "durable" {
+		t.Fatalf("expected only durable model authorization, got %#v", models)
+	}
+}
+
 func TestChatPersistenceUsesDedicatedTables(t *testing.T) {
 	t.Parallel()
 

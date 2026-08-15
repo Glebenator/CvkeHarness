@@ -20,7 +20,6 @@ type keyMap struct {
 	RunJob    key.Binding
 	PauseJob  key.Binding
 	NewJob    key.Binding
-	NewChat   key.Binding
 	DeleteJob key.Binding
 	Help      key.Binding
 }
@@ -78,10 +77,6 @@ var keys = keyMap{
 	NewJob: key.NewBinding(
 		key.WithKeys("n"),
 		key.WithHelp("n", "new job"),
-	),
-	NewChat: key.NewBinding(
-		key.WithKeys("n"),
-		key.WithHelp("n", "new chat"),
 	),
 	DeleteJob: key.NewBinding(
 		key.WithKeys("x"),

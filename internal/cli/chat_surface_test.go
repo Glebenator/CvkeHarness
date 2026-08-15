@@ -5,8 +5,54 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coolcake/cvkeharness/agent"
+	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/tools"
 )
+
+func TestChatSurfaceHelpMemoryAndToolsStayLocalAndExplicit(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+	surface := NewChatSurface(&out)
+	surface.Observe(tools.Event{
+		Type: tools.EventMemoryInjected,
+		MemorySources: []tools.MemorySource{{
+			Name: "targets.md", Origin: "target summary", Chars: 42, Preview: "Target web-01",
+		}},
+	})
+	surface.PrintHelp()
+	surface.PrintMemory()
+	surface.PrintTools([]agent.ChatTool{{Name: "shell_execute", Description: "Runs a guarded command. More detail."}}, "llm_judge")
+
+	got := out.String()
+	for _, want := range []string{
+		"/new (/clear)", "/memory", "/export", "/tools",
+		"targets.md", "Target web-01", "shell_execute",
+		"Registered capabilities are not authorization", "llm judge",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected CLI output to contain %q, got %q", want, got)
+		}
+	}
+}
+
+func TestChatSurfaceNewBannerClearsSessionScopedRendererState(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+	surface := NewChatSurface(&out)
+	surface.shells["old-tool"] = &shellRenderState{}
+	surface.logPending = "old partial log"
+	surface.statusLabel = "old status"
+	surface.statusInfo = "old detail"
+	surface.memory = []tools.MemorySource{{Name: "old memory"}}
+	surface.RenderBanner(core.RoutingSelection{Requested: core.NewModelRef("openrouter", "test-model")})
+
+	if len(surface.shells) != 0 || surface.logPending != "" || surface.statusLabel != "" || surface.statusInfo != "" || len(surface.memory) != 0 {
+		t.Fatalf("expected a new CLI session banner to clear renderer state, got shells=%#v log=%q status=%q detail=%q memory=%#v", surface.shells, surface.logPending, surface.statusLabel, surface.statusInfo, surface.memory)
+	}
+}
 
 func TestChatSurfaceStreamsShellOutputInPlainMode(t *testing.T) {
 	t.Parallel()

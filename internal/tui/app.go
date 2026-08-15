@@ -336,6 +336,8 @@ func (m model) renderHelp() string {
 			"Chat Tab",
 			[][2]string{
 				{"enter", "Focus the composer or send a message"},
+				{"/", "Open chat command suggestions"},
+				{"/new", "Start a fresh chat (/clear remains an alias)"},
 				{"esc", "Leave the composer or interrupt active work"},
 				{"ctrl+h", "Toggle live chat and saved conversations"},
 				{"↑/↓", "Select tool calls and scroll at list boundaries"},
