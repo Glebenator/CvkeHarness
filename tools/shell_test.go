@@ -485,6 +485,9 @@ func TestBlockingApproverReturnsApprovalRequiredError(t *testing.T) {
 	if approvalErr.Request.Command != "echo hello" {
 		t.Fatalf("expected command to persist in approval request, got %#v", approvalErr)
 	}
+	if !strings.Contains(err.Error(), "Policy reason:") || !strings.Contains(err.Error(), approvalErr.Request.ValidationError) {
+		t.Fatalf("blocked error should retain the exact policy reason, got %q", err.Error())
+	}
 }
 
 func TestShellTool_PersistsApprovedSegments(t *testing.T) {

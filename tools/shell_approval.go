@@ -52,7 +52,11 @@ type ApprovalRequiredError struct {
 }
 
 func (e ApprovalRequiredError) Error() string {
-	return "user approval required before executing shell command: " + secrets.Mask(strings.TrimSpace(e.Request.Command))
+	message := "user approval required before executing shell command: " + secrets.Mask(strings.TrimSpace(e.Request.Command))
+	if reason := strings.TrimSpace(e.Request.ValidationError); reason != "" {
+		message += "\nPolicy reason: " + reason
+	}
+	return message
 }
 
 // IsApprovalRequired reports whether err is a deferred manual-approval blocker.

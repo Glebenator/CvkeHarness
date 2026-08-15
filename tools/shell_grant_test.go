@@ -9,9 +9,86 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/securitypolicy"
 	"github.com/coolcake/cvkeharness/state"
 )
+
+func TestApproveBlockedWorkCreatesOneScopedGrantAndResolvesWait(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+	policy := resolvedProfile(t, securitypolicy.ProfileReasonable)
+	command := "docker system df"
+	expected, assessment, err := shellSecurityGrantBinding(command, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assessment.Decision != securitypolicy.DecisionAsk {
+		t.Fatalf("test command should require approval, got %s: %s", assessment.Decision, assessment.Reason)
+	}
+	pending, err := json.Marshal(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments, err := json.Marshal(ShellArgs{Command: command})
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuation, err := json.Marshal(map[string]any{
+		"tool_call": provider.ToolCall{
+			ID:   "call-1",
+			Type: "function",
+			Function: provider.ToolFunction{
+				Name:      "shell_execute",
+				Arguments: string(arguments),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveBlockedWork(ctx, state.BlockedWork{
+		ID:                     "blocked-1",
+		Task:                   "inspect docker storage",
+		TaskClass:              core.TaskClassPolicySensitive,
+		TaskState:              state.TaskStateBlockedWaitingUser,
+		BlockedReason:          assessment.Reason,
+		PendingApprovalType:    "security_action",
+		PendingApprovalPayload: string(pending),
+		ContinuationData:       string(continuation),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	grant, err := ApproveBlockedWork(ctx, store, policy, "blocked-1", 15*time.Minute, "test-tui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.Source != "test-tui" || grant.RemainingUses != 1 || grant.Digest != expected.Digest {
+		t.Fatalf("unexpected scoped grant: %#v", grant)
+	}
+	work, err := store.GetBlockedWork(ctx, "blocked-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work.TaskState != state.TaskStateRunning {
+		t.Fatalf("blocked work was not resolved for retry: %#v", work)
+	}
+	if _, err := ApproveBlockedWork(ctx, store, policy, "blocked-1", 15*time.Minute, "test-repeat"); err == nil {
+		t.Fatal("resolved work must not mint a second approval grant")
+	}
+	consumed, err := store.ConsumeSecurityActionGrant(ctx, expected, time.Now().UTC())
+	if err != nil || !consumed {
+		t.Fatalf("exact approved action did not consume the grant: consumed=%t err=%v", consumed, err)
+	}
+	consumed, err = store.ConsumeSecurityActionGrant(ctx, expected, time.Now().UTC())
+	if err != nil || consumed {
+		t.Fatalf("one-use grant authorized a second execution: consumed=%t err=%v", consumed, err)
+	}
+}
 
 func TestScopedShellGrantExecutesOnceThenReblocks(t *testing.T) {
 	dir := t.TempDir()

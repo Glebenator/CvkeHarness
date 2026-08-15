@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,11 +12,67 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/internal/secrets"
+	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/securitypolicy"
 	"github.com/coolcake/cvkeharness/state"
 )
 
 const actionAnalyzerVersion = "effect-policy-v1"
+
+// ApproveBlockedWork creates one exact, time-limited grant for a persisted
+// action after re-evaluating it against the current policy and its original
+// executor scope. The grant cannot authorize a different action, host,
+// principal, working directory, effect set, or policy version.
+func ApproveBlockedWork(ctx context.Context, store *state.Store, policy securitypolicy.EffectivePolicy, workID string, ttl time.Duration, source string) (state.SecurityActionGrant, error) {
+	if store == nil || !store.Available() {
+		return state.SecurityActionGrant{}, fmt.Errorf("state database unavailable")
+	}
+	work, err := store.GetBlockedWork(ctx, strings.TrimSpace(workID))
+	if err != nil {
+		return state.SecurityActionGrant{}, err
+	}
+	if work.TaskState != state.TaskStateBlockedWaitingUser {
+		return state.SecurityActionGrant{}, fmt.Errorf("blocked work %s is not awaiting approval", work.ID)
+	}
+	if work.PendingApprovalType != "security_action" || work.PendingApprovalPayload == "" {
+		return state.SecurityActionGrant{}, fmt.Errorf("blocked work %s is not waiting on a scoped security action", work.ID)
+	}
+
+	var expected state.SecurityActionGrant
+	if err := json.Unmarshal([]byte(work.PendingApprovalPayload), &expected); err != nil || expected.Digest == "" {
+		return state.SecurityActionGrant{}, fmt.Errorf("blocked work %s does not contain a scoped approval envelope", work.ID)
+	}
+	var continuation struct {
+		ToolCall provider.ToolCall `json:"tool_call"`
+	}
+	if err := json.Unmarshal([]byte(work.ContinuationData), &continuation); err != nil {
+		return state.SecurityActionGrant{}, fmt.Errorf("read blocked action: %w", err)
+	}
+	call := continuation.ToolCall
+	if strings.TrimSpace(call.Function.Name) == "" {
+		return state.SecurityActionGrant{}, fmt.Errorf("blocked work %s does not identify an action", work.ID)
+	}
+
+	actionPayload := call.Function.Arguments
+	if call.Function.Name == "shell_execute" {
+		var shellArgs ShellArgs
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &shellArgs); err != nil {
+			return state.SecurityActionGrant{}, fmt.Errorf("read blocked shell action: %w", err)
+		}
+		actionPayload = shellArgs.Command
+	}
+	grant, err := NewBlockedWorkSecurityGrant(call.Function.Name, actionPayload, policy, expected, ttl, source)
+	if err != nil {
+		return state.SecurityActionGrant{}, err
+	}
+	if err := store.SaveSecurityActionGrant(ctx, grant); err != nil {
+		return state.SecurityActionGrant{}, err
+	}
+	if _, err := store.ResolveBlockedSecurityGrant(ctx, grant.Digest); err != nil {
+		return state.SecurityActionGrant{}, err
+	}
+	return grant, nil
+}
 
 // NewShellSecurityGrant creates an exact, scoped, one-time authorization. The
 // raw command is used only for the digest and is never persisted.
