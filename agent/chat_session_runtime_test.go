@@ -133,6 +133,48 @@ func TestChatSpeedTestFollowUpKeepsShellCapability(t *testing.T) {
 	}
 }
 
+func TestChatWeatherLocationFollowUpKeepsShellCapability(t *testing.T) {
+	p := &sequenceProvider{fn: func(call int, req *provider.ChatRequest) (*provider.ChatResponse, error) {
+		switch call {
+		case 1:
+			if err := expectToolNames("shell_execute")(req); err != nil {
+				return nil, err
+			}
+			return assistantText("What city should I check?"), nil
+		case 2:
+			if err := expectToolNames("shell_execute")(req); err != nil {
+				return nil, err
+			}
+			return assistantText("Vancouver, BC or Vancouver, Washington?"), nil
+		case 3:
+			if err := expectToolNames("shell_execute")(req); err != nil {
+				return nil, err
+			}
+			return assistantToolCall("weather-1", "shell_execute", `{}`), nil
+		case 4:
+			return assistantText("Vancouver, BC weather is available."), nil
+		default:
+			return nil, fmt.Errorf("unexpected call %d", call)
+		}
+	}}
+	registry := tools.NewRegistry()
+	registry.Register(fixedOutputTool{name: "shell_execute", output: "weather result"})
+	a := New(Options{Provider: p, ProviderName: "test", ToolRegistry: registry, DefaultModel: "model", MaxIterations: 3, MaxTokens: 256, DisableCompletionVerification: true})
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range []string{"what is the weather like today", "in vancouver", "bc"} {
+		result, turnErr := session.Turn(context.Background(), prompt)
+		if turnErr != nil {
+			t.Fatalf("turn %q failed: %v", prompt, turnErr)
+		}
+		if prompt == "bc" && (len(result.Tools) != 1 || result.Tools[0].ToolName != "shell_execute") {
+			t.Fatalf("expected location follow-up to execute shell, got %#v", result.Tools)
+		}
+	}
+}
+
 func TestTranscriptToStateMessagesMasksPopulatedToolAndAssistantFields(t *testing.T) {
 	argumentSecret := "sk-argumentsecretvalue123456789"
 	toolSecret := "sk-tooloutputsecretvalue123456789"
