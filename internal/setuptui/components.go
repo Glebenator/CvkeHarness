@@ -55,20 +55,21 @@ var stageLabels = map[setupStage]string{
 }
 
 var stepLabels = map[step]string{
-	stepWelcome:         "Welcome",
-	stepProvider:        "Provider",
-	stepCredentials:     "Credentials",
-	stepModel:           "Model",
-	stepSafety:          "Safety",
-	stepScan:            "System Scan",
-	stepDependencies:    "Dependencies",
-	stepDaemon:          "Scheduler Daemon",
-	stepCapabilities:    "Capabilities",
-	stepWebSearch:       "Web Search",
-	stepRecommendations: "Guided Review",
-	stepSoul:            "Guidance",
-	stepNotes:           "Machine Notes",
-	stepReview:          "Review",
+	stepWelcome:          "Welcome",
+	stepProvider:         "Provider",
+	stepCredentials:      "Credentials",
+	stepModel:            "Model",
+	stepSafety:           "Safety",
+	stepSecurityControls: "Security Controls",
+	stepScan:             "System Scan",
+	stepDependencies:     "Dependencies",
+	stepDaemon:           "Scheduler Daemon",
+	stepCapabilities:     "Capabilities",
+	stepWebSearch:        "Web Search",
+	stepRecommendations:  "Guided Review",
+	stepSoul:             "Guidance",
+	stepNotes:            "Machine Notes",
+	stepReview:           "Review",
 }
 
 type row struct {
@@ -150,8 +151,11 @@ func (m setupModel) footer() string {
 		keyHint("esc", "back"),
 		keyHint("↑↓", "move"),
 	}
-	if m.step == stepScan || m.step == stepCapabilities {
+	if m.step == stepSafety || m.step == stepScan || m.step == stepCapabilities {
 		hints = append(hints, keyHint("a", "advanced"))
+	}
+	if m.step == stepSecurityControls {
+		hints = append(hints, keyHint("←→", "change"), keyHint("r", "reset"))
 	}
 	if m.width >= 72 {
 		hints = append(hints, keyHint("q", "quit"))

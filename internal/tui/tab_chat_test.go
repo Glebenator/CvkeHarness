@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/coolcake/cvkeharness/agent"
+	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/state"
@@ -54,7 +55,7 @@ func TestLiveChatNewCommandReplacesSessionAndClearsConversationState(t *testing.
 				selection: core.RoutingSelection{Requested: core.NewModelRef("openrouter", "fresh-model")},
 			}
 			svc := &Service{}
-			svc.SetChatStarter(func(context.Context, tools.EventObserver) (LiveChatSession, error) {
+			svc.SetChatStarter(func(context.Context, *config.Config, tools.EventObserver) (LiveChatSession, error) {
 				return freshSession, nil
 			})
 
@@ -276,7 +277,7 @@ func TestLiveChatCommandsReuseInjectedRuntime(t *testing.T) {
 		},
 	}
 	svc := &Service{}
-	svc.SetChatStarter(func(context.Context, tools.EventObserver) (LiveChatSession, error) {
+	svc.SetChatStarter(func(context.Context, *config.Config, tools.EventObserver) (LiveChatSession, error) {
 		return session, nil
 	})
 
@@ -365,6 +366,19 @@ func TestLiveChatOrdersToolActivityBeforeHighlightedResponse(t *testing.T) {
 	}
 	if !strings.Contains(view, "systemctl status web") || !strings.Contains(view, "╭") {
 		t.Fatalf("expected collapsed command preview and bordered response, got:\n%s", view)
+	}
+}
+
+func TestBlockedChatShowsExactApprovalCommand(t *testing.T) {
+	t.Parallel()
+	tab := newChatTab().(*chatTab)
+	tab.applyTurnResult(agent.ChatTurnResult{
+		TaskState:       state.TaskStateBlockedWaitingUser,
+		BlockedWorkID:   "blocked_123",
+		ApprovalSummary: "schedule_manage add nightly",
+	}, errors.New("approval required"))
+	if tab.status != "APPROVAL REQUIRED" || !strings.Contains(tab.statusDetail, "cvkeharness commands approve-work blocked_123") {
+		t.Fatalf("blocked approval instruction missing: status=%q detail=%q", tab.status, tab.statusDetail)
 	}
 }
 

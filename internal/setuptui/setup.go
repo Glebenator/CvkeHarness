@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/internal/setupflow"
+	"github.com/coolcake/cvkeharness/securitypolicy"
 )
 
 type step int
@@ -22,6 +23,7 @@ const (
 	stepCredentials
 	stepModel
 	stepSafety
+	stepSecurityControls
 	stepScan
 	stepDependencies
 	stepDaemon
@@ -68,38 +70,43 @@ type webSearchOption struct {
 }
 
 type setupModel struct {
-	cfg             *config.Config
-	step            step
-	width           int
-	height          int
-	cursor          int
-	input           textinput.Model
-	inputMode       inputMode
-	message         string
-	errMessage      string
-	validating      bool
-	modelsLoading   bool
-	models          setupflow.ModelResult
-	scanning        bool
-	scanComplete    bool
-	hostProfile     setupflow.HostProfile
-	installPlan     setupflow.InstallPlan
-	daemonPlan      setupflow.DaemonPlan
-	recommending    bool
-	recommendations []string
-	acceptedRecs    []string
-	soulProfile     setupflow.SoulProfile
-	hostNotes       string
-	applyActions    bool
-	safetyAdvanced  bool
-	capAdvanced     bool
-	saving          bool
-	saveResult      setupflow.FinalizeResult
+	cfg               *config.Config
+	step              step
+	width             int
+	height            int
+	cursor            int
+	input             textinput.Model
+	inputMode         inputMode
+	message           string
+	errMessage        string
+	validating        bool
+	modelsLoading     bool
+	models            setupflow.ModelResult
+	scanning          bool
+	scanComplete      bool
+	hostProfile       setupflow.HostProfile
+	installPlan       setupflow.InstallPlan
+	daemonPlan        setupflow.DaemonPlan
+	recommending      bool
+	recommendations   []string
+	acceptedRecs      []string
+	soulProfile       setupflow.SoulProfile
+	hostNotes         string
+	applyActions      bool
+	safetyAdvanced    bool
+	securityCustomize bool
+	yoloConfirm       bool
+	capAdvanced       bool
+	saving            bool
+	saveResult        setupflow.FinalizeResult
 }
 
 // Run starts the full-screen setup wizard.
 func Run() error {
-	cfg := setupflow.LoadWizardConfig()
+	cfg, err := setupflow.LoadWizardConfig()
+	if err != nil {
+		return fmt.Errorf("load setup configuration: %w", err)
+	}
 	m := setupModel{
 		cfg:         cfg,
 		step:        stepWelcome,
@@ -109,7 +116,7 @@ func Run() error {
 		daemonPlan:  setupflow.DetectDaemonPlan(setupflow.RealRunner{}, ""),
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
-	_, err := p.Run()
+	_, err = p.Run()
 	return err
 }
 
@@ -176,19 +183,36 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("down", "j"))):
 			m.moveCursor(1)
 		case key.Matches(msg, key.NewBinding(key.WithKeys("left", "h"))):
-			if m.step == stepCapabilities {
+			if m.step == stepSecurityControls {
+				m.cycleSecurityControl(-1)
+			} else if m.step == stepCapabilities {
 				m.cycleCapability(-1)
 			}
 		case key.Matches(msg, key.NewBinding(key.WithKeys("right", "l"))):
-			if m.step == stepCapabilities {
+			if m.step == stepSecurityControls {
+				m.cycleSecurityControl(1)
+			} else if m.step == stepCapabilities {
 				m.cycleCapability(1)
 			}
 		case msg.String() == " ":
-			if m.step == stepCapabilities {
+			if m.step == stepSecurityControls {
+				m.cycleSecurityControl(1)
+			} else if m.step == stepCapabilities {
 				m.cycleCapability(1)
+			}
+		case msg.String() == "r":
+			if m.step == stepSecurityControls {
+				m.resetSecurityControl()
 			}
 		case msg.String() == "a":
 			switch m.step {
+			case stepSafety:
+				m.securityCustomize = !m.securityCustomize
+				if m.securityCustomize {
+					m.message = "Per-control customization will be shown after profile selection"
+				} else {
+					m.message = "Using the selected profile without additional customization"
+				}
 			case stepScan:
 				m.safetyAdvanced = !m.safetyAdvanced
 				if m.safetyAdvanced {
@@ -264,6 +288,8 @@ func (m setupModel) stepView() string {
 		return m.viewModel()
 	case stepSafety:
 		return m.viewSafety()
+	case stepSecurityControls:
+		return m.viewSecurityControls()
 	case stepScan:
 		return m.viewScan()
 	case stepDependencies:
@@ -371,10 +397,36 @@ func (m setupModel) viewModel() string {
 }
 
 func (m setupModel) viewSafety() string {
+	effective, _ := m.cfg.EffectiveSecurity()
+	custom := "Press A to customize individual controls after choosing a profile."
+	if m.securityCustomize {
+		custom = "Individual control customization is enabled; press A to use the profile unchanged."
+	}
 	return m.paragraph(
-		"Choose how shell commands are approved. The recommended judge mode keeps the allowlist and evaluates commands outside it.",
-		"Every status remains explicit; unrestricted mode is intentionally marked risky.",
+		"Choose a security profile. Reasonable is the default: reads run, mutations ask, and credential or raw-device access stays blocked.",
+		custom+" Current policy: "+effective.Summary()+".",
 	) + "\n" + m.renderList(modelRows(setupflow.SafetyOptions()))
+}
+
+func (m setupModel) viewSecurityControls() string {
+	effective, err := m.cfg.EffectiveSecurity()
+	if err != nil {
+		return m.paragraph("Security policy is invalid: " + err.Error())
+	}
+	catalog := securitypolicy.Catalog()
+	rows := make([]row, 0, len(catalog))
+	for _, setting := range catalog {
+		origin := effective.Origins[setting.ID]
+		rows = append(rows, row{setting.Label, effective.Value(setting.ID) + " · " + origin + " · " + setting.Description})
+	}
+	visible := max(4, m.height-14)
+	start, end := listWindow(m.cursor, len(rows), visible)
+	window := m
+	window.cursor = m.cursor - start
+	return m.paragraph(
+		"Customize any control with Left/Right or Space. Press R to reset the selected control to the profile value.",
+		"Effective: "+effective.Summary()+" · policy "+effective.Hash,
+	) + "\n" + window.renderList(rows[start:end])
 }
 
 func (m setupModel) viewScan() string {
@@ -506,7 +558,7 @@ func (m setupModel) viewReview() string {
 	lines := []string{
 		"Provider: " + m.cfg.Provider,
 		"Model: " + m.cfg.PrimaryModel(),
-		"Safety: " + m.cfg.SafetyMode,
+		"Security: " + securitySummary(m.cfg),
 		"Python: " + foundText(m.hostProfile.Python),
 		"Capability policy: scripts=" + m.cfg.CapabilityPolicy.PythonScripts + ", installs=" + m.cfg.CapabilityPolicy.InstallMissingTools,
 		"Web search: " + boolText(m.cfg.WebSearch.Enabled),
@@ -580,7 +632,20 @@ func (m setupModel) activate() (setupModel, tea.Cmd) {
 		return m.nextStep()
 	case stepSafety:
 		opts := setupflow.SafetyOptions()
-		m.cfg.SafetyMode = opts[m.cursor].ID
+		profile := securitypolicy.Profile(opts[m.cursor].ID)
+		if profile == securitypolicy.ProfileYOLO && !m.yoloConfirm {
+			m.yoloConfirm = true
+			m.message = "YOLO disables CvkeHarness approval and deletion guards. Press Enter again to confirm; OS and provider protections still apply."
+			return m, nil
+		}
+		if err := m.cfg.Security.ApplyProfile(profile); err != nil {
+			m.errMessage = err.Error()
+			return m, nil
+		}
+		m.cfg.Normalize()
+		m.yoloConfirm = false
+		return m.nextStep()
+	case stepSecurityControls:
 		return m.nextStep()
 	case stepScan:
 		if !m.scanComplete {
@@ -591,7 +656,6 @@ func (m setupModel) activate() (setupModel, tea.Cmd) {
 	case stepDependencies:
 		if !m.hostProfile.Python.Found && m.installPlan.Available && m.cursor == 1 {
 			m.installPlan.Selected = true
-			m.cfg.CapabilityPolicy.InstallMissingTools = "allow"
 		}
 		return m.nextStep()
 	case stepDaemon:
@@ -889,6 +953,10 @@ func (m setupModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m setupModel) nextStep() (setupModel, tea.Cmd) {
 	switch {
+	case m.step == stepSafety && !m.securityCustomize:
+		m.step = stepScan
+		m.cursor = 0
+		return m, nil
 	case m.step == stepScan && !m.safetyAdvanced:
 		m.step = stepCapabilities
 		m.cursor = 0
@@ -908,6 +976,8 @@ func (m setupModel) nextStep() (setupModel, tea.Cmd) {
 func (m setupModel) prevStep() (setupModel, tea.Cmd) {
 	if m.step > stepWelcome && !m.saving && !m.scanning && !m.validating {
 		switch {
+		case m.step == stepScan && !m.securityCustomize:
+			m.step = stepSafety
 		case m.step == stepCapabilities && !m.safetyAdvanced:
 			m.step = stepScan
 		case m.step == stepReview && !m.capAdvanced:
@@ -935,8 +1005,12 @@ func (m setupModel) preferredCursor() int {
 			}
 		}
 	case stepSafety:
+		profile := securitypolicy.ProfileReasonable
+		if m.cfg.Security != nil {
+			profile = m.cfg.Security.Profile
+		}
 		for i, option := range setupflow.SafetyOptions() {
-			if option.ID == m.cfg.SafetyMode {
+			if option.ID == string(profile) {
 				return i
 			}
 		}
@@ -955,6 +1029,7 @@ func (m *setupModel) moveCursor(delta int) {
 	if count <= 0 {
 		return
 	}
+	m.yoloConfirm = false
 	m.cursor += delta
 	if m.cursor < 0 {
 		m.cursor = count - 1
@@ -989,6 +1064,8 @@ func (m setupModel) itemCount() int {
 		return len(m.models.Items)
 	case stepSafety:
 		return len(setupflow.SafetyOptions())
+	case stepSecurityControls:
+		return len(securitypolicy.Catalog())
 	case stepScan:
 		return 1
 	case stepRecommendations:
@@ -1032,16 +1109,94 @@ func (m *setupModel) cycleCapability(delta int) {
 		}
 		return values[(idx+delta+len(values))%len(values)]
 	}
-	switch m.cursor {
-	case 0:
-		m.cfg.CapabilityPolicy.PythonScripts = cycle(m.cfg.CapabilityPolicy.PythonScripts)
-	case 1:
-		m.cfg.CapabilityPolicy.AutonomousDiagnostics = cycle(m.cfg.CapabilityPolicy.AutonomousDiagnostics)
-	case 2:
-		m.cfg.CapabilityPolicy.NetworkProbes = cycle(m.cfg.CapabilityPolicy.NetworkProbes)
-	case 3:
-		m.cfg.CapabilityPolicy.InstallMissingTools = cycle(m.cfg.CapabilityPolicy.InstallMissingTools)
+	ids := []string{
+		securitypolicy.SettingScriptExecution,
+		securitypolicy.SettingReadCommands,
+		securitypolicy.SettingNetworkAccess,
+		securitypolicy.SettingPackageChanges,
 	}
+	if m.cursor < 0 || m.cursor >= len(ids) {
+		return
+	}
+	effective, err := m.cfg.EffectiveSecurity()
+	if err != nil {
+		m.errMessage = err.Error()
+		return
+	}
+	current := effective.Value(ids[m.cursor])
+	if current == string(securitypolicy.DecisionLLMReview) {
+		current = "ask"
+	}
+	_ = m.cfg.Security.SetOverride(ids[m.cursor], cycle(current))
+	m.cfg.Normalize()
+}
+
+func (m *setupModel) cycleSecurityControl(delta int) {
+	if m.cfg == nil || m.cfg.Security == nil {
+		return
+	}
+	catalog := securitypolicy.Catalog()
+	if m.cursor < 0 || m.cursor >= len(catalog) {
+		return
+	}
+	effective, err := m.cfg.EffectiveSecurity()
+	if err != nil {
+		m.errMessage = err.Error()
+		return
+	}
+	setting := catalog[m.cursor]
+	value := securitypolicy.NextValue(setting, effective.Value(setting.ID), delta)
+	if err := m.cfg.Security.SetOverride(setting.ID, value); err != nil {
+		m.errMessage = err.Error()
+		return
+	}
+	m.cfg.Normalize()
+	m.message = setting.Label + " set to " + value + " (override)"
+}
+
+func (m *setupModel) resetSecurityControl() {
+	if m.cfg == nil || m.cfg.Security == nil {
+		return
+	}
+	catalog := securitypolicy.Catalog()
+	if m.cursor < 0 || m.cursor >= len(catalog) {
+		return
+	}
+	setting := catalog[m.cursor]
+	m.cfg.Security.ClearOverride(setting.ID)
+	m.cfg.Normalize()
+	m.message = setting.Label + " reset to profile value"
+}
+
+func securitySummary(cfg *config.Config) string {
+	if cfg == nil {
+		return "unavailable"
+	}
+	effective, err := cfg.EffectiveSecurity()
+	if err != nil {
+		return "invalid: " + err.Error()
+	}
+	return effective.Summary() + " · policy " + effective.Hash
+}
+
+func listWindow(cursor, total, viewportHeight int) (start, end int) {
+	if total <= 0 {
+		return 0, 0
+	}
+	if viewportHeight <= 0 || viewportHeight >= total {
+		return 0, total
+	}
+	half := viewportHeight / 2
+	start = cursor - half
+	if start < 0 {
+		start = 0
+	}
+	end = start + viewportHeight
+	if end > total {
+		end = total
+		start = end - viewportHeight
+	}
+	return start, end
 }
 
 func fetchModelsCmd(cfg *config.Config) tea.Cmd {

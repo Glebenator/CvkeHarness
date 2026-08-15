@@ -28,7 +28,7 @@ func Open(path string) *Store {
 		return &Store{err: fmt.Errorf("state db path is empty")}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return &Store{err: err}
 	}
 
@@ -47,6 +47,16 @@ func Open(path string) *Store {
 	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout=5000;`); err != nil {
 		_ = db.Close()
 		return &Store{err: err}
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		_ = db.Close()
+		return &Store{err: fmt.Errorf("secure state database permissions: %w", err)}
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Chmod(path+suffix, 0600); err != nil && !os.IsNotExist(err) {
+			_ = db.Close()
+			return &Store{err: fmt.Errorf("secure state database sidecar permissions: %w", err)}
+		}
 	}
 	if err := migrate(ctx, db); err != nil {
 		_ = db.Close()
@@ -593,6 +603,21 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			source TEXT NOT NULL DEFAULT '',
 			rationale TEXT NOT NULL DEFAULT '',
 			approved_at DATETIME NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS security_action_grants (
+			digest TEXT PRIMARY KEY,
+			action_kind TEXT NOT NULL,
+			masked_summary TEXT NOT NULL DEFAULT '',
+			effect_digest TEXT NOT NULL,
+			policy_hash TEXT NOT NULL,
+			host TEXT NOT NULL,
+			principal TEXT NOT NULL,
+			working_directory TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT '',
+			expires_at DATETIME NOT NULL,
+			remaining_uses INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME NOT NULL,
+			used_at DATETIME
 		);`,
 		`CREATE TABLE IF NOT EXISTS model_aliases (
 			provider TEXT NOT NULL,

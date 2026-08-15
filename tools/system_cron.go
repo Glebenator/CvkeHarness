@@ -98,6 +98,9 @@ func (t *SystemCronManageTool) Execute(ctx context.Context, args json.RawMessage
 		}
 		diff := systemcron.Diff(mutation.OldContent, mutation.NewContent)
 		fmt.Fprintln(t.out, diff)
+		// Registry authorization is intentionally not enough: the crontab may
+		// have changed since the tool call was proposed. Confirm the exact diff
+		// prepared from the current crontab immediately before applying it.
 		if !confirm(t.in, t.out, "Apply this crontab change?") {
 			err := fmt.Errorf("system crontab change was not approved")
 			t.audit(ctx, mutation, false, err)

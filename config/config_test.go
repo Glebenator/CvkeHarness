@@ -41,6 +41,16 @@ func TestLegacySecurityModesMigrate(t *testing.T) {
 		if cfg.Security == nil || cfg.Security.Profile != tc.profile {
 			t.Fatalf("mode %s migrated to %#v, want %s", tc.mode, cfg.Security, tc.profile)
 		}
+		effective, err := cfg.EffectiveSecurity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.mode == "user_confirm_all" && effective.Decision(securitypolicy.SettingReadCommands) != securitypolicy.DecisionAsk {
+			t.Fatalf("user_confirm_all read decision=%q, want ask", effective.Decision(securitypolicy.SettingReadCommands))
+		}
+		if tc.mode == "user_confirm" && effective.Decision(securitypolicy.SettingFileCreate) != securitypolicy.DecisionAsk {
+			t.Fatalf("user_confirm create decision=%q, want ask", effective.Decision(securitypolicy.SettingFileCreate))
+		}
 	}
 }
 
@@ -52,6 +62,50 @@ func TestConfigCloneDeepCopiesSecurityOverrides(t *testing.T) {
 	_ = clone.Security.SetOverride(securitypolicy.SettingFileDelete, string(securitypolicy.DecisionAllow))
 	if cfg.Security.Overrides[securitypolicy.SettingFileDelete] != string(securitypolicy.DecisionDeny) {
 		t.Fatal("clone mutated source security overrides")
+	}
+}
+
+func TestSavePersistsValidatedSecurityAtomicallyWithPrivateMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := DefaultConfig()
+	if err := cfg.Security.SetOverride(securitypolicy.SettingFileDelete, string(securitypolicy.DecisionDeny)); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".cvkeharness", "config.yaml")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("config mode = %o", info.Mode().Perm())
+	}
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Security.Overrides[securitypolicy.SettingFileDelete] != string(securitypolicy.DecisionDeny) {
+		t.Fatalf("security override did not round trip: %#v", loaded.Security)
+	}
+	matches, err := filepath.Glob(filepath.Join(home, ".cvkeharness", ".config-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary config files remain: %#v", matches)
+	}
+}
+
+func TestSaveRejectsUnknownSecuritySetting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := DefaultConfig()
+	cfg.Security.Overrides = map[string]string{"security.theater": "true"}
+	if err := cfg.Save(); err == nil {
+		t.Fatal("expected unknown security setting to fail closed")
 	}
 }
 

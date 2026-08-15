@@ -110,7 +110,11 @@ func (t *overviewTab) configBlock(col int) string {
 	b.WriteString("    ")
 	b.WriteString(renderKeyValue("Model", cfg.PrimaryModel()))
 	b.WriteString("\n  ")
-	b.WriteString(renderKeyValue("Safety", cfg.SafetyMode))
+	security := "invalid"
+	if effective, err := cfg.EffectiveSecurity(); err == nil {
+		security = effective.Summary()
+	}
+	b.WriteString(renderKeyValue("Security", security))
 	b.WriteString("    ")
 	routing := "disabled"
 	if cfg.RoutingEnabled {

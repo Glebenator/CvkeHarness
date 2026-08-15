@@ -10,6 +10,7 @@ import (
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/log"
 	"github.com/coolcake/cvkeharness/internal/promptdump"
+	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
@@ -529,15 +530,25 @@ func (a *Agent) persistBlockedWork(ctx context.Context, prompt string, taskClass
 		"target":    target,
 		"tool_call": call,
 	})
+	pendingType := "security_action"
+	pendingPayload := ""
+	if approvalErr.Request.Grant.Digest != "" {
+		encodedGrant, _ := json.Marshal(approvalErr.Request.Grant)
+		pendingPayload = string(encodedGrant)
+	}
+	if pendingPayload == "" {
+		pendingType = "shell_command"
+		pendingPayload = secrets.Mask(strings.TrimSpace(approvalErr.Request.Command))
+	}
 	work := state.BlockedWork{
 		Task:                   prompt,
 		TaskClass:              taskClass,
 		TaskState:              state.TaskStateBlockedWaitingUser,
 		BlockedReason:          approvalErr.Error(),
-		PendingApprovalType:    "shell_command",
-		PendingApprovalPayload: strings.TrimSpace(approvalErr.Request.Command),
-		ConversationSnapshot:   string(snapshot),
-		ContinuationData:       string(continuation),
+		PendingApprovalType:    pendingType,
+		PendingApprovalPayload: pendingPayload,
+		ConversationSnapshot:   secrets.Mask(string(snapshot)),
+		ContinuationData:       secrets.Mask(string(continuation)),
 		ScheduledJobID:         scheduledJobIDFromContext(ctx),
 	}
 	return a.opts.BlockedWorkStore.SaveBlockedWork(ctx, work)

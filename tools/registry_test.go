@@ -3,10 +3,14 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/coolcake/cvkeharness/state"
 )
 
 func TestDefinitionsForTaskExcludesIrrelevantTools(t *testing.T) {
@@ -32,6 +36,90 @@ func TestDefinitionsForTaskExcludesIrrelevantTools(t *testing.T) {
 	got = definitionNames(registry.DefinitionsForTask(core.TaskClassGeneral, "edit the user crontab"))
 	if len(got) != 1 || got[0] != "system_cron_manage" {
 		t.Fatalf("expected explicit crontab turn to keep only system_cron_manage, got %#v", got)
+	}
+}
+
+func TestRegistryConsumesExactToolGrantOnce(t *testing.T) {
+	t.Parallel()
+	policy, err := securitypolicy.Resolve(securitypolicy.DefaultSelection())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+	arguments := `{"action":"add"}`
+	grant, err := NewToolSecurityGrant("schedule_manage", arguments, policy, time.Minute, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSecurityActionGrant(context.Background(), grant); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	registry.ConfigureSecurityWithStore(policy, NewBlockingApprover(), nil, store)
+	registry.Register(fakeRegistryTool{name: "schedule_manage"})
+	call := provider.ToolCall{Function: provider.ToolFunction{Name: "schedule_manage", Arguments: arguments}}
+	if _, err := registry.ExecuteTool(context.Background(), call); err != nil {
+		t.Fatalf("exact tool grant did not authorize: %v", err)
+	}
+	if _, err := registry.ExecuteTool(context.Background(), call); err == nil {
+		t.Fatal("spent tool grant authorized a second call")
+	} else if _, ok := IsApprovalRequired(err); !ok {
+		t.Fatalf("second tool call should request approval, got %v", err)
+	}
+}
+
+func TestRegistryAdvertisementIsNotAuthorization(t *testing.T) {
+	t.Parallel()
+	policy, err := securitypolicy.Resolve(securitypolicy.DefaultSelection())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry()
+	registry.ConfigureSecurity(policy, NewBlockingApprover(), nil)
+	registry.Register(fakeRegistryTool{name: "schedule_manage"})
+	if len(registry.Definitions()) != 1 {
+		t.Fatal("expected schedule tool to remain advertised")
+	}
+	_, err = registry.ExecuteTool(context.Background(), provider.ToolCall{Function: provider.ToolFunction{
+		Name: "schedule_manage", Arguments: `{"action":"add"}`,
+	}})
+	if _, ok := IsApprovalRequired(err); !ok {
+		t.Fatalf("reasonable scheduled mutation should require approval, got %v", err)
+	}
+	if _, err := registry.ExecuteTool(context.Background(), provider.ToolCall{Function: provider.ToolFunction{
+		Name: "schedule_manage", Arguments: `{"action":"list"}`,
+	}}); err != nil {
+		t.Fatalf("schedule list should remain allowed: %v", err)
+	}
+}
+
+func TestRegistryAppliesProfilesToNonShellTools(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		profile securitypolicy.Profile
+		wantErr bool
+	}{
+		{securitypolicy.ProfileExtraStrict, true},
+		{securitypolicy.ProfileReasonable, true},
+		{securitypolicy.ProfileLessStrict, false},
+		{securitypolicy.ProfileMinimal, false},
+		{securitypolicy.ProfileYOLO, false},
+	}
+	for _, tc := range cases {
+		policy, err := securitypolicy.Resolve(&securitypolicy.Selection{Version: securitypolicy.SchemaVersion, Profile: tc.profile})
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry := NewRegistry()
+		registry.ConfigureSecurity(policy, NewBlockingApprover(), nil)
+		registry.Register(fakeRegistryTool{name: "schedule_manage"})
+		_, err = registry.ExecuteTool(context.Background(), provider.ToolCall{Function: provider.ToolFunction{
+			Name: "schedule_manage", Arguments: `{"action":"add"}`,
+		}})
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("%s schedule add error=%v, wantErr=%v", tc.profile, err, tc.wantErr)
+		}
 	}
 }
 

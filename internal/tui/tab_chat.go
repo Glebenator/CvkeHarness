@@ -165,7 +165,11 @@ func (t *chatTab) Init(svc *Service) tea.Cmd {
 	if svc != nil && svc.Config() != nil {
 		cfg := svc.Config()
 		t.configuredModel = strings.Trim(strings.TrimSpace(cfg.Provider)+"/"+strings.TrimSpace(cfg.PrimaryModel()), "/")
-		t.safety = strings.ReplaceAll(strings.TrimSpace(cfg.SafetyMode), "_", " ")
+		if effective, err := cfg.EffectiveSecurity(); err == nil {
+			t.safety = effective.Summary()
+		} else {
+			t.safety = "invalid"
+		}
 	}
 	return func() tea.Msg { return loadChatData(svc) }
 }
@@ -1140,7 +1144,11 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 	switch result.TaskState {
 	case state.TaskStateBlockedWaitingUser:
 		t.status = "APPROVAL REQUIRED"
-		t.statusDetail = "work is persisted and remains blocked until explicitly approved"
+		if result.BlockedWorkID != "" {
+			t.statusDetail = fmt.Sprintf("%s — run: cvkeharness commands approve-work %s", secrets.Mask(result.ApprovalSummary), result.BlockedWorkID)
+		} else {
+			t.statusDetail = "work is persisted and remains blocked until explicitly approved"
+		}
 	case state.TaskStateCompleted:
 		t.status = "READY"
 		t.statusDetail = "turn completed"
@@ -1330,7 +1338,7 @@ func toolsCommandText(items []agent.ChatTool, safetyMode string) string {
 	lines := []string{
 		"Registered tools",
 		"Availability is not authorization. Task filtering, target binding, policy, and approvals still apply.",
-		"Safety mode: " + strings.ReplaceAll(safetyMode, "_", " "),
+		"Security policy: " + strings.ReplaceAll(safetyMode, "_", " "),
 	}
 	if len(items) == 0 {
 		return strings.Join(append(lines, "No tools are registered for this runtime."), "\n")

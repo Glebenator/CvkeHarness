@@ -93,3 +93,16 @@ func TestApplyProfileClearsOverrides(t *testing.T) {
 		t.Fatalf("unexpected selection after apply: %#v", selection)
 	}
 }
+
+func TestEverySettingCyclesToAValidValue(t *testing.T) {
+	resolved, err := Resolve(DefaultSelection())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range Catalog() {
+		next := NextValue(setting, resolved.Value(setting.ID), 1)
+		if err := validateValue(setting, next); err != nil {
+			t.Fatalf("%s cycled to invalid value %q: %v", setting.ID, next, err)
+		}
+	}
+}

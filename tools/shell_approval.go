@@ -9,8 +9,10 @@ import (
 
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/promptdump"
+	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/state"
 )
 
 const (
@@ -25,6 +27,10 @@ type ShellApprovalRequest struct {
 	Command         string
 	ValidationError string
 	Effects         []ShellEffect
+	ActionKind      string
+	ActionPayload   string
+	GrantDigest     string
+	Grant           state.SecurityActionGrant
 }
 
 // ShellApprovalDecision captures how a gated command was handled.
@@ -46,7 +52,7 @@ type ApprovalRequiredError struct {
 }
 
 func (e ApprovalRequiredError) Error() string {
-	return "user approval required before executing shell command: " + strings.TrimSpace(e.Request.Command)
+	return "user approval required before executing shell command: " + secrets.Mask(strings.TrimSpace(e.Request.Command))
 }
 
 // IsApprovalRequired reports whether err is a deferred manual-approval blocker.
@@ -168,12 +174,20 @@ func NewUserPromptApprover(in io.Reader, out io.Writer) ShellApprover {
 }
 
 func (a *UserPromptApprover) Approve(_ context.Context, req ShellApprovalRequest) (ShellApprovalDecision, error) {
+	details := []string{
+		"Command: " + secrets.Mask(req.Command),
+		"Reason: " + req.ValidationError,
+	}
+	for _, effect := range req.Effects {
+		line := "Effect: " + effect.Setting
+		if effect.Target != "" {
+			line += " → " + effect.Target
+		}
+		details = append(details, line)
+	}
 	idx, err := termui.Select(termui.SelectOptions{
-		Title: "Command requires approval",
-		Details: []string{
-			"Command: " + req.Command,
-			"Reason: " + req.ValidationError,
-		},
+		Title:   "Action requires approval",
+		Details: details,
 		Choices: []termui.Choice{
 			{Label: "Reject command", Description: "Keep this run within the current approval policy"},
 			{Label: "Approve once", Description: "Run this command now, then ask again next time"},

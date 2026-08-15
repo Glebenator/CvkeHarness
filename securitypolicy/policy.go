@@ -333,19 +333,7 @@ func NextValue(setting Setting, current string, delta int) string {
 	case KindBool:
 		values = []string{"false", "true"}
 	case KindInt:
-		step := max(1, (setting.Max-setting.Min)/10)
-		value, err := strconv.Atoi(current)
-		if err != nil {
-			value = setting.Min
-		}
-		value += delta * step
-		if value < setting.Min {
-			value = setting.Max
-		}
-		if value > setting.Max {
-			value = setting.Min
-		}
-		return strconv.Itoa(value)
+		values = intSettingOptions(setting.ID)
 	}
 	for index, value := range values {
 		if value == current {
@@ -353,6 +341,21 @@ func NextValue(setting Setting, current string, delta int) string {
 		}
 	}
 	return values[0]
+}
+
+func intSettingOptions(id string) []string {
+	switch id {
+	case SettingMaxCommandBytes:
+		return []string{"1024", "4096", "8192", "16384", "32768", "65536"}
+	case SettingMaxSegments:
+		return []string{"1", "4", "8", "16", "24", "32", "64"}
+	case SettingTimeoutSeconds:
+		return []string{"5", "15", "30", "60", "120", "300", "900", "3600"}
+	case SettingMaxOutputBytes:
+		return []string{"512", "4096", "8192", "16384", "32768", "65536", "262144", "1048576"}
+	default:
+		return nil
+	}
 }
 
 func OverrideKeys(selection *Selection) []string {
@@ -397,11 +400,4 @@ func plural(count int) string {
 		return ""
 	}
 	return "s"
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -40,6 +41,8 @@ type ChatTurnResult struct {
 	Curation          []memory.Lesson
 	ExecutionErr      error
 	CurationError     error
+	BlockedWorkID     string
+	ApprovalSummary   string
 }
 
 // ChatTool describes one capability registered for the current chat runtime.
@@ -121,6 +124,11 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 		ExecutionErr:      execErr,
 	}
 	if isBlockedTaskError(execErr) {
+		var blocked blockedTaskError
+		if errors.As(execErr, &blocked) {
+			result.BlockedWorkID = blocked.WorkID()
+			result.ApprovalSummary = blocked.request.Command
+		}
 		_ = telemetry.Record(telemetry.WithFields(ctx, telemetry.Fields{TaskState: string(state.TaskStateBlockedWaitingUser)}), telemetry.Event{
 			Type:      telemetry.EventTaskBlocked,
 			TaskState: string(state.TaskStateBlockedWaitingUser),

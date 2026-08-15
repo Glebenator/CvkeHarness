@@ -266,6 +266,25 @@ type CommandApproval struct {
 	ApprovedAt time.Time
 }
 
+// SecurityActionGrant is an expiring, exact, single-use authorization. It is
+// bound to an action/effect digest, effective policy, host, principal, and
+// working directory; no raw command or secret is stored.
+type SecurityActionGrant struct {
+	Digest           string
+	ActionKind       string
+	MaskedSummary    string
+	EffectDigest     string
+	PolicyHash       string
+	Host             string
+	Principal        string
+	WorkingDirectory string
+	Source           string
+	ExpiresAt        time.Time
+	RemainingUses    int
+	CreatedAt        time.Time
+	UsedAt           time.Time
+}
+
 // ScheduledJob stores a durable CvkeHarness-owned background task.
 type ScheduledJob struct {
 	ID               string

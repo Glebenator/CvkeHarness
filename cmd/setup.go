@@ -16,6 +16,7 @@ import (
 	"github.com/coolcake/cvkeharness/internal/setuptui"
 	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/securitypolicy"
 	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
 )
@@ -822,9 +823,11 @@ var openAISafetyModelOptions = [][2]string{
 }
 
 var safetyModeOptions = [][2]string{
-	{tools.SafetyModeLLMJudge, "LLM judge  ·  secondary model reviews commands  ★"},
-	{tools.SafetyModeUserConfirmAll, "User approval  ·  ask before every shell command"},
-	{tools.SafetyModeUnrestricted, "Unrestricted  ·  risky, no command approval gate"},
+	{string(securitypolicy.ProfileExtraStrict), "Extra strict  ·  opaque and destructive actions denied"},
+	{string(securitypolicy.ProfileReasonable), "Reasonable  ·  reads run, mutations ask  ★"},
+	{string(securitypolicy.ProfileLessStrict), "Less strict  ·  routine recoverable changes run"},
+	{string(securitypolicy.ProfileMinimal), "Minimal  ·  interrupt only critical or credential effects"},
+	{string(securitypolicy.ProfileYOLO), "YOLO  ·  no CvkeHarness approval or deletion guard"},
 }
 
 func safetyModelsForProvider(cfg *config.Config) [][2]string {
@@ -1210,66 +1213,36 @@ func wizardTokens(cfg *config.Config) bool {
 }
 
 func wizardSafetyModel(cfg *config.Config) bool {
-	for {
-		renderHeader()
-		renderStep(4, totalSteps, "Command Approval Policy")
-
-		fmt.Printf("  %sCommands outside the auto-approved allowlist need a secondary gate before execution.%s\n", fgGray, ansiReset)
-		fmt.Printf("  %sChoose whether that gate is another model or a direct user confirmation prompt.%s\n\n", fgMuted+ansiDim, ansiReset)
-
-		initialMode := 0
-		if cfg.SafetyMode == tools.SafetyModeUserConfirmAll || cfg.SafetyMode == tools.SafetyModeUserConfirm {
-			initialMode = 1
-		} else if cfg.SafetyMode == tools.SafetyModeUnrestricted {
-			initialMode = 2
-		}
-
-		modeIdx := selectList(safetyModeOptions, initialMode, true)
-		if modeIdx == goBack {
+	renderHeader()
+	renderStep(4, totalSteps, "Security Profile")
+	fmt.Printf("  %sProfiles are defaults over one effect-based policy. Every control remains editable in the dashboard Settings page.%s\n", fgGray, ansiReset)
+	fmt.Printf("  %sYOLO disables CvkeHarness gates but cannot bypass operating-system or provider protections.%s\n\n", fgMuted+ansiDim, ansiReset)
+	initial := 1
+	if cfg.Security != nil {
+		initial = optionIndexByValue(safetyModeOptions, string(cfg.Security.Profile))
+	}
+	idx := selectList(safetyModeOptions, initial, true)
+	if idx == goBack {
+		return false
+	}
+	profile := securitypolicy.Profile(safetyModeOptions[idx][0])
+	if profile == securitypolicy.ProfileYOLO {
+		confirm := selectList([][2]string{
+			{"cancel", "Keep the current security profile"},
+			{"confirm", "Confirm YOLO and clear existing overrides"},
+		}, 0, true)
+		if confirm != 1 {
 			return false
 		}
-		cfg.SafetyMode = safetyModeOptions[modeIdx][0]
-		if cfg.SafetyMode == tools.SafetyModeUserConfirmAll || cfg.SafetyMode == tools.SafetyModeUserConfirm || cfg.SafetyMode == tools.SafetyModeUnrestricted {
-			return true
-		}
-
-		renderHeader()
-		renderStep(4, totalSteps, "Select a Safety Model  (LLM-as-a-Judge)")
-		fmt.Printf("  %sThe safety model reviews shell commands before execution.%s\n", fgGray, ansiReset)
-		fmt.Printf("  %sIt should be a capable, instruction-following model from your provider.%s\n\n", fgMuted+ansiDim, ansiReset)
-
-		var options [][2]string
-		if cfg.Provider == "codex" {
-			now := time.Now()
-			res := fetchCodexModels(now)
-			options = res.items
-			renderCodexModelStatus(res, now)
-		} else {
-			options = safetyModelsForProvider(cfg)
-		}
-		idx := selectList(options, optionIndexByValue(options, cfg.SafetyModel), true)
-		if idx == goBack {
-			continue
-		}
-
-		if options[idx][0] == "[ custom model ]" {
-			val, back := promptCustomValue(
-				4,
-				"Custom Safety Model Identifier",
-				"Safety Model ID:",
-				cfg.SafetyModel,
-				fmt.Sprintf("  %sEnter the exact model ID used by your provider.%s", fgGray, ansiReset),
-				fmt.Sprintf("  %sExample: %santhropic/claude-3.5-sonnet%s", fgGray, fgAccent+ansiBold, ansiReset),
-			)
-			if back {
-				continue
-			}
-			cfg.SafetyModel = config.NormalizeProviderModelID(cfg.Provider, val)
-		} else {
-			cfg.SafetyModel = config.NormalizeProviderModelID(cfg.Provider, options[idx][0])
-		}
-		return true
 	}
+	if cfg.Security == nil {
+		cfg.Security = securitypolicy.DefaultSelection()
+	}
+	if err := cfg.Security.ApplyProfile(profile); err != nil {
+		return false
+	}
+	cfg.Normalize()
+	return true
 }
 
 func wizardRouting(cfg *config.Config) bool {
@@ -1454,29 +1427,7 @@ func ensureDefaultApproved(cfg *config.Config) {
 }
 
 func cloneConfig(cfg *config.Config) *config.Config {
-	if cfg == nil {
-		return nil
-	}
-
-	clone := *cfg
-	if len(cfg.APIKeys) > 0 {
-		clone.APIKeys = make(map[string]string, len(cfg.APIKeys))
-		for key, value := range cfg.APIKeys {
-			clone.APIKeys[key] = value
-		}
-	}
-	if len(cfg.AllowedCommands) > 0 {
-		clone.AllowedCommands = append([]string(nil), cfg.AllowedCommands...)
-	}
-	if len(cfg.ApprovedModels) > 0 {
-		clone.ApprovedModels = append([]string(nil), cfg.ApprovedModels...)
-	}
-	if len(cfg.FavoriteModels) > 0 {
-		clone.FavoriteModels = append([]string(nil), cfg.FavoriteModels...)
-	}
-	clone.WebSearch.AllowedDomains = append([]string(nil), cfg.WebSearch.AllowedDomains...)
-	clone.WebSearch.BlockedDomains = append([]string(nil), cfg.WebSearch.BlockedDomains...)
-	return &clone
+	return cfg.Clone()
 }
 
 func configChanged(before, after *config.Config) bool {
@@ -1585,19 +1536,10 @@ func connectionSummary(cfg *config.Config) string {
 }
 
 func approvalSummary(cfg *config.Config) string {
-	if cfg.SafetyMode == tools.SafetyModeUserConfirmAll {
-		return "User approval before every command"
+	if effective, err := cfg.EffectiveSecurity(); err == nil {
+		return effective.Summary()
 	}
-	if cfg.SafetyMode == tools.SafetyModeUserConfirm {
-		return "Manual user confirmation"
-	}
-	if cfg.SafetyMode == tools.SafetyModeUnrestricted {
-		return "Unrestricted shell execution"
-	}
-	if strings.TrimSpace(cfg.SafetyModel) == "" {
-		return "LLM judge"
-	}
-	return "LLM judge via " + cfg.SafetyModel
+	return "Invalid security policy"
 }
 
 func routingSummary(cfg *config.Config) string {
@@ -1636,7 +1578,7 @@ func settingsMenuEntries(cfg *config.Config, profile soulProfile) []settingsMenu
 			Action:      settingsEditModel,
 		},
 		{
-			Label:       "Command Approval",
+			Label:       "Security",
 			Description: approvalSummary(cfg),
 			Action:      settingsEditSafety,
 		},
@@ -1851,6 +1793,9 @@ func loadWizardConfig() *config.Config {
 	}
 	if existingCfg.SafetyMode != "" {
 		cfg.SafetyMode = existingCfg.SafetyMode
+	}
+	if existingCfg.Security != nil {
+		cfg.Security = existingCfg.Security.Clone()
 	}
 	cfg.RoutingEnabled = existingCfg.RoutingEnabled
 	if existingCfg.RoutingMode != "" {

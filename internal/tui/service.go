@@ -36,7 +36,7 @@ func (s *Service) StartChat(ctx context.Context, observer tools.EventObserver) (
 	if s == nil || s.startChat == nil {
 		return nil, fmt.Errorf("live chat runtime is unavailable")
 	}
-	return s.startChat(ctx, observer)
+	return s.startChat(ctx, s.cfg.Clone(), observer)
 }
 
 // NewService creates a dashboard data service.
