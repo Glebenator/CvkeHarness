@@ -13,7 +13,9 @@ import (
 // provider, routing, memory, tools, persistence, and telemetry construction as
 // the CLI without importing the main package.
 type LiveChatSession interface {
+	ID() int64
 	Selection() core.RoutingSelection
+	Tools() []agent.ChatTool
 	Turn(ctx context.Context, prompt string) (agent.ChatTurnResult, error)
 	Close(ctx context.Context, exitReason string)
 }

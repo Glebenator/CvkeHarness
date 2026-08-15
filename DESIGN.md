@@ -37,6 +37,7 @@ Use the terminal's native monospace. Establish hierarchy through weight, spacing
 - Status: icon plus explicit text (`RUNNING`, `VERIFIED`, `FAILED`, `APPROVAL REQUIRED`).
 - Setup action: consistent Back and Continue labels, with blocked reasons stated inline.
 - Composer: persistent multiline input with send/newline hints.
+- Chat command palette: compact inline suggestions above the composer when input starts with `/`; filtered as the operator types, with a responsive row cap so the composer remains visible.
 - Tool call: compact inline summary, collapsible details, duration and outcome text.
 - Empty/loading/error states: explain what happened and the next available keyboard action.
 
@@ -44,6 +45,7 @@ Use the terminal's native monospace. Establish hierarchy through weight, spacing
 
 - Keyboard-only operation is complete, not a fallback.
 - Enter activates or sends; arrows and familiar Vim keys navigate; Esc goes back or cancels; explicit hints remain visible.
+- In the chat command palette, arrows change the selected command, Enter completes a partial command or runs an exact one, and Esc closes suggestions without clearing the composer.
 - Asynchronous runtime work crosses Bubble Tea boundaries through typed messages and commands.
 - Do not imply token streaming when the provider/runtime only returns complete turns.
 - Saving configuration is a separate action from applying install or daemon changes.

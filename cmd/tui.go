@@ -88,9 +88,13 @@ type dashboardChatSession struct {
 	closed       bool
 }
 
+func (s *dashboardChatSession) ID() int64 { return s.sessionID }
+
 func (s *dashboardChatSession) Selection() core.RoutingSelection {
 	return s.conversation.Selection()
 }
+
+func (s *dashboardChatSession) Tools() []agent.ChatTool { return s.conversation.Tools() }
 
 func (s *dashboardChatSession) Turn(ctx context.Context, prompt string) (agent.ChatTurnResult, error) {
 	result, err := s.conversation.Turn(ctx, prompt)

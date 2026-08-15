@@ -11,7 +11,7 @@ import (
 	"github.com/coolcake/cvkeharness/state"
 )
 
-func TestRoutingConfigIncludesPromptApprovedModelsFromState(t *testing.T) {
+func TestRoutingConfigDoesNotReuseOneTimeModelApprovalFromState(t *testing.T) {
 	t.Parallel()
 
 	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
@@ -36,8 +36,8 @@ func TestRoutingConfigIncludesPromptApprovedModelsFromState(t *testing.T) {
 	routingCfg := routingConfigFromConfig(cfg, store)
 	approved := routingCfg.ApprovedSet()
 
-	if _, ok := approved["openrouter/gpt-best"]; !ok {
-		t.Fatalf("expected prompt-approved model to be available for routing, got %#v", approved)
+	if _, ok := approved["openrouter/gpt-best"]; ok {
+		t.Fatalf("expected one-time model approval not to authorize a later runtime, got %#v", approved)
 	}
 }
 

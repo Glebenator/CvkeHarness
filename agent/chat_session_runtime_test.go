@@ -75,6 +75,31 @@ func (f failingTool) Execute(context.Context, json.RawMessage) (string, error) {
 	return "", fmt.Errorf("boom")
 }
 
+func TestStartChatCreatesIndependentConversationHistory(t *testing.T) {
+	t.Parallel()
+
+	a := New(Options{
+		ProviderName: "openrouter",
+		DefaultModel: "test-model",
+	})
+	first, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatalf("first StartChat returned unexpected error: %v", err)
+	}
+	first.history.Add(provider.Message{Role: "user", Content: "old conversation"})
+
+	second, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatalf("second StartChat returned unexpected error: %v", err)
+	}
+	if got := second.History(); len(got) != 0 {
+		t.Fatalf("expected new conversation not to inherit transcript, got %#v", got)
+	}
+	if got := first.History(); len(got) != 1 {
+		t.Fatalf("expected original conversation to remain independently owned, got %#v", got)
+	}
+}
+
 func TestChatConversationPreservesHistoryAndPinsModel(t *testing.T) {
 	t.Parallel()
 
@@ -378,6 +403,30 @@ func TestChatConversationRunsToolCallsWithApprovalPath(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "hello") {
 		t.Fatalf("expected tool-backed output, got %q", result.Output)
+	}
+}
+
+func TestChatConversationToolsReturnsRegisteredCapabilities(t *testing.T) {
+	t.Parallel()
+
+	registry := tools.NewRegistry()
+	registry.Register(failingTool{})
+	a := New(Options{
+		Provider:      &sequenceProvider{},
+		ProviderName:  "openrouter",
+		ToolRegistry:  registry,
+		DefaultModel:  "test-model",
+		MaxIterations: 1,
+		MaxTokens:     128,
+	})
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatalf("StartChat returned unexpected error: %v", err)
+	}
+
+	got := session.Tools()
+	if len(got) != 1 || got[0].Name != "fail_tool" || got[0].Description == "" {
+		t.Fatalf("unexpected chat tools: %#v", got)
 	}
 }
 

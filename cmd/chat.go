@@ -15,21 +15,14 @@ import (
 	"github.com/coolcake/cvkeharness/agent"
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/chatcmd"
+	"github.com/coolcake/cvkeharness/internal/chatexport"
 	"github.com/coolcake/cvkeharness/internal/cli"
 	"github.com/coolcake/cvkeharness/internal/log"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/spf13/cobra"
-)
-
-type chatSlashAction string
-
-const (
-	chatSlashNone  chatSlashAction = ""
-	chatSlashHelp  chatSlashAction = "help"
-	chatSlashClear chatSlashAction = "clear"
-	chatSlashExit  chatSlashAction = "exit"
 )
 
 type chatInputResult struct {
@@ -183,12 +176,16 @@ func runChat() {
 	}
 	defer store.Close()
 
-	a, err := newChatAgent(ctx, cfg, store, ui, false, func(ctx context.Context, selection core.RoutingSelection) (bool, error) {
+	modelApproval := func(ctx context.Context, selection core.RoutingSelection) (bool, error) {
 		if selection.Recommendation == nil {
 			return false, nil
 		}
 		return promptModelApproval(*selection.Recommendation, selection.RecommendationReason)
-	})
+	}
+	newRuntime := func() (*agent.Agent, error) {
+		return newChatAgent(ctx, cfg, store, ui, false, modelApproval)
+	}
+	a, err := newRuntime()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -248,12 +245,17 @@ func runChat() {
 			continue
 		}
 
-		switch parseChatSlashAction(line) {
-		case chatSlashHelp:
+		switch chatcmd.Parse(line, chatcmd.CLI) {
+		case chatcmd.Help:
 			ui.PrintHelp()
 			continue
-		case chatSlashClear:
-			current.close(ctx, store, ui, "cleared")
+		case chatcmd.New:
+			current.close(ctx, store, ui, "new_chat")
+			a, err = newRuntime()
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
 			session, sessionID, err = startChatSession(ctx, a, store, cfg)
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
@@ -266,10 +268,29 @@ func runChat() {
 			}
 			ui.RenderBanner(current.session.Selection())
 			continue
-		case chatSlashExit:
+		case chatcmd.Memory:
+			ui.PrintMemory()
+			continue
+		case chatcmd.Tools:
+			ui.PrintTools(current.session.Tools(), cfg.SafetyMode)
+			continue
+		case chatcmd.Export:
+			path, exportErr := exportCurrentChat(ctx, store, current, cfg)
+			if exportErr != nil {
+				ui.PrintError("Export unavailable", []string{exportErr.Error()})
+			} else {
+				ui.PrintInfo("Export complete", []string{path, "Private file (0600). Review operational context before sharing."})
+			}
+			continue
+		case chatcmd.Exit:
 			current.close(ctx, store, ui, "user_exit")
 			return
 		}
+		if chatcmd.IsUnknownSlash(line, chatcmd.CLI) {
+			ui.PrintError("Unknown command", []string{line, "Type /help for commands. Prefix with // to send a literal leading slash."})
+			continue
+		}
+		line = chatcmd.PromptText(line)
 
 		ui.PrintUser(line)
 		ui.StartThinking()
@@ -492,7 +513,7 @@ func humanizeChatExitReason(exitReason string) string {
 	switch strings.TrimSpace(exitReason) {
 	case "user_exit":
 		return "Exited by user"
-	case "cleared":
+	case "cleared", "new_chat":
 		return "Started a new session"
 	case "eof":
 		return "Input closed"
@@ -505,15 +526,26 @@ func humanizeChatExitReason(exitReason string) string {
 	}
 }
 
-func parseChatSlashAction(line string) chatSlashAction {
-	switch strings.TrimSpace(strings.ToLower(line)) {
-	case "/help":
-		return chatSlashHelp
-	case "/clear":
-		return chatSlashClear
-	case "/exit":
-		return chatSlashExit
-	default:
-		return chatSlashNone
+func exportCurrentChat(ctx context.Context, store *state.Store, current *chatSessionState, cfg *config.Config) (string, error) {
+	if current == nil || current.sessionID <= 0 {
+		return "", fmt.Errorf("current chat is not persisted yet")
 	}
+	if store == nil || !store.Available() {
+		return "", fmt.Errorf("chat history database is unavailable")
+	}
+	if cfg == nil {
+		return "", fmt.Errorf("chat export configuration is unavailable")
+	}
+	detail, err := store.GetChatSessionDetail(ctx, current.sessionID)
+	if err != nil {
+		return "", err
+	}
+	if len(detail.Turns) == 0 {
+		return "", fmt.Errorf("current chat has no completed turns to export")
+	}
+	dir, err := chatexport.DirectoryForStateDB(cfg.StateDBPath)
+	if err != nil {
+		return "", err
+	}
+	return chatexport.WriteMarkdown(dir, detail, time.Now())
 }

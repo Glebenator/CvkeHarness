@@ -462,20 +462,3 @@ func TestDefaultHelpListsRegisteredCommands(t *testing.T) {
 		}
 	}
 }
-
-func TestParseChatSlashAction(t *testing.T) {
-	t.Parallel()
-
-	cases := map[string]chatSlashAction{
-		"/help":  chatSlashHelp,
-		"/clear": chatSlashClear,
-		"/exit":  chatSlashExit,
-		"hello":  chatSlashNone,
-	}
-
-	for input, want := range cases {
-		if got := parseChatSlashAction(input); got != want {
-			t.Fatalf("parseChatSlashAction(%q) = %q, want %q", input, got, want)
-		}
-	}
-}

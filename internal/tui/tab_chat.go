@@ -14,6 +14,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/coolcake/cvkeharness/agent"
+	"github.com/coolcake/cvkeharness/internal/chatcmd"
+	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
@@ -38,6 +40,11 @@ type chatTurnDoneMsg struct {
 	prompt string
 	result agent.ChatTurnResult
 	err    error
+}
+
+type chatExportDoneMsg struct {
+	path string
+	err  error
 }
 
 type chatRuntimeEventMsg struct{ event tools.Event }
@@ -91,6 +98,7 @@ type chatTab struct {
 	running         bool
 	stopping        bool
 	pendingPrompt   string
+	pendingCommand  chatcmd.Action
 	cancelTurn      context.CancelFunc
 	eventCh         chan tools.Event
 	eventWaitStop   chan struct{}
@@ -110,6 +118,11 @@ type chatTab struct {
 	safety          string
 	markdownWidth   int
 	markdownCache   map[string]string
+	memorySources   []tools.MemorySource
+	commandOpen     bool
+	commandMatches  []chatcmd.Command
+	commandCursor   int
+	commandRows     int
 }
 
 func newChatTab() tabModel {
@@ -132,6 +145,7 @@ func newChatTab() tabModel {
 		status:          "READY",
 		verification:    "NOT RUN",
 		controlsReady:   true,
+		commandRows:     commandMenuLimit,
 	}
 }
 
@@ -140,6 +154,7 @@ func newChatTab() tabModel {
 func (t *chatTab) Activate() {
 	t.composerFocused = false
 	t.composer.Blur()
+	t.closeCommandMenu()
 }
 
 func (t *chatTab) HorizontalTabNavigation() bool {
@@ -199,6 +214,13 @@ func (t *chatTab) StatusHints() []string {
 		}
 		return append(hints, renderKeyHint("ctrl+h", "history"))
 	}
+	if t.commandOpen {
+		return []string{
+			renderKeyHint("↑↓", "commands"),
+			renderKeyHint("enter", "complete or run"),
+			renderKeyHint("esc", "close"),
+		}
+	}
 	return []string{
 		renderKeyHint("enter", "send"),
 		renderKeyHint("ctrl+j", "newline"),
@@ -233,6 +255,7 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 			t.status = "UNAVAILABLE"
 			t.lastError = classifyChatStartError(msg.err)
 			t.pendingPrompt = ""
+			t.pendingCommand = chatcmd.None
 			return t, nil
 		}
 		t.session = msg.session
@@ -243,6 +266,21 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 			t.pendingPrompt = ""
 			return t.beginTurn(prompt)
 		}
+		if t.pendingCommand != chatcmd.None {
+			action := t.pendingCommand
+			t.pendingCommand = chatcmd.None
+			return t.runLocalCommand(action, svc)
+		}
+
+	case chatExportDoneMsg:
+		if msg.err != nil {
+			t.appendConsoleMessage("Export unavailable: " + msg.err.Error())
+		} else {
+			t.appendConsoleMessage("Export complete: " + msg.path + "\nPrivate file (0600). Review operational context before sharing.")
+		}
+		t.refreshViewport()
+		t.viewport.GotoBottom()
+		return t, nil
 
 	case chatRuntimeEventMsg:
 		t.applyRuntimeEvent(msg.event)
@@ -331,6 +369,10 @@ func verticalMouseWheelDirection(msg tea.MouseMsg) int {
 func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
+		if t.commandOpen {
+			t.closeCommandMenu()
+			return t, nil
+		}
 		if t.running && t.cancelTurn != nil {
 			t.stopping = true
 			t.status = "INTERRUPTING"
@@ -367,6 +409,10 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		t.viewport.HalfViewDown()
 		return t, nil
 	case "up":
+		if t.composerFocused && t.commandOpen && len(t.commandMatches) > 0 {
+			t.commandCursor = (t.commandCursor - 1 + len(t.commandMatches)) % len(t.commandMatches)
+			return t, nil
+		}
 		if !t.composerFocused {
 			if t.moveToolSelection(-1) {
 				t.refreshViewport()
@@ -377,6 +423,10 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 			return t, nil
 		}
 	case "down":
+		if t.composerFocused && t.commandOpen && len(t.commandMatches) > 0 {
+			t.commandCursor = (t.commandCursor + 1) % len(t.commandMatches)
+			return t, nil
+		}
 		if !t.composerFocused {
 			if t.moveToolSelection(1) {
 				t.refreshViewport()
@@ -388,6 +438,7 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		}
 	case "ctrl+j":
 		t.composer.SetValue(t.composer.Value() + "\n")
+		t.closeCommandMenu()
 		return t, nil
 	case "enter":
 		if !t.composerFocused {
@@ -402,31 +453,25 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		if prompt == "" {
 			return t, nil
 		}
-		t.composer.Reset()
-		switch strings.ToLower(prompt) {
-		case "/history":
-			t.history = true
-			return t, nil
-		case "/clear":
-			t.closeSession("cleared")
-			t.messages = nil
-			t.toolCalls = nil
-			t.toolCursor = 0
-			t.activeTurn = 0
-			t.target = ""
-			t.verification = "NOT RUN"
-			t.status = "READY"
-			t.refreshViewport()
-			return t, nil
-		case "/help":
-			t.messages = append(t.messages, liveChatMessage{
-				role:    "system",
-				content: "Commands: /history, /clear, /help. Enter sends; Ctrl+J inserts a newline; Esc interrupts an active turn.",
-				at:      time.Now(),
-			})
-			t.refreshViewport()
+		if t.commandOpen && chatcmd.Parse(prompt, chatcmd.TUI) == chatcmd.None && len(t.commandMatches) > 0 {
+			selected := t.commandMatches[minInt(maxInt(t.commandCursor, 0), len(t.commandMatches)-1)]
+			t.composer.SetValue(selected.Name)
+			t.composer.CursorEnd()
+			t.closeCommandMenu()
 			return t, nil
 		}
+		t.composer.Reset()
+		t.closeCommandMenu()
+		if action := chatcmd.Parse(prompt, chatcmd.TUI); action != chatcmd.None {
+			return t.runLocalCommand(action, svc)
+		}
+		if chatcmd.IsUnknownSlash(prompt, chatcmd.TUI) {
+			t.appendConsoleMessage("Unknown command: " + prompt + "\nType / to see commands. Prefix with // to send a literal leading slash.")
+			t.refreshViewport()
+			t.viewport.GotoBottom()
+			return t, nil
+		}
+		prompt = chatcmd.PromptText(prompt)
 		if t.session == nil {
 			t.starting = true
 			t.pendingPrompt = prompt
@@ -439,11 +484,103 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 
 	var cmd tea.Cmd
 	t.composer, cmd = t.composer.Update(msg)
+	t.updateCommandMenu()
 	return t, cmd
+}
+
+func (t *chatTab) runLocalCommand(action chatcmd.Action, svc *Service) (tabModel, tea.Cmd) {
+	switch action {
+	case chatcmd.History:
+		t.history = true
+		return t, nil
+	case chatcmd.New:
+		return t.startFreshSession(svc)
+	case chatcmd.Help:
+		t.appendConsoleMessage(commandHelpText())
+	case chatcmd.Memory:
+		t.appendConsoleMessage(memoryCommandText(t.memorySources))
+	case chatcmd.Tools:
+		if t.session == nil {
+			t.pendingCommand = chatcmd.Tools
+			t.starting = true
+			t.status = "CONNECTING"
+			t.statusDetail = "loading the configured tool registry"
+			return t, startLiveChatCmd(svc, channelEventObserver{ch: t.eventCh})
+		}
+		t.appendConsoleMessage(toolsCommandText(t.session.Tools(), t.safety))
+	case chatcmd.Export:
+		if t.session == nil || t.session.ID() <= 0 || t.activeTurn == 0 {
+			t.appendConsoleMessage("Export unavailable: current chat has no completed turns to export.")
+			break
+		}
+		return t, exportChatSessionCmd(svc, t.session.ID())
+	}
+	t.refreshViewport()
+	t.viewport.GotoBottom()
+	return t, nil
+}
+
+func (t *chatTab) appendConsoleMessage(content string) {
+	t.messages = append(t.messages, liveChatMessage{role: "system", content: strings.TrimSpace(content), at: time.Now()})
+}
+
+func (t *chatTab) updateCommandMenu() {
+	value := strings.TrimSpace(t.composer.Value())
+	if value == "" || !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") || strings.ContainsAny(value, " \t\r\n") {
+		t.closeCommandMenu()
+		return
+	}
+	t.commandOpen = true
+	t.commandMatches = chatcmd.Matches(value, chatcmd.TUI)
+	if len(t.commandMatches) == 0 {
+		t.commandCursor = 0
+		return
+	}
+	t.commandCursor = clamp(t.commandCursor, 0, len(t.commandMatches)-1)
+}
+
+func (t *chatTab) closeCommandMenu() {
+	t.commandOpen = false
+	t.commandMatches = nil
+	t.commandCursor = 0
+}
+
+func (t *chatTab) startFreshSession(svc *Service) (tabModel, tea.Cmd) {
+	oldEvents := t.eventCh
+	t.closeSession("new_chat")
+	drainRuntimeEvents(oldEvents)
+
+	// A fresh observer channel prevents delayed events from the retired runtime
+	// from being rendered into the new conversation.
+	t.eventCh = make(chan tools.Event, 128)
+	t.messages = nil
+	t.toolCalls = nil
+	t.toolCursor = 0
+	t.toolLineStarts = nil
+	t.toolLineEnds = nil
+	t.activeTurn = 0
+	t.pendingPrompt = ""
+	t.pendingCommand = chatcmd.None
+	t.running = false
+	t.stopping = false
+	t.target = ""
+	t.verification = "NOT RUN"
+	t.lastError = ""
+	t.memorySources = nil
+	t.markdownWidth = 0
+	t.markdownCache = nil
+	t.closeCommandMenu()
+	t.starting = true
+	t.status = "CONNECTING"
+	t.statusDetail = "starting a fresh in-process session"
+	t.refreshViewport()
+	t.viewport.GotoTop()
+	return t, startLiveChatCmd(svc, channelEventObserver{ch: t.eventCh})
 }
 
 func (t *chatTab) beginTurn(prompt string) (tabModel, tea.Cmd) {
 	drainRuntimeEvents(t.eventCh)
+	t.closeCommandMenu()
 	t.activeTurn++
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelTurn = cancel
@@ -550,8 +687,47 @@ func (t *chatTab) viewLive(width, height int) string {
 		b.WriteString(selection)
 		b.WriteString("\n")
 	}
+	if commands := t.renderCommandMenu(composerWidth); commands != "" {
+		b.WriteString(commands)
+		b.WriteString("\n")
+	}
 	b.WriteString(t.renderComposer(composerWidth))
 	return b.String()
+}
+
+const commandMenuLimit = 4
+
+func (t *chatTab) renderCommandMenu(width int) string {
+	if !t.commandOpen {
+		return ""
+	}
+	width = maxInt(width, 20)
+	var lines []string
+	lines = append(lines, "  "+styleSectionTitle.Render("COMMANDS")+"  "+styleMuted.Render("↑↓ select  Enter complete or run  Esc close"))
+	if len(t.commandMatches) == 0 {
+		lines = append(lines, "  "+styleMuted.Render(truncate("No match. Use // to send a literal leading slash.", width-4)))
+		return strings.Join(lines, "\n")
+	}
+	if t.commandRows <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	start, end := listWindow(t.commandCursor, len(t.commandMatches), minInt(t.commandRows, len(t.commandMatches)))
+	for i := start; i < end; i++ {
+		command := t.commandMatches[i]
+		label := fmt.Sprintf("%-12s %s", chatcmd.Label(command), command.Description)
+		lines = append(lines, "  "+renderSelectableRow(truncate(label, width-4), i == t.commandCursor))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (t *chatTab) commandMenuLines() int {
+	if !t.commandOpen {
+		return 0
+	}
+	if len(t.commandMatches) == 0 {
+		return 2
+	}
+	return 1 + minInt(maxInt(t.commandRows, 0), len(t.commandMatches))
 }
 
 func (t *chatTab) viewHistory(width, height int) string {
@@ -897,6 +1073,10 @@ func firstLine(text string) string {
 }
 
 func (t *chatTab) applyRuntimeEvent(event tools.Event) {
+	if event.Type == tools.EventMemoryInjected {
+		t.memorySources = append([]tools.MemorySource(nil), event.MemorySources...)
+		return
+	}
 	if !isToolRuntimeEvent(event.Type) {
 		return
 	}
@@ -1113,6 +1293,65 @@ func (t *chatTab) applyPendingRuntimeEvents() {
 	}
 }
 
+func commandHelpText() string {
+	var lines []string
+	lines = append(lines, "Commands")
+	for _, command := range chatcmd.Available(chatcmd.TUI) {
+		lines = append(lines, fmt.Sprintf("%-15s %s", chatcmd.Label(command), command.Description))
+	}
+	lines = append(lines, "", "Type / to autocomplete. Prefix with // to send a literal leading slash.")
+	return strings.Join(lines, "\n")
+}
+
+func memoryCommandText(sources []tools.MemorySource) string {
+	if len(sources) == 0 {
+		return "Memory\nNo memory has been retrieved yet. Send a task first; /memory reports the latest model call."
+	}
+	lines := []string{"Memory used by the latest model call"}
+	for _, source := range sources {
+		label := strings.TrimSpace(source.Name)
+		if source.Origin != "" {
+			label += " (" + strings.TrimSpace(source.Origin) + ")"
+		}
+		line := fmt.Sprintf("- %s, %d chars", label, source.Chars)
+		if preview := strings.TrimSpace(secrets.Mask(source.Preview)); preview != "" {
+			line += ": " + preview
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func toolsCommandText(items []agent.ChatTool, safetyMode string) string {
+	safetyMode = strings.TrimSpace(safetyMode)
+	if safetyMode == "" {
+		safetyMode = "unknown"
+	}
+	lines := []string{
+		"Registered tools",
+		"Availability is not authorization. Task filtering, target binding, policy, and approvals still apply.",
+		"Safety mode: " + strings.ReplaceAll(safetyMode, "_", " "),
+	}
+	if len(items) == 0 {
+		return strings.Join(append(lines, "No tools are registered for this runtime."), "\n")
+	}
+	for _, item := range items {
+		lines = append(lines, "- "+item.Name+": "+compactChatToolDescription(item.Description))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func compactChatToolDescription(value string) string {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))
+	if value == "" {
+		return "No description available"
+	}
+	if idx := strings.Index(value, ". "); idx >= 0 {
+		value = value[:idx+1]
+	}
+	return truncate(value, 180)
+}
+
 func (t *chatTab) resize(width, height int) {
 	if !t.controlsReady {
 		fresh := newChatTab().(*chatTab)
@@ -1132,7 +1371,14 @@ func (t *chatTab) resize(width, height int) {
 	if len(t.toolCalls) > 0 {
 		selectionLines = 1
 	}
-	t.viewport.Height = maxInt(height-composerLines-headerLines-selectionLines, 5)
+	minimumViewport := 5
+	t.commandRows = commandMenuLimit
+	if t.commandOpen {
+		minimumViewport = 3
+		availableRows := height - composerLines - headerLines - selectionLines - minimumViewport - 1
+		t.commandRows = clamp(availableRows, 0, commandMenuLimit)
+	}
+	t.viewport.Height = maxInt(height-composerLines-headerLines-selectionLines-t.commandMenuLines(), minimumViewport)
 	t.composer.SetWidth(maxInt(contentWidth-4, 16))
 	t.refreshViewport()
 }
@@ -1165,6 +1411,16 @@ func startLiveChatCmd(svc *Service, observer tools.EventObserver) tea.Cmd {
 	return func() tea.Msg {
 		session, err := svc.StartChat(context.Background(), observer)
 		return chatSessionReadyMsg{session: session, err: err}
+	}
+}
+
+func exportChatSessionCmd(svc *Service, sessionID int64) tea.Cmd {
+	return func() tea.Msg {
+		if svc == nil {
+			return chatExportDoneMsg{err: fmt.Errorf("chat export service is unavailable")}
+		}
+		path, err := svc.ExportChatSession(context.Background(), sessionID)
+		return chatExportDoneMsg{path: path, err: err}
 	}
 }
 
