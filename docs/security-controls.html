@@ -1,0 +1,1300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Detailed implementation reference for CvkeHarness security profiles, effect policy, approvals, setup, persistence, and known limits.">
+  <title>CvkeHarness Security Controls</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: oklch(0.18 0.009 70);
+      --surface: oklch(0.215 0.01 70);
+      --surface-raised: oklch(0.255 0.012 70);
+      --surface-soft: oklch(0.235 0.018 72);
+      --text: oklch(0.91 0.012 78);
+      --text-strong: oklch(0.96 0.01 78);
+      --muted: oklch(0.72 0.018 72);
+      --faint: oklch(0.57 0.014 72);
+      --line: oklch(0.36 0.014 70);
+      --line-strong: oklch(0.47 0.022 70);
+      --focus: oklch(0.79 0.13 78);
+      --focus-soft: oklch(0.31 0.055 74);
+      --success: oklch(0.78 0.09 145);
+      --success-soft: oklch(0.28 0.035 145);
+      --warning: oklch(0.76 0.12 48);
+      --warning-soft: oklch(0.29 0.045 48);
+      --danger: oklch(0.71 0.13 30);
+      --danger-soft: oklch(0.285 0.052 30);
+      --info: oklch(0.76 0.08 228);
+      --info-soft: oklch(0.285 0.035 228);
+      --code: oklch(0.16 0.009 70);
+      --shadow: 0 18px 60px oklch(0.08 0.005 70 / 0.36);
+      --radius: 10px;
+      --content: 1180px;
+      --nav: 248px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 28px;
+      background: var(--canvas);
+    }
+
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      font-size: 16px;
+      line-height: 1.62;
+      text-rendering: optimizeLegibility;
+    }
+
+    a {
+      color: var(--info);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.18em;
+    }
+
+    a:hover { color: var(--text-strong); }
+
+    :focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 3px;
+      border-radius: 4px;
+    }
+
+    .skip-link {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 100;
+      padding: 10px 14px;
+      background: var(--focus);
+      color: var(--canvas);
+      font-weight: 750;
+      transform: translateY(-180%);
+      transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .skip-link:focus { transform: translateY(0); }
+
+    .page-header {
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .header-inner {
+      width: min(calc(100% - 40px), var(--content));
+      margin: 0 auto;
+      padding: 54px 0 38px;
+    }
+
+    .eyebrow,
+    .section-kicker {
+      margin: 0 0 10px;
+      color: var(--focus);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.76rem;
+      font-weight: 760;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, h4 {
+      color: var(--text-strong);
+      line-height: 1.18;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 860px;
+      margin: 0;
+      font-size: 2.65rem;
+      letter-spacing: -0.035em;
+      font-weight: 790;
+    }
+
+    .lede {
+      max-width: 72ch;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    .snapshot {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 9px 22px;
+      margin-top: 28px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.82rem;
+    }
+
+    .snapshot strong { color: var(--text); font-weight: 720; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: var(--nav) minmax(0, 1fr);
+      gap: 52px;
+      width: min(calc(100% - 40px), var(--content));
+      margin: 0 auto;
+      padding: 42px 0 90px;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 24px;
+      align-self: start;
+      max-height: calc(100vh - 48px);
+      overflow: auto;
+      padding-right: 12px;
+    }
+
+    .sidebar-title {
+      margin: 0 0 12px;
+      color: var(--faint);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      font-weight: 720;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .sidebar ol {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .sidebar a {
+      display: block;
+      padding: 7px 10px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      color: var(--muted);
+      font-size: 0.88rem;
+      text-decoration: none;
+      transition: color 160ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms cubic-bezier(0.22, 1, 0.36, 1), border-color 160ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    .sidebar a:hover {
+      color: var(--text);
+      background: var(--surface);
+    }
+
+    .sidebar a[aria-current="location"] {
+      color: var(--text-strong);
+      background: var(--focus-soft);
+      border-color: oklch(0.5 0.06 74);
+    }
+
+    .mobile-nav {
+      display: none;
+      margin: 0 0 28px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .mobile-nav summary {
+      cursor: pointer;
+      padding: 13px 15px;
+      color: var(--text-strong);
+      font-weight: 720;
+    }
+
+    .mobile-nav ol {
+      columns: 2;
+      margin: 0;
+      padding: 0 16px 16px 34px;
+    }
+
+    .mobile-nav li { break-inside: avoid; margin: 5px 0; }
+
+    main { min-width: 0; }
+
+    section {
+      margin: 0 0 76px;
+      scroll-margin-top: 28px;
+    }
+
+    section:last-child { margin-bottom: 0; }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: 1.85rem;
+      letter-spacing: -0.025em;
+    }
+
+    h3 {
+      margin: 34px 0 12px;
+      font-size: 1.28rem;
+      letter-spacing: -0.012em;
+    }
+
+    h4 {
+      margin: 24px 0 8px;
+      font-size: 1.02rem;
+    }
+
+    p, ul, ol { max-width: 74ch; }
+
+    p { margin: 0 0 16px; }
+
+    ul, ol { padding-left: 1.3rem; }
+
+    li + li { margin-top: 7px; }
+
+    code, kbd, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    code {
+      padding: 0.12em 0.34em;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--code);
+      color: var(--text-strong);
+      font-size: 0.88em;
+    }
+
+    kbd {
+      display: inline-block;
+      min-width: 1.7em;
+      padding: 0.1em 0.42em;
+      border: 1px solid var(--line-strong);
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      background: var(--surface-raised);
+      color: var(--text-strong);
+      font-size: 0.82em;
+      line-height: 1.4;
+      text-align: center;
+    }
+
+    pre {
+      max-width: 100%;
+      margin: 18px 0 24px;
+      padding: 18px 20px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--code);
+      box-shadow: var(--shadow);
+      color: var(--text);
+      font-size: 0.86rem;
+      line-height: 1.58;
+      tab-size: 2;
+    }
+
+    pre code {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      font-size: inherit;
+    }
+
+    .callout {
+      max-width: 76ch;
+      margin: 22px 0;
+      padding: 17px 19px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+    }
+
+    .callout strong:first-child {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text-strong);
+    }
+
+    .callout.warning { background: var(--warning-soft); border-color: oklch(0.48 0.07 48); }
+    .callout.danger { background: var(--danger-soft); border-color: oklch(0.46 0.075 30); }
+    .callout.info { background: var(--info-soft); border-color: oklch(0.46 0.05 228); }
+    .callout.success { background: var(--success-soft); border-color: oklch(0.45 0.055 145); }
+
+    .status-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      max-width: 820px;
+      margin: 24px 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--line);
+    }
+
+    .status-list > div {
+      min-height: 106px;
+      padding: 17px 18px;
+      background: var(--surface);
+    }
+
+    .status-list dt {
+      margin-bottom: 5px;
+      color: var(--text-strong);
+      font-weight: 760;
+    }
+
+    .status-list dd {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .diagram {
+      margin: 24px 0 30px;
+      padding: 18px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .diagram svg {
+      display: block;
+      width: 100%;
+      min-width: 720px;
+      height: auto;
+    }
+
+    .diagram .node { fill: var(--surface-raised); stroke: var(--line-strong); stroke-width: 1.4; }
+    .diagram .node-accent { fill: var(--focus-soft); stroke: var(--focus); stroke-width: 1.5; }
+    .diagram .node-stop { fill: var(--danger-soft); stroke: var(--danger); stroke-width: 1.5; }
+    .diagram .node-ok { fill: var(--success-soft); stroke: var(--success); stroke-width: 1.5; }
+    .diagram .flow { fill: none; stroke: var(--muted); stroke-width: 1.6; marker-end: url(#arrow); }
+    .diagram .flow-alt { fill: none; stroke: var(--warning); stroke-width: 1.6; marker-end: url(#arrow-warn); }
+    .diagram text { fill: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; font-size: 14px; }
+    .diagram .small { fill: var(--muted); font-size: 12px; }
+    .diagram .label { fill: var(--text-strong); font-size: 14px; font-weight: 750; }
+
+    .table-tools {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin: 18px 0 12px;
+    }
+
+    .table-tools span {
+      margin-right: 4px;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    button {
+      appearance: none;
+      padding: 7px 10px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--muted);
+      font: inherit;
+      font-size: 0.84rem;
+      font-weight: 680;
+      cursor: pointer;
+      transition: color 160ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms cubic-bezier(0.22, 1, 0.36, 1), border-color 160ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    button:hover { color: var(--text-strong); background: var(--surface-raised); }
+
+    button[aria-pressed="true"] {
+      color: var(--text-strong);
+      background: var(--focus-soft);
+      border-color: var(--focus);
+    }
+
+    .table-wrap {
+      max-width: 100%;
+      margin: 12px 0 28px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface);
+      font-size: 0.88rem;
+    }
+
+    caption {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.82rem;
+      text-align: left;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    tr:last-child th, tr:last-child td { border-bottom: 0; }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--surface-raised);
+      color: var(--text-strong);
+      font-size: 0.76rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    tbody th {
+      min-width: 190px;
+      color: var(--text-strong);
+      font-weight: 690;
+    }
+
+    td { color: var(--muted); }
+
+    .matrix { min-width: 900px; }
+
+    .matrix thead th:first-child,
+    .matrix tbody th {
+      position: sticky;
+      left: 0;
+      z-index: 1;
+      background: var(--surface);
+      box-shadow: 1px 0 var(--line);
+    }
+
+    .matrix thead th:first-child {
+      z-index: 3;
+      background: var(--surface-raised);
+    }
+
+    .matrix .category-row th {
+      position: static;
+      padding-top: 18px;
+      background: var(--code);
+      color: var(--focus);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+      box-shadow: none;
+    }
+
+    .matrix [data-col].is-selected { background: var(--focus-soft); color: var(--text-strong); }
+
+    .decision {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.76rem;
+      font-weight: 720;
+      text-transform: uppercase;
+    }
+
+    .decision::before {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      content: "";
+    }
+
+    .allow { color: var(--success); }
+    .ask { color: var(--warning); }
+    .review { color: var(--info); }
+    .deny { color: var(--danger); }
+    .enabled { color: var(--success); font-weight: 700; }
+    .disabled { color: var(--faint); font-weight: 700; }
+
+    .steps {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 0 14px;
+      max-width: 780px;
+      margin: 20px 0 28px;
+      padding: 0;
+      list-style: none;
+      counter-reset: steps;
+    }
+
+    .steps li {
+      display: grid;
+      grid-column: 1 / -1;
+      grid-template-columns: subgrid;
+      margin: 0;
+      padding-bottom: 24px;
+      counter-increment: steps;
+    }
+
+    .steps li::before {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 50%;
+      background: var(--surface-raised);
+      color: var(--focus);
+      content: counter(steps);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.78rem;
+      font-weight: 760;
+    }
+
+    .steps strong { display: block; margin-bottom: 3px; color: var(--text-strong); }
+
+    .steps span { color: var(--muted); }
+
+    .command-list {
+      display: grid;
+      gap: 1px;
+      max-width: 820px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--line);
+    }
+
+    .command-list > div {
+      display: grid;
+      grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1fr);
+      gap: 18px;
+      padding: 15px 17px;
+      background: var(--surface);
+    }
+
+    .command-list code { align-self: start; width: fit-content; }
+    .command-list p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+
+    .sources {
+      display: grid;
+      gap: 12px;
+      max-width: 820px;
+      padding: 0;
+      list-style: none;
+    }
+
+    .sources li {
+      margin: 0;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .sources strong { display: block; color: var(--text-strong); }
+    .sources span { color: var(--muted); font-size: 0.9rem; }
+
+    .page-footer {
+      border-top: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .footer-inner {
+      width: min(calc(100% - 40px), var(--content));
+      margin: 0 auto;
+      padding: 26px 0 34px;
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+
+    .footer-inner p { margin: 0; }
+
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
+      .sidebar { display: none; }
+      .mobile-nav { display: block; }
+      h1 { font-size: 2.2rem; }
+      .status-list { grid-template-columns: 1fr; }
+      .command-list > div { grid-template-columns: 1fr; gap: 8px; }
+    }
+
+    @media (max-width: 580px) {
+      .header-inner, .layout, .footer-inner { width: min(calc(100% - 28px), var(--content)); }
+      .header-inner { padding: 38px 0 30px; }
+      .layout { padding-top: 24px; }
+      h1 { font-size: 1.9rem; letter-spacing: -0.025em; }
+      h2 { font-size: 1.52rem; }
+      .lede { font-size: 1rem; }
+      .snapshot { display: grid; grid-template-columns: 1fr; gap: 7px; }
+      section { margin-bottom: 58px; }
+      .mobile-nav ol { columns: 1; }
+      .diagram { padding: 12px; }
+      .table-tools { align-items: flex-start; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: 0.01ms !important; }
+    }
+
+    @media print {
+      :root {
+        color-scheme: light;
+        --canvas: oklch(0.98 0.006 78);
+        --surface: oklch(0.965 0.007 78);
+        --surface-raised: oklch(0.935 0.01 78);
+        --surface-soft: oklch(0.95 0.015 78);
+        --text: oklch(0.25 0.012 70);
+        --text-strong: oklch(0.17 0.012 70);
+        --muted: oklch(0.4 0.014 70);
+        --faint: oklch(0.48 0.012 70);
+        --line: oklch(0.77 0.012 70);
+        --line-strong: oklch(0.65 0.015 70);
+        --code: oklch(0.95 0.008 70);
+      }
+      body { font-size: 10pt; }
+      .page-header { background: transparent; }
+      .header-inner, .layout, .footer-inner { width: 100%; }
+      .header-inner { padding: 0 0 20px; }
+      .layout { display: block; padding: 24px 0 0; }
+      .sidebar, .mobile-nav, .table-tools, .skip-link { display: none !important; }
+      section { break-before: page; margin-bottom: 0; }
+      section:first-of-type { break-before: auto; }
+      h2, h3 { break-after: avoid; }
+      pre, .callout, .table-wrap, .diagram, .status-list { break-inside: avoid; box-shadow: none; }
+      .table-wrap, .diagram { overflow: visible; }
+      .diagram svg { min-width: 0; }
+      .matrix { min-width: 0; font-size: 7pt; }
+      .matrix thead th:first-child, .matrix tbody th, thead th { position: static; }
+      a { color: inherit; }
+      a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 0.8em; word-break: break-all; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="page-header">
+    <div class="header-inner">
+      <p class="eyebrow">CvkeHarness implementation reference</p>
+      <h1>Security profiles and effect controls</h1>
+      <p class="lede">A detailed guide to the five security profiles, all 25 editable controls, deterministic effect analysis, human approvals, cross-process grants, setup behavior, persistence, migration, and the limits that remain outside CvkeHarness.</p>
+      <div class="snapshot" aria-label="Documentation snapshot">
+        <span><strong>Default</strong> reasonable</span>
+        <span><strong>Profiles</strong> 5</span>
+        <span><strong>Controls</strong> 25</span>
+        <span><strong>Grant</strong> exact, one use, 15 minutes</span>
+        <span><strong>Updated</strong> 2026-08-14</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="Documentation sections">
+      <p class="sidebar-title">On this page</p>
+      <nav>
+        <ol>
+          <li><a href="#overview">1. Operating model</a></li>
+          <li><a href="#pipeline">2. Decision pipeline</a></li>
+          <li><a href="#profiles">3. Security profiles</a></li>
+          <li><a href="#catalog">4. Full control matrix</a></li>
+          <li><a href="#configuration">5. Configuration</a></li>
+          <li><a href="#shell">6. Shell effect analysis</a></li>
+          <li><a href="#tools">7. Non-shell tools</a></li>
+          <li><a href="#approvals">8. Approval lifecycle</a></li>
+          <li><a href="#experience">9. Setup and Settings</a></li>
+          <li><a href="#persistence">10. Persistence and privacy</a></li>
+          <li><a href="#migration">11. Legacy migration</a></li>
+          <li><a href="#operations">12. Operator workflows</a></li>
+          <li><a href="#validation">13. Validation evidence</a></li>
+          <li><a href="#limits">14. Limits and roadmap</a></li>
+          <li><a href="#research">15. Research basis</a></li>
+        </ol>
+      </nav>
+    </aside>
+
+    <main id="main-content">
+      <details class="mobile-nav">
+        <summary>Jump to a section</summary>
+        <nav aria-label="Mobile documentation sections">
+          <ol>
+            <li><a href="#overview">Operating model</a></li>
+            <li><a href="#pipeline">Decision pipeline</a></li>
+            <li><a href="#profiles">Profiles</a></li>
+            <li><a href="#catalog">Control matrix</a></li>
+            <li><a href="#configuration">Configuration</a></li>
+            <li><a href="#shell">Shell analysis</a></li>
+            <li><a href="#tools">Non-shell tools</a></li>
+            <li><a href="#approvals">Approvals</a></li>
+            <li><a href="#experience">Setup and Settings</a></li>
+            <li><a href="#persistence">Persistence</a></li>
+            <li><a href="#migration">Migration</a></li>
+            <li><a href="#operations">Workflows</a></li>
+            <li><a href="#validation">Validation</a></li>
+            <li><a href="#limits">Limits</a></li>
+            <li><a href="#research">Research</a></li>
+          </ol>
+        </nav>
+      </details>
+
+      <section id="overview" aria-labelledby="overview-title">
+        <p class="section-kicker">01 / Operating model</p>
+        <h2 id="overview-title">Treat the model as a fallible operator</h2>
+        <p>CvkeHarness does not center its safety model on a hypothetical model escape. It centers the failures that can damage an operator's systems: the wrong target, destructive side effects, scope expansion, stale state, duplicate mutation, exposed credentials, over-broad approvals, and unavailable recovery.</p>
+        <p>A profile is a named set of defaults over one canonical control catalog. An override changes one control without creating a second authorization system. Each new runtime session resolves the profile and overrides into an immutable effective policy with a short hash.</p>
+
+        <dl class="status-list">
+          <div>
+            <dt>Deterministic facts first</dt>
+            <dd>Shell and tool calls are converted into effects such as read, create, overwrite, delete, privilege change, network access, or scheduled mutation.</dd>
+          </div>
+          <div>
+            <dt>Strictest effect wins</dt>
+            <dd>A compound action cannot hide a denied or approval-gated effect behind otherwise allowed reads.</dd>
+          </div>
+          <div>
+            <dt>Models advise, people authorize</dt>
+            <dd>An LLM review can add context for eligible actions, but a person is still required and the model cannot create reusable authority.</dd>
+          </div>
+          <div>
+            <dt>Advertisement is not permission</dt>
+            <dd>A tool can be visible to the model and still be stopped by the central registry policy at execution time.</dd>
+          </div>
+        </dl>
+
+        <div class="callout warning">
+          <strong>Important boundary</strong>
+          The current local shell backend is not an operating-system sandbox. CvkeHarness adds analysis, policy, approvals, binding, limits, redaction, and audit state. It does not claim kernel-enforced containment or automatic recovery.
+        </div>
+      </section>
+
+      <section id="pipeline" aria-labelledby="pipeline-title">
+        <p class="section-kicker">02 / Decision pipeline</p>
+        <h2 id="pipeline-title">One policy path from proposal to execution</h2>
+        <p>Authorization occurs immediately before a tool executes. Shell actions receive deeper syntax and target analysis, while other tools receive deterministic effect classification in the registry. Both paths resolve against the same immutable effective policy.</p>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 1040 330" role="img" aria-labelledby="pipeline-svg-title pipeline-svg-desc">
+            <title id="pipeline-svg-title">CvkeHarness security decision pipeline</title>
+            <desc id="pipeline-svg-desc">A proposed action is parsed and classified into effects. The effective policy chooses allow, advisory review, human approval, or deny. Approved actions execute with bounded and redacted output.</desc>
+            <defs>
+              <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="currentColor"></path></marker>
+              <marker id="arrow-warn" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="currentColor"></path></marker>
+            </defs>
+            <rect class="node" x="20" y="112" width="138" height="74" rx="8"></rect>
+            <text class="label" x="89" y="143" text-anchor="middle">Proposed action</text>
+            <text class="small" x="89" y="163" text-anchor="middle">shell or tool call</text>
+            <path class="flow" d="M158 149 H205"></path>
+            <rect class="node" x="205" y="112" width="145" height="74" rx="8"></rect>
+            <text class="label" x="278" y="143" text-anchor="middle">Analyze</text>
+            <text class="small" x="278" y="163" text-anchor="middle">syntax, target, effects</text>
+            <path class="flow" d="M350 149 H397"></path>
+            <rect class="node-accent" x="397" y="105" width="155" height="88" rx="8"></rect>
+            <text class="label" x="475" y="139" text-anchor="middle">Effective policy</text>
+            <text class="small" x="475" y="159" text-anchor="middle">profile + overrides</text>
+            <text class="small" x="475" y="176" text-anchor="middle">strictest effect wins</text>
+            <path class="flow" d="M552 149 H615"></path>
+            <rect class="node-ok" x="615" y="26" width="148" height="58" rx="8"></rect>
+            <text class="label" x="689" y="61" text-anchor="middle">Allow</text>
+            <rect class="node" x="615" y="105" width="148" height="88" rx="8"></rect>
+            <text class="label" x="689" y="137" text-anchor="middle">LLM review</text>
+            <text class="small" x="689" y="158" text-anchor="middle">advisory only</text>
+            <text class="small" x="689" y="175" text-anchor="middle">person still required</text>
+            <rect class="node" x="615" y="214" width="148" height="58" rx="8"></rect>
+            <text class="label" x="689" y="249" text-anchor="middle">Ask a person</text>
+            <rect class="node-stop" x="615" y="293" width="148" height="58" rx="8"></rect>
+            <text class="label" x="689" y="328" text-anchor="middle">Deny</text>
+            <path class="flow" d="M763 55 H825 V127"></path>
+            <path class="flow-alt" d="M763 149 H796 V243 H763"></path>
+            <path class="flow" d="M763 243 H825 V171"></path>
+            <rect class="node-ok" x="825" y="112" width="190" height="74" rx="8"></rect>
+            <text class="label" x="920" y="143" text-anchor="middle">Execute once</text>
+            <text class="small" x="920" y="163" text-anchor="middle">bounded, redacted output</text>
+            <text class="small" x="580" y="315" text-anchor="end">terminal stop</text>
+          </svg>
+        </figure>
+
+        <h3>Decision order</h3>
+        <div class="table-wrap">
+          <table>
+            <caption>Decision semantics, ordered from most restrictive to least restrictive.</caption>
+            <thead><tr><th scope="col">Decision</th><th scope="col">Meaning</th><th scope="col">Can an LLM clear it?</th></tr></thead>
+            <tbody>
+              <tr><th scope="row"><span class="decision deny">deny</span></th><td>Stop deterministically. No approval grant can override the current policy.</td><td>No</td></tr>
+              <tr><th scope="row"><span class="decision ask">ask</span></th><td>Require an explicit human decision before execution.</td><td>No</td></tr>
+              <tr><th scope="row"><span class="decision review">llm_review</span></th><td>Run an advisory model review, then still require a person.</td><td>No</td></tr>
+              <tr><th scope="row"><span class="decision allow">allow</span></th><td>Execute without a CvkeHarness approval prompt, subject to invariant checks and external protections.</td><td>Not applicable</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="profiles" aria-labelledby="profiles-title">
+        <p class="section-kicker">03 / Security profiles</p>
+        <h2 id="profiles-title">Five starting points, every value still editable</h2>
+        <p>Profiles select defaults. They are not separate execution engines. Changing a single value produces a profile with overrides, and applying another profile clears the old overrides only after confirmation.</p>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Profile intent and practical consequences.</caption>
+            <thead><tr><th scope="col">Profile</th><th scope="col">Use when</th><th scope="col">Automatic behavior</th><th scope="col">Primary interruption</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Extra strict</th><td>Unknown or destructive execution should usually stop.</td><td>Known reads only. New files and append actions ask.</td><td>Opaque scripts, deletes, overwrites, packages, remote changes, credentials, and devices are denied or gated.</td></tr>
+              <tr><th scope="row">Reasonable <span class="decision allow">default</span></th><td>You want useful diagnostics with visible approval around consequential changes.</td><td>Known reads, file creation, and append run automatically.</td><td>Overwrite, delete, privilege, services, packages, network, remote, cloud, containers, databases, and scheduling ask. Credentials and devices are denied.</td></tr>
+              <tr><th scope="row">Less strict</th><td>Routine local and recoverable work should proceed with fewer interruptions.</td><td>Most local mutations, packages, network, containers, and schedules run.</td><td>Deletes, privilege, remote and cloud changes, destructive databases, and credentials still ask. Unknown actions receive advisory review plus human approval.</td></tr>
+              <tr><th scope="row">Minimal</th><td>You accept broad local autonomy but still want catastrophic-path and credential tripwires.</td><td>Nearly every classified effect runs.</td><td>Raw devices and credentials ask. Critical-path and credential-path protection remain enabled.</td></tr>
+              <tr><th scope="row">YOLO</th><td>You intentionally want CvkeHarness approval gates disabled.</td><td>All catalog decisions allow, with maximum limits.</td><td>No CvkeHarness interruption. OS permissions, cloud RBAC, provider locks, and database privileges still apply.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout danger">
+          <strong>YOLO is not privilege escalation</strong>
+          YOLO disables CvkeHarness approval and protected-path guards. It cannot elevate the current process, bypass operating-system permissions, remove cloud resource locks, or expand the credentials already available to the runtime.
+        </div>
+      </section>
+
+      <section id="catalog" aria-labelledby="catalog-title">
+        <p class="section-kicker">04 / Full control matrix</p>
+        <h2 id="catalog-title">Every persisted setting and bundle value</h2>
+        <p>The table below is the canonical implemented catalog. Use the profile controls to emphasize one column. Without JavaScript, the complete table remains visible.</p>
+
+        <div class="table-tools" role="group" aria-label="Highlight a profile column">
+          <span>Highlight profile:</span>
+          <button type="button" data-profile-button="extra" aria-pressed="false">Extra strict</button>
+          <button type="button" data-profile-button="reasonable" aria-pressed="true">Reasonable</button>
+          <button type="button" data-profile-button="less" aria-pressed="false">Less strict</button>
+          <button type="button" data-profile-button="minimal" aria-pressed="false">Minimal</button>
+          <button type="button" data-profile-button="yolo" aria-pressed="false">YOLO</button>
+          <button type="button" data-profile-button="none" aria-pressed="false">Clear</button>
+        </div>
+
+        <div class="table-wrap">
+          <table class="matrix" id="profile-matrix">
+            <caption>All 25 controls. Sizes are bytes; timeouts are seconds.</caption>
+            <thead>
+              <tr><th scope="col">Setting</th><th scope="col" data-col="extra">Extra strict</th><th scope="col" data-col="reasonable" class="is-selected">Reasonable</th><th scope="col" data-col="less">Less strict</th><th scope="col" data-col="minimal">Minimal</th><th scope="col" data-col="yolo">YOLO</th></tr>
+            </thead>
+            <tbody>
+              <tr class="category-row"><th colspan="6">Commands</th></tr>
+              <tr><th scope="row"><code>commands.read</code><br>Known read-only commands</th><td data-col="extra"><span class="decision allow">allow</span></td><td data-col="reasonable" class="is-selected"><span class="decision allow">allow</span></td><td data-col="less"><span class="decision allow">allow</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>commands.unknown</code><br>Unclassified effects</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision review">llm review</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>commands.scripts</code><br>Shell and language interpreters</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision allow">allow</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+
+              <tr class="category-row"><th colspan="6">Filesystem</th></tr>
+              <tr><th scope="row"><code>filesystem.create</code><br>Create a new path</th><td data-col="extra"><span class="decision ask">ask</span></td><td data-col="reasonable" class="is-selected"><span class="decision allow">allow</span></td><td data-col="less"><span class="decision allow">allow</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>filesystem.overwrite</code><br>Replace or truncate</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision allow">allow</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>filesystem.append</code><br>Append data</th><td data-col="extra"><span class="decision ask">ask</span></td><td data-col="reasonable" class="is-selected"><span class="decision allow">allow</span></td><td data-col="less"><span class="decision allow">allow</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>filesystem.delete</code><br>Remove files or repository content</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision ask">ask</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>filesystem.protect_critical_paths</code><br>Escalate sensitive writes</th><td data-col="extra"><span class="enabled">enabled</span></td><td data-col="reasonable" class="is-selected"><span class="enabled">enabled</span></td><td data-col="less"><span class="enabled">enabled</span></td><td data-col="minimal"><span class="enabled">enabled</span></td><td data-col="yolo"><span class="disabled">disabled</span></td></tr>
+              <tr><th scope="row"><code>filesystem.protect_credential_paths</code><br>Escalate key and token access</th><td data-col="extra"><span class="enabled">enabled</span></td><td data-col="reasonable" class="is-selected"><span class="enabled">enabled</span></td><td data-col="less"><span class="enabled">enabled</span></td><td data-col="minimal"><span class="enabled">enabled</span></td><td data-col="yolo"><span class="disabled">disabled</span></td></tr>
+
+              <tr class="category-row"><th colspan="6">System</th></tr>
+              <tr><th scope="row"><code>system.privilege_escalation</code><br>Privilege and ownership changes</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision ask">ask</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>system.service_changes</code><br>Start, stop, restart, enable</th><td data-col="extra"><span class="decision ask">ask</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision ask">ask</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>system.package_changes</code><br>Install, remove, upgrade, publish</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision allow">allow</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>system.raw_devices</code><br>Format, mount, or write devices</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision deny">deny</span></td><td data-col="less"><span class="decision deny">deny</span></td><td data-col="minimal"><span class="decision ask">ask</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+
+              <tr class="category-row"><th colspan="6">Network and remote</th></tr>
+              <tr><th scope="row"><code>network.outbound</code><br>Network probes and remote reads</th><td data-col="extra"><span class="decision ask">ask</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision allow">allow</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>remote.mutations</code><br>Change a remote system</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision ask">ask</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>remote.cloud_changes</code><br>Cloud and cluster resources</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision ask">ask</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>remote.container_changes</code><br>Containers, images, workloads</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision allow">allow</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>remote.database_destructive</code><br>DROP, TRUNCATE, broad DELETE</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision ask">ask</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+
+              <tr class="category-row"><th colspan="6">Autonomy, data, and approvals</th></tr>
+              <tr><th scope="row"><code>autonomy.scheduled_changes</code><br>Cron, timers, durable jobs</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision ask">ask</span></td><td data-col="less"><span class="decision allow">allow</span></td><td data-col="minimal"><span class="decision allow">allow</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>data.credential_access</code><br>Keys, tokens, histories, stores</th><td data-col="extra"><span class="decision deny">deny</span></td><td data-col="reasonable" class="is-selected"><span class="decision deny">deny</span></td><td data-col="less"><span class="decision ask">ask</span></td><td data-col="minimal"><span class="decision ask">ask</span></td><td data-col="yolo"><span class="decision allow">allow</span></td></tr>
+              <tr><th scope="row"><code>approval.reuse_this_session</code><br>Reuse exact human approval in process</th><td data-col="extra"><span class="disabled">disabled</span></td><td data-col="reasonable" class="is-selected"><span class="disabled">disabled</span></td><td data-col="less"><span class="enabled">enabled</span></td><td data-col="minimal"><span class="enabled">enabled</span></td><td data-col="yolo"><span class="disabled">disabled</span></td></tr>
+
+              <tr class="category-row"><th colspan="6">Limits</th></tr>
+              <tr><th scope="row"><code>limits.command_bytes</code></th><td data-col="extra">4,096</td><td data-col="reasonable" class="is-selected">8,192</td><td data-col="less">16,384</td><td data-col="minimal">32,768</td><td data-col="yolo">65,536</td></tr>
+              <tr><th scope="row"><code>limits.command_segments</code></th><td data-col="extra">4</td><td data-col="reasonable" class="is-selected">16</td><td data-col="less">24</td><td data-col="minimal">32</td><td data-col="yolo">64</td></tr>
+              <tr><th scope="row"><code>limits.timeout_seconds</code></th><td data-col="extra">15</td><td data-col="reasonable" class="is-selected">30</td><td data-col="less">60</td><td data-col="minimal">120</td><td data-col="yolo">3,600</td></tr>
+              <tr><th scope="row"><code>limits.output_bytes</code></th><td data-col="extra">4,096</td><td data-col="reasonable" class="is-selected">8,192</td><td data-col="less">16,384</td><td data-col="minimal">32,768</td><td data-col="yolo">1,048,576</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="configuration" aria-labelledby="configuration-title">
+        <p class="section-kicker">05 / Configuration</p>
+        <h2 id="configuration-title">Profile selection and typed overrides</h2>
+        <p>The durable selection lives under <code>security</code>. Override values are strings so a missing value is distinct from an explicit <code>false</code>, <code>allow</code>, or numeric limit. Unknown profiles, unknown setting IDs, invalid decisions, and out-of-range limits fail validation.</p>
+
+        <pre aria-label="Example YAML security configuration"><code>security:
+  version: 1
+  profile: reasonable
+  overrides:
+    filesystem.delete: deny
+    network.outbound: allow
+    approval.reuse_this_session: "true"
+    limits.timeout_seconds: "60"</code></pre>
+
+        <ol class="steps">
+          <li><span><strong>Load and normalize</strong>Older configuration is migrated only when the new <code>security</code> section is absent.</span></li>
+          <li><span><strong>Validate</strong>The schema version, profile, control IDs, decisions, booleans, and integer ranges must all be valid.</span></li>
+          <li><span><strong>Resolve</strong>The selected bundle is copied, overrides are applied, each value receives an origin, and a policy hash is calculated.</span></li>
+          <li><span><strong>Snapshot</strong>A new runtime session receives an immutable policy. Saving Settings does not alter an active session.</span></li>
+        </ol>
+
+        <div class="callout info">
+          <strong>Origin is visible</strong>
+          The Settings editor shows whether each effective value comes from the profile or from an override. Applying a new profile asks for confirmation and clears the prior override map so old customizations do not silently follow the new bundle.
+        </div>
+      </section>
+
+      <section id="shell" aria-labelledby="shell-title">
+        <p class="section-kicker">06 / Shell effect analysis</p>
+        <h2 id="shell-title">Classify consequences, not punctuation</h2>
+        <p>The shell path first parses supported compound syntax, then classifies every segment and redirection. A greater-than sign is not a reason by itself to block a command. The destination, existence, stability, and resulting filesystem effect matter.</p>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Redirection is converted into effects before policy resolution.</caption>
+            <thead><tr><th scope="col">Form</th><th scope="col">Effect</th><th scope="col">Reason</th></tr></thead>
+            <tbody>
+              <tr><th scope="row"><code>2&gt;/dev/null</code></th><td>Descriptor plumbing</td><td>No persistent file mutation.</td></tr>
+              <tr><th scope="row"><code>2&gt;&amp;1</code></th><td>Descriptor plumbing</td><td>Routes one descriptor to another.</td></tr>
+              <tr><th scope="row"><code>&gt; new-file</code></th><td><code>filesystem.create</code></td><td>The resolved path does not exist.</td></tr>
+              <tr><th scope="row"><code>&gt; existing-file</code></th><td><code>filesystem.overwrite</code></td><td>The shell will truncate the existing target.</td></tr>
+              <tr><th scope="row"><code>&gt;&gt; file</code></th><td><code>filesystem.append</code></td><td>Data is appended to the target.</td></tr>
+              <tr><th scope="row"><code>&lt; file</code></th><td>Read, possibly credential access</td><td>Secret-bearing input paths add the credential effect.</td></tr>
+              <tr><th scope="row"><code>&gt; "$TARGET"</code> or glob/brace target</th><td>Unknown plus write effect</td><td>The target is dynamic or unresolved, so it cannot inherit a safe create decision.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Supported compound syntax</h3>
+        <p>Newlines, <code>&amp;&amp;</code>, <code>||</code>, semicolons, and pipelines are segmented and assessed constituent by constituent. Quoted heredocs are supported as opaque scripts or data. The parser blocks constructs that would hide executable structure from the analyzer, including backticks, <code>$(...)</code>, process substitution, unquoted heredocs, background <code>&amp;</code>, and line continuation.</p>
+
+        <h3>Executable identity</h3>
+        <p>Known command names do not automatically make arbitrary binaries safe. A path-qualified executable outside trusted system directories is treated as unknown. A bare command resolved through <code>PATH</code> is also reviewed when it points outside <code>/bin</code>, <code>/sbin</code>, <code>/usr/bin</code>, or <code>/usr/sbin</code>. This prevents a local <code>./sort</code> or shadowed <code>ls</code> from inheriting read-only authority by basename.</p>
+
+        <h3>Target resolution and protected areas</h3>
+        <p>Targets are normalized, existing symlinks are resolved, and non-existing paths bind through their resolved parent where possible. Wildcards, variables, command syntax, and braces make a target unstable. Critical-path protection escalates create, append, overwrite, delete, and relevant privilege changes for system roots, devices, repositories, backup or snapshot paths, and configured credential locations.</p>
+
+        <h3>Covered mutation families</h3>
+        <ul>
+          <li>Filesystem commands such as <code>rm</code>, <code>find</code> write primaries, <code>cp</code>, <code>mv</code>, <code>install</code>, <code>ln</code>, <code>tee</code>, <code>touch</code>, <code>truncate</code>, <code>sed -i</code>, and <code>dd</code>.</li>
+          <li>Wrappers and interpreters such as <code>sudo</code>, <code>env</code>, <code>xargs</code>, shell <code>-c</code>, Python, Node, Ruby, Perl, and PowerShell.</li>
+          <li>Service, journal, package, raw-device, mount, network, SSH, Git, container, cloud, Kubernetes, Terraform, and database operations.</li>
+          <li>Deletion variants including <code>git clean</code>, <code>rsync --delete</code>, container prune, Kubernetes delete, HTTP DELETE, and destructive SQL.</li>
+        </ul>
+
+        <div class="callout warning">
+          <strong>Opaque scripts remain opaque</strong>
+          A script file can contain effects that are not visible in the interpreter command line. Without an enforcement sandbox or typed adapter, opaque interpreter bodies add the unknown effect instead of relying only on <code>commands.scripts</code>.
+        </div>
+      </section>
+
+      <section id="tools" aria-labelledby="tools-title">
+        <p class="section-kicker">07 / Non-shell tools</p>
+        <h2 id="tools-title">Registry authorization covers every effectful tool</h2>
+        <p>The central registry authorizes tools when they execute, not when their definitions are advertised to a model. Known tools receive deterministic mappings. Future unclassified tools fall back to <code>commands.unknown</code>.</p>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Current non-shell tool effect mappings.</caption>
+            <thead><tr><th scope="col">Tool</th><th scope="col">Read action</th><th scope="col">Mutation or access effect</th></tr></thead>
+            <tbody>
+              <tr><th scope="row"><code>schedule_manage</code></th><td><code>list</code>, <code>runs</code></td><td><code>autonomy.scheduled_changes</code> for add, remove, run, or other mutations.</td></tr>
+              <tr><th scope="row"><code>system_cron_manage</code></th><td><code>list</code>, <code>show</code>, <code>dry_run</code></td><td><code>autonomy.scheduled_changes</code>. Applying also retains a separate exact crontab-diff confirmation.</td></tr>
+              <tr><th scope="row"><code>memory_record_finding</code></th><td>None</td><td><code>filesystem.append</code> for durable operational memory.</td></tr>
+              <tr><th scope="row"><code>web_search</code>, <code>web_fetch</code></th><td>None</td><td><code>network.outbound</code>.</td></tr>
+              <tr><th scope="row">Unknown future tool</th><td>None</td><td><code>commands.unknown</code>, plus credential access when arguments contain a secret-like value.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout success">
+          <strong>Cron has an additional state check</strong>
+          Registry approval does not replace the crontab preview. The tool reads the current crontab, prepares the exact mutation, prints the diff, and requires confirmation immediately before applying it.
+        </div>
+      </section>
+
+      <section id="approvals" aria-labelledby="approvals-title">
+        <p class="section-kicker">08 / Approval lifecycle</p>
+        <h2 id="approvals-title">Approvals bind to what will execute</h2>
+        <p>Old normalized command strings were too broad: they had no target, effect, policy, principal, directory, or expiry. Effect-policy runtimes quarantine those records. New approvals use an action digest and can be reused only within a deliberately narrow scope.</p>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 1040 360" role="img" aria-labelledby="grant-svg-title grant-svg-desc">
+            <title id="grant-svg-title">Scoped approval grant lifecycle</title>
+            <desc id="grant-svg-desc">An action that needs approval is converted into a scoped digest. A person approves the exact envelope. The grant expires after 15 minutes and can be atomically consumed once. Any drift invalidates it.</desc>
+            <defs>
+              <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="currentColor"></path></marker>
+            </defs>
+            <rect class="node" x="24" y="42" width="195" height="82" rx="8"></rect>
+            <text class="label" x="122" y="72" text-anchor="middle">Action needs approval</text>
+            <text class="small" x="122" y="94" text-anchor="middle">effects + policy + runtime</text>
+            <path class="flow" style="marker-end:url(#arrow2)" d="M219 83 H275"></path>
+            <rect class="node-accent" x="275" y="30" width="250" height="106" rx="8"></rect>
+            <text class="label" x="400" y="60" text-anchor="middle">Build exact envelope</text>
+            <text class="small" x="400" y="82" text-anchor="middle">action and effect digests</text>
+            <text class="small" x="400" y="101" text-anchor="middle">policy, host, principal, cwd</text>
+            <text class="small" x="400" y="120" text-anchor="middle">masked summary only</text>
+            <path class="flow" style="marker-end:url(#arrow2)" d="M525 83 H583"></path>
+            <rect class="node" x="583" y="42" width="190" height="82" rx="8"></rect>
+            <text class="label" x="678" y="72" text-anchor="middle">Person approves</text>
+            <text class="small" x="678" y="94" text-anchor="middle">interactive or approve-work</text>
+            <path class="flow" style="marker-end:url(#arrow2)" d="M773 83 H829"></path>
+            <rect class="node-ok" x="829" y="42" width="184" height="82" rx="8"></rect>
+            <text class="label" x="921" y="72" text-anchor="middle">One grant</text>
+            <text class="small" x="921" y="94" text-anchor="middle">15 minute expiry</text>
+            <path class="flow" style="marker-end:url(#arrow2)" d="M921 124 V191"></path>
+            <rect class="node-accent" x="761" y="191" width="252" height="96" rx="8"></rect>
+            <text class="label" x="887" y="221" text-anchor="middle">Atomic consume</text>
+            <text class="small" x="887" y="243" text-anchor="middle">exact bindings still match</text>
+            <text class="small" x="887" y="263" text-anchor="middle">remaining uses greater than zero</text>
+            <path class="flow" style="marker-end:url(#arrow2)" d="M761 239 H687"></path>
+            <rect class="node-ok" x="493" y="198" width="194" height="82" rx="8"></rect>
+            <text class="label" x="590" y="229" text-anchor="middle">Execute once</text>
+            <text class="small" x="590" y="251" text-anchor="middle">grant is now spent</text>
+            <path class="flow-alt" style="marker-end:url(#arrow2)" d="M887 287 V326 H404"></path>
+            <rect class="node-stop" x="210" y="300" width="194" height="52" rx="8"></rect>
+            <text class="label" x="307" y="332" text-anchor="middle">Drift or expiry: stop</text>
+          </svg>
+        </figure>
+
+        <h3>Grant bindings</h3>
+        <ul>
+          <li>Analyzer version and action kind.</li>
+          <li>Exact action payload digest and deterministic effect digest.</li>
+          <li>Effective policy hash.</li>
+          <li>Runtime hostname, local principal, and working directory.</li>
+          <li>Expiry and remaining use count.</li>
+        </ul>
+
+        <h3>Three approval scopes</h3>
+        <div class="table-wrap">
+          <table>
+            <caption>How interactive, session, and deferred approvals differ.</caption>
+            <thead><tr><th scope="col">Scope</th><th scope="col">Lifetime</th><th scope="col">Persistence</th><th scope="col">Drift behavior</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Approve once</th><td>Current execution only</td><td>Not reusable</td><td>No later reuse exists.</td></tr>
+              <tr><th scope="row">Approve and remember</th><td>Current process, only when the profile toggle is enabled</td><td>Memory only</td><td>Digest changes when target, effects, policy, host, principal, or directory changes.</td></tr>
+              <tr><th scope="row">Deferred grant</th><td>15 minutes, one atomic use</td><td>SQLite grant row</td><td>Any binding mismatch, expiry, or prior consumption stops execution.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout info">
+          <strong>Secret-bearing blocked work</strong>
+          Blocked snapshots and continuation data are masked before persistence. If masking changes the exact action payload, the action cannot reconstruct the original digest and must be rerun interactively. Resume convenience does not override secret persistence boundaries.
+        </div>
+      </section>
+
+      <section id="experience" aria-labelledby="experience-title">
+        <p class="section-kicker">09 / Setup and Settings</p>
+        <h2 id="experience-title">A recommended default with progressive customization</h2>
+        <p>The Guided Console keeps profile choice on the critical path and moves the 25-control catalog behind explicit customization. The dashboard uses a dedicated Security subpage instead of extending the general Settings table indefinitely.</p>
+
+        <h3>Guided setup</h3>
+        <ol class="steps">
+          <li><span><strong>Select a profile</strong>The Safety stage presents Extra strict, Reasonable, Less strict, Minimal, and YOLO with consequence text. Reasonable is the default.</span></li>
+          <li><span><strong>Customize only when needed</strong><kbd>A</kbd> reveals individual controls. Arrow keys or Space change values; <kbd>R</kbd> restores the selected profile value.</span></li>
+          <li><span><strong>Confirm broad posture changes</strong>YOLO requires a second explicit confirmation. Applying any new profile clears overrides only after confirmation.</span></li>
+          <li><span><strong>Review before save</strong>Ready shows the effective profile, override count, and policy hash. Saving configuration remains separate from installing dependencies or starting a daemon.</span></li>
+        </ol>
+
+        <h3>Dashboard Settings</h3>
+        <ul>
+          <li>The Security row opens a grouped control editor with effective value and source for every setting.</li>
+          <li><kbd>r</kbd> resets one override. <kbd>R</kbd> asks before resetting all overrides. <kbd>s</kbd> saves.</li>
+          <li>Unsaved edits survive the dashboard's periodic refresh.</li>
+          <li>Saved changes apply to new chat sessions. The active chat keeps its immutable policy snapshot.</li>
+          <li>Overview and Chat show the effective profile summary and policy identity instead of only the deprecated safety mode.</li>
+        </ul>
+
+        <div class="callout success">
+          <strong>Responsive and keyboard-first</strong>
+          Setup and Settings are covered at 80, 100, and 120 columns. Status is explicit text, not color alone, and keyboard escape, confirmation, reset, and save paths remain visible.
+        </div>
+      </section>
+
+      <section id="persistence" aria-labelledby="persistence-title">
+        <p class="section-kicker">10 / Persistence and privacy</p>
+        <h2 id="persistence-title">Security state is private, bounded, and explicit</h2>
+        <div class="table-wrap">
+          <table>
+            <caption>Durable data and its security treatment.</caption>
+            <thead><tr><th scope="col">Data</th><th scope="col">Location</th><th scope="col">Protection</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Profile and overrides</th><td><code>~/.cvkeharness/config.yaml</code></td><td>Validated, atomic temp-file replace, mode <code>0600</code>, deep-cloned before asynchronous use.</td></tr>
+              <tr><th scope="row">Scoped grants</th><td><code>security_action_grants</code> in SQLite</td><td>Digest, scope, masked summary, expiry, and use count. No raw command is stored in the grant row.</td></tr>
+              <tr><th scope="row">Blocked work</th><td><code>blocked_work</code> in SQLite</td><td>Safe approval envelope plus masked conversation and continuation payloads.</td></tr>
+              <tr><th scope="row">Legacy command approvals</th><td><code>command_approvals</code> in SQLite</td><td>Quarantined from effect-policy runtimes and masked when listed.</td></tr>
+              <tr><th scope="row">State database</th><td><code>~/.cvkeharness/state.db</code> and SQLite sidecars</td><td>Mode <code>0600</code>. Grant consumption is one atomic conditional update with bounded lock retry.</td></tr>
+              <tr><th scope="row">Shell output</th><td>Runtime events and tool results</td><td>Bounded look-ahead, secret masking before visible truncation, then bounded emission.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Invariant protections are not profile toggles</h3>
+        <ul>
+          <li>Configuration validation and schema-version checking.</li>
+          <li>Private config, state, and authorization metadata permissions.</li>
+          <li>Secret masking at output and blocked-work persistence boundaries.</li>
+          <li>Bounded command size, segments, execution time, and captured output.</li>
+          <li>LLM review cannot persist permission or override deterministic denial.</li>
+          <li>Running sessions do not silently adopt a newly saved policy.</li>
+        </ul>
+      </section>
+
+      <section id="migration" aria-labelledby="migration-title">
+        <p class="section-kicker">11 / Legacy migration</p>
+        <h2 id="migration-title">Old configuration remains readable without becoming a second authority</h2>
+        <p>The new <code>security</code> section wins whenever it exists. Legacy values are consulted only when that section is absent, then projected back for transition compatibility.</p>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Legacy <code>safety_mode</code> migration.</caption>
+            <thead><tr><th scope="col">Legacy mode</th><th scope="col">New selection</th><th scope="col">Compatibility detail</th></tr></thead>
+            <tbody>
+              <tr><th scope="row"><code>llm_judge</code></th><td>Reasonable</td><td>Ambiguous actions follow the new catalog. Model review remains advisory.</td></tr>
+              <tr><th scope="row"><code>user_confirm</code></th><td>Reasonable with create and append set to <code>ask</code></td><td>Preserves the old expectation that a non-allowlisted file creation does not run automatically.</td></tr>
+              <tr><th scope="row"><code>user_confirm_all</code></th><td>Extra strict with every decision control set to <code>ask</code></td><td>Every valid effect remains human-reviewable instead of inheriting profile ALLOW or DENY values.</td></tr>
+              <tr><th scope="row"><code>unrestricted</code></th><td>YOLO</td><td>CvkeHarness approval gates are disabled, while external protections still apply.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>Legacy capability preferences map Python scripts, autonomous diagnostics, network probes, and missing-tool installation into the corresponding script, read, network, and package controls. They no longer remain setup-only preferences with no runtime effect.</p>
+      </section>
+
+      <section id="operations" aria-labelledby="operations-title">
+        <p class="section-kicker">12 / Operator workflows</p>
+        <h2 id="operations-title">Inspect, approve, resume</h2>
+
+        <div class="command-list">
+          <div><code>cvkeharness commands list</code><p>Show the static allowlist, available or spent scoped grants, and quarantined legacy approvals. Grant summaries are masked.</p></div>
+          <div><code>cvkeharness commands approve "&lt;command&gt;"</code><p>Create one exact shell grant for the current policy, host, principal, and directory. It expires after 15 minutes and has one use.</p></div>
+          <div><code>cvkeharness commands approve-work &lt;blocked-id&gt;</code><p>Reconstruct the stored shell or non-shell action, reclassify it under the current policy, preserve the original executor scope, then issue one grant.</p></div>
+          <div><code>cvkeharness settings</code><p>Select a profile through the legacy terminal settings surface using the shared profile catalog.</p></div>
+          <div><code>cvkeharness setup</code><p>Run Guided Console onboarding with profile choice and progressive per-control customization.</p></div>
+        </div>
+
+        <h3>Blocked work in Chat</h3>
+        <p>When a TUI or background action reaches <code>ask</code>, the task becomes <code>APPROVAL REQUIRED</code>. Chat displays the blocked-work ID and the exact <code>approve-work</code> command. Approval resolves only the matching envelope; a changed policy or action requests fresh review.</p>
+      </section>
+
+      <section id="validation" aria-labelledby="validation-title">
+        <p class="section-kicker">13 / Validation evidence</p>
+        <h2 id="validation-title">Security semantics are tested, not only parsed</h2>
+        <p>The implementation was reviewed against realistic bypasses after the initial green suite. Each discovered gap became a regression case, followed by fresh normal, race, vet, build, diff, and E2E runs.</p>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Representative adversarial coverage.</caption>
+            <thead><tr><th scope="col">Area</th><th scope="col">Examples</th><th scope="col">Expected property</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Diagnostic false positives</th><td>Multiline disk inspection, pipelines, <code>2&gt;/dev/null</code>, <code>2&gt;&amp;1</code>, <code>tmutil</code>, read-only service and journal queries</td><td>Valid diagnostics are analyzed by effect instead of rejected for punctuation.</td></tr>
+              <tr><th scope="row">Deletion and overwrite bypasses</th><td><code>find -delete</code>, wrappers, script primitives, <code>git clean</code>, branch/remote mutation, <code>sort -o</code>, <code>sed --in-place</code>, container prune, SQL, HTTP DELETE</td><td>No mutation inherits read-only authority from a command basename.</td></tr>
+              <tr><th scope="row">Target confusion</th><td>Globs, variables, brace expansion, quoted paths, symlink retargeting, multiple <code>tee</code> targets, <code>--target-directory</code></td><td>Every destination is represented or the action becomes unstable and requires stricter handling.</td></tr>
+              <tr><th scope="row">Executable spoofing</th><td><code>./sort</code>, <code>/tmp/ls</code>, PATH shadowing</td><td>Untrusted executable identity becomes unknown.</td></tr>
+              <tr><th scope="row">Hidden execution</th><td>Opaque scripts, nested wrappers, shell <code>-c</code>, process substitution, malformed nested syntax</td><td>Hidden syntax cannot fall back to a safe read classification.</td></tr>
+              <tr><th scope="row">Grant safety</th><td>Concurrent consumption, expiry, policy/effect/host/principal/directory mismatch, target drift</td><td>Exactly one matching consumer wins; every mismatch stops.</td></tr>
+              <tr><th scope="row">Interface state</th><td>Unsaved refresh, new-session policy snapshot, keyboard reset and confirmation, 80/100/120 widths</td><td>Security edits remain legible and are not silently lost or applied to the wrong session.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <pre aria-label="Validation commands"><code>go test ./... -count=1 -timeout=120s
+go test -race ./... -count=1 -timeout=180s
+go vet ./...
+go build ./...
+./scripts/test-e2e.sh
+git diff --check</code></pre>
+
+        <div class="callout success">
+          <strong>Final review result</strong>
+          Fresh full, race, E2E, vet, build, and diff checks passed. An independent adversarial review reported no remaining P0 or P1 blockers in the security-controls branch at the implementation handoff.
+        </div>
+      </section>
+
+      <section id="limits" aria-labelledby="limits-title">
+        <p class="section-kicker">14 / Limits and roadmap</p>
+        <h2 id="limits-title">What is not implemented yet</h2>
+        <p>Controls appear in the product only when an enforcement mechanism exists. The following capabilities remain valuable follow-on work, not hidden or aspirational toggles.</p>
+
+        <div class="table-wrap">
+          <table>
+            <caption>Known limitations and recommended next enforcement layer.</caption>
+            <thead><tr><th scope="col">Missing capability</th><th scope="col">Why it matters</th><th scope="col">Recommended direction</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">OS-enforced sandbox</th><td>Heuristic classification cannot fully constrain opaque local code.</td><td>Add filesystem, process, device, secret, and network enforcement with fail-closed availability checks.</td></tr>
+              <tr><th scope="row">Staging and recovery</th><td>Approval does not make deletion or overwrite reversible.</td><td>Add Trash or managed quarantine, snapshot providers, backup-before-overwrite, recovery manifests, and restore verification.</td></tr>
+              <tr><th scope="row">Delete and write budgets</th><td>A classified action can still affect too many files or bytes.</td><td>Enumerate operands and enforce file, byte, recursion, mount, and cumulative mutation limits.</td></tr>
+              <tr><th scope="row">Remote target fingerprinting</th><td>Local hostname and principal binding do not identify cloud accounts, clusters, databases, or SSH endpoints.</td><td>Bind account, subscription, project, region, cluster, namespace, database, remote principal, and endpoint fingerprint.</td></tr>
+              <tr><th scope="row">Executable-content hashing</th><td>A trusted path can change after analysis.</td><td>Bind executable identity and content digest immediately before execution.</td></tr>
+              <tr><th scope="row">Typed mutation adapters</th><td>Raw shell cannot reliably expose provider preconditions, dry runs, idempotency, or recovery.</td><td>Add plan/apply adapters for cloud, Kubernetes, services, packages, containers, and databases.</td></tr>
+              <tr><th scope="row">Tamper-evident audit</th><td>Private local records are useful but not independent evidence.</td><td>Add hash chaining or a separate append-only sink with provider operation IDs and postconditions.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="research" aria-labelledby="research-title">
+        <p class="section-kicker">15 / Research basis</p>
+        <h2 id="research-title">Why the design focuses on effects and recovery</h2>
+        <p>The implementation and roadmap follow a consistent lesson: model training and prompts help, but authorization must be enforced outside the model. Deterministic scope, constrained credentials, recovery, exact approvals, runtime boundaries, and verification reduce blast radius when the model is wrong.</p>
+
+        <ul class="sources">
+          <li><strong><a href="https://arxiv.org/abs/2604.13536">YoloFS: A Safety-First Filesystem for AI Agents</a></strong><span>Motivates staged filesystem effects, snapshots, progressive permissions, and reviewable hidden side effects. The paper analyzes a selected incident corpus, not a population incident rate.</span></li>
+          <li><strong><a href="https://papers.neurips.cc/paper_files/paper/2024/file/97091a5177d8dc64b1da8bf3e1f6fb54-Paper-Datasets_and_Benchmarks_Track.pdf">AgentDojo</a></strong><span>Demonstrates both ordinary task failures and redirection through untrusted tool data.</span></li>
+          <li><strong><a href="https://cdn.openai.com/pdf/97cc5669-7a25-4e63-b15f-5fd5bdc4d149/gpt-5-codex-system-card.pdf">GPT-5-Codex System Card</a></strong><span>Documents layered coding-agent safeguards including sandbox boundaries, approvals, and monitoring.</span></li>
+          <li><strong><a href="https://code.claude.com/docs/en/sandboxing">Claude Code sandboxing</a></strong><span>Shows a practical combination of filesystem and network boundaries with explicit permission crossings.</span></li>
+          <li><strong><a href="https://openreview.net/forum?id=PGsM81SWHt">Sequential-harm monitoring study</a></strong><span>Supports treating monitor models as advisory because apparently benign steps can combine into harmful trajectories.</span></li>
+          <li><strong><a href="https://docs.aws.amazon.com/ec2/latest/devguide/ec2-api-idempotency.html">Amazon EC2 idempotency</a></strong><span>Illustrates why ambiguous mutation outcomes need idempotency tokens and status reconciliation before retry.</span></li>
+          <li><strong><a href="https://kubernetes.io/docs/reference/using-api/api-concepts/">Kubernetes API concepts</a></strong><span>Provides concrete models for dry run, resource versions, and stale-write rejection in typed adapters.</span></li>
+        </ul>
+
+        <div class="callout info">
+          <strong>Source of truth</strong>
+          This HTML guide explains the implementation. The executable source in <code>securitypolicy/</code>, <code>tools/</code>, <code>state/</code>, <code>config/</code>, and the associated tests remains authoritative when documentation and code differ.
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="page-footer">
+    <div class="footer-inner">
+      <p>CvkeHarness security controls. Standalone offline reference. Last updated 2026-08-14.</p>
+    </div>
+  </footer>
+
+  <script>
+    (() => {
+      const profileButtons = [...document.querySelectorAll('[data-profile-button]')];
+      const columns = [...document.querySelectorAll('#profile-matrix [data-col]')];
+      const selectProfile = (profile) => {
+        columns.forEach((cell) => cell.classList.toggle('is-selected', profile !== 'none' && cell.dataset.col === profile));
+        profileButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.profileButton === profile)));
+      };
+      profileButtons.forEach((button) => button.addEventListener('click', () => selectProfile(button.dataset.profileButton)));
+
+      const navLinks = [...document.querySelectorAll('.sidebar a')];
+      const sections = navLinks.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+      if ('IntersectionObserver' in window) {
+        const observer = new IntersectionObserver((entries) => {
+          const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+          if (!visible) return;
+          navLinks.forEach((link) => {
+            if (link.getAttribute('href') === `#${visible.target.id}`) link.setAttribute('aria-current', 'location');
+            else link.removeAttribute('aria-current');
+          });
+        }, { rootMargin: '-18% 0px -68% 0px', threshold: [0, 0.2, 0.6] });
+        sections.forEach((section) => observer.observe(section));
+      }
+    })();
+  </script>
+</body>
+</html>

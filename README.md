@@ -322,7 +322,7 @@ Important fields:
   Retention window for debug prompt dumps. Dumps are pruned automatically and secret-looking values are redacted before persistence.
 - `routing_min_confidence`
 - `security`
-  Canonical security profile and per-setting overrides. `reasonable` is the default. See [Security profiles and controls](docs/security-controls.md).
+  Canonical security profile and per-setting overrides. `reasonable` is the default. See the [detailed HTML security guide](docs/security-controls.html) or the [concise Markdown reference](docs/security-controls.md).
 - `safety_mode`
   Deprecated compatibility input. It is migrated into `security` when the new section is absent.
 - `safety_model`

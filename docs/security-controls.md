@@ -1,5 +1,7 @@
 # Security profiles and controls
 
+> Detailed standalone reference: [Security controls HTML guide](security-controls.html)
+
 CvkeHarness treats the model as a fallible operator. The primary risks are the wrong target, destructive side effects, over-broad scope, stale state, duplicate mutations, exposed credentials, and an unavailable recovery path—not a model “escaping.”
 
 This design is grounded in effect control:
