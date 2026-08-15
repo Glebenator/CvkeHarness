@@ -78,6 +78,11 @@ type liveToolCall struct {
 	turn           int
 }
 
+type liveVerificationActivity struct {
+	tools.VerificationActivity
+	turn int
+}
+
 type pendingChatApproval struct {
 	workID  string
 	prompt  string
@@ -93,7 +98,20 @@ func (o channelEventObserver) Observe(event tools.Event) {
 	case o.ch <- event:
 	default:
 		// Runtime events are useful UI detail, not an execution boundary. Never
-		// block a tool because the renderer is briefly behind.
+		// block execution because the renderer is briefly behind. Verification
+		// state is compact and high-value, so make room for its latest snapshot;
+		// final tool outcomes are still reconciled from the turn result.
+		if event.Type != tools.EventVerificationActivity {
+			return
+		}
+		select {
+		case <-o.ch:
+		default:
+		}
+		select {
+		case o.ch <- event:
+		default:
+		}
 	}
 }
 
@@ -124,6 +142,7 @@ type chatTab struct {
 	toolCursor       int
 	toolLineStarts   []int
 	toolLineEnds     []int
+	verifierActivity map[int]liveVerificationActivity
 	activeTurn       int
 	sessionID        string
 	activeTurnID     string
@@ -159,15 +178,16 @@ func newChatTab() tabModel {
 
 	vp := viewport.New(76, 12)
 	return &chatTab{
-		composer:        composer,
-		viewport:        vp,
-		composerFocused: false,
-		eventCh:         make(chan tools.Event, 128),
-		status:          "READY",
-		verification:    "NOT RUN",
-		controlsReady:   true,
-		commandRows:     commandMenuLimit,
-		sessionID:       fmt.Sprintf("tui_session_%d", time.Now().UnixNano()),
+		composer:         composer,
+		viewport:         vp,
+		composerFocused:  false,
+		eventCh:          make(chan tools.Event, 128),
+		status:           "READY",
+		verification:     "NOT RUN",
+		verifierActivity: make(map[int]liveVerificationActivity),
+		controlsReady:    true,
+		commandRows:      commandMenuLimit,
+		sessionID:        fmt.Sprintf("tui_session_%d", time.Now().UnixNano()),
 	}
 }
 
@@ -334,8 +354,12 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		return t.startApprovedRetry(svc, msg.prompt, msg.grant)
 
 	case chatRuntimeEventMsg:
+		followBottom := t.viewport.AtBottom()
 		t.applyRuntimeEvent(msg.event)
 		t.refreshViewport()
+		if followBottom {
+			t.viewport.GotoBottom()
+		}
 		if t.running {
 			return t, waitChatEventCmd(t.eventCh, t.eventWaitStop)
 		}
@@ -616,6 +640,7 @@ func (t *chatTab) startFreshSession(svc *Service) (tabModel, tea.Cmd) {
 	t.toolCursor = 0
 	t.toolLineStarts = nil
 	t.toolLineEnds = nil
+	t.verifierActivity = make(map[int]liveVerificationActivity)
 	t.activeTurn = 0
 	t.sessionID = fmt.Sprintf("tui_session_%d", time.Now().UnixNano())
 	t.activeTurnID = ""
@@ -654,6 +679,7 @@ func (t *chatTab) startApprovedRetry(svc *Service, prompt string, grant state.Se
 	t.toolCursor = 0
 	t.toolLineStarts = nil
 	t.toolLineEnds = nil
+	t.verifierActivity = make(map[int]liveVerificationActivity)
 	t.activeTurn = 0
 	t.sessionID = fmt.Sprintf("tui_session_%d", time.Now().UnixNano())
 	t.activeTurnID = ""
@@ -938,7 +964,14 @@ func (t *chatTab) contextPane(width int) string {
 	lines = append(lines, styleBase.Render(firstNonEmptyText(t.target, "runtime host")))
 	lines = append(lines, "")
 	lines = append(lines, styleMuted.Render("VERIFICATION"))
-	lines = append(lines, renderNamedStatus(t.verification))
+	if activity, ok := t.verifierActivity[t.activeTurn]; ok {
+		lines = append(lines, renderNamedStatus(verificationActivityLabel(activity.VerificationActivity)))
+		for _, line := range wrapText(verificationActivityDetail(activity.VerificationActivity), width-2) {
+			lines = append(lines, styleMuted.Render(line))
+		}
+	} else {
+		lines = append(lines, renderNamedStatus(t.verification))
+	}
 	lines = append(lines, "")
 	lines = append(lines, styleMuted.Render("TOOLS"))
 	if len(t.toolCalls) == 0 {
@@ -974,9 +1007,11 @@ func (t *chatTab) refreshViewport() {
 		)
 	}
 	renderedTools := make([]bool, len(t.toolCalls))
+	renderedVerification := make(map[int]bool, len(t.verifierActivity))
 	for _, message := range t.messages {
 		if message.role == "assistant" {
 			t.appendToolsForTurn(&lines, message.turn, renderedTools)
+			t.appendVerificationForTurn(&lines, message.turn, renderedVerification)
 			t.appendAssistantResponse(&lines, message.content)
 			continue
 		}
@@ -1006,6 +1041,9 @@ func (t *chatTab) refreshViewport() {
 			t.appendToolRow(&lines, i)
 		}
 	}
+	for turn := 0; turn <= t.activeTurn; turn++ {
+		t.appendVerificationForTurn(&lines, turn, renderedVerification)
+	}
 	if t.pendingApproval != nil {
 		t.appendApprovalPrompt(&lines, t.pendingApproval, maxInt(t.viewport.Width-4, 18))
 	}
@@ -1013,6 +1051,85 @@ func (t *chatTab) refreshViewport() {
 		lines = append(lines, "", "  "+renderNamedStatus(t.status)+"  "+styleMuted.Render(t.statusDetail))
 	}
 	t.viewport.SetContent(strings.Join(lines, "\n"))
+}
+
+func (t *chatTab) appendVerificationForTurn(lines *[]string, turn int, rendered map[int]bool) {
+	if rendered[turn] {
+		return
+	}
+	activity, ok := t.verifierActivity[turn]
+	if !ok {
+		return
+	}
+	rendered[turn] = true
+	verification := activity.VerificationActivity
+	width := maxInt(t.viewport.Width-4, 18)
+	*lines = append(*lines, "", "  "+styleSectionTitle.Render("VERIFICATION")+"  "+renderNamedStatus(verificationActivityLabel(verification)))
+	appendWrappedBlock(lines, "  ", "Repair:", fmt.Sprintf("attempt %d of %d", verification.RepairAttempt, verification.RepairLimit), width, styleMuted, styleBase)
+	if verification.CapabilitiesEvaluated {
+		capabilityState := "unchanged"
+		if verification.CapabilitiesChanged {
+			capabilityState = "changed"
+		}
+		appendWrappedBlock(lines, "  ", "Capabilities:", capabilityState, width, styleMuted, styleBase)
+	}
+	if verification.StopReason != tools.VerificationStopNone {
+		appendWrappedBlock(lines, "  ", "Stop:", verificationStopLabel(verification.StopReason), width, styleMuted, styleWarning)
+	}
+	if verification.Final && verification.Status != "" {
+		appendWrappedBlock(lines, "  ", "Outcome:", strings.ToUpper(verification.Status), width, styleMuted, styleBase)
+	}
+	appendWrappedBlock(lines, "  ", "Reason:", verification.Reason, width, styleMuted, styleBase)
+	if len(verification.MissingActions) > 0 {
+		appendWrappedBlock(lines, "  ", "Missing:", strings.Join(verification.MissingActions, "; "), width, styleMuted, styleBase)
+	}
+}
+
+func verificationActivityLabel(activity tools.VerificationActivity) string {
+	switch activity.Phase {
+	case tools.VerificationPhaseChecking:
+		return "CHECKING"
+	case tools.VerificationPhaseRepairing:
+		return "REPAIRING"
+	case tools.VerificationPhaseCompleted:
+		return strings.ToUpper(firstNonEmptyText(activity.Status, "COMPLETED"))
+	case tools.VerificationPhaseStopped:
+		return "STOPPED"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+func verificationActivityDetail(activity tools.VerificationActivity) string {
+	parts := []string{fmt.Sprintf("repair %d/%d", activity.RepairAttempt, activity.RepairLimit)}
+	if activity.CapabilitiesEvaluated {
+		if activity.CapabilitiesChanged {
+			parts = append(parts, "capabilities changed")
+		} else {
+			parts = append(parts, "capabilities unchanged")
+		}
+	}
+	if activity.StopReason != tools.VerificationStopNone {
+		parts = append(parts, "stopped: "+verificationStopLabel(activity.StopReason))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func verificationStopLabel(reason tools.VerificationStopReason) string {
+	switch reason {
+	case tools.VerificationStopNoProgress:
+		return "no progress detected"
+	case tools.VerificationStopCapabilityUnavailable:
+		return "required capability unavailable"
+	case tools.VerificationStopRepairLimit:
+		return "repair limit reached"
+	case tools.VerificationStopIterationLimit:
+		return "iteration limit reached"
+	case tools.VerificationStopVerifierUnavailable:
+		return "verifier unavailable"
+	default:
+		return ""
+	}
 }
 
 func (t *chatTab) appendApprovalPrompt(lines *[]string, approval *pendingChatApproval, width int) {
@@ -1197,10 +1314,23 @@ func firstLine(text string) string {
 }
 
 func (t *chatTab) applyRuntimeEvent(event tools.Event) {
-	if event.SessionID != "" && t.sessionID != "" && event.SessionID != t.sessionID {
-		return
+	if t.activeTurnID != "" {
+		// Once a turn is active, uncorrelated events are unsafe to render. The
+		// runtime populates both values from the turn context, so empty IDs here
+		// indicate a stale or incorrectly-scoped producer.
+		if event.SessionID == "" || event.TurnID == "" || event.SessionID != t.sessionID || event.TurnID != t.activeTurnID {
+			return
+		}
+	} else {
+		if event.SessionID != "" && t.sessionID != "" && event.SessionID != t.sessionID {
+			return
+		}
+		if event.TurnID != "" && event.TurnID != t.activeTurnID {
+			return
+		}
 	}
-	if event.TurnID != "" && t.activeTurnID != "" && event.TurnID != t.activeTurnID {
+	if event.Type == tools.EventVerificationActivity {
+		t.applyVerificationActivity(event.Verification)
 		return
 	}
 	if event.Type == tools.EventMemoryInjected {
@@ -1257,6 +1387,104 @@ func (t *chatTab) applyRuntimeEvent(event tools.Event) {
 	}
 }
 
+func (t *chatTab) applyVerificationActivity(activity tools.VerificationActivity) {
+	activity = sanitizeVerificationActivity(activity)
+	if t.verifierActivity == nil {
+		t.verifierActivity = make(map[int]liveVerificationActivity)
+	}
+	t.verifierActivity[t.activeTurn] = liveVerificationActivity{VerificationActivity: activity, turn: t.activeTurn}
+
+	switch activity.Phase {
+	case tools.VerificationPhaseChecking:
+		t.status = "VERIFYING"
+		t.verification = "PENDING"
+	case tools.VerificationPhaseRepairing:
+		t.status = "REPAIRING"
+		t.verification = strings.ToUpper(firstNonEmptyText(activity.Status, "UNSATISFIED"))
+	case tools.VerificationPhaseCompleted:
+		t.status = "VERIFIED"
+		t.verification = strings.ToUpper(firstNonEmptyText(activity.Status, "SATISFIED"))
+	case tools.VerificationPhaseStopped:
+		t.status = "VERIFICATION STOPPED"
+		t.verification = strings.ToUpper(firstNonEmptyText(activity.Status, "NOT RUN"))
+	}
+	t.statusDetail = verificationActivityDetail(activity)
+}
+
+func sanitizeVerificationActivity(activity tools.VerificationActivity) tools.VerificationActivity {
+	activity.Status = normalizedVerificationStatus(activity.Status)
+	activity.Reason = compactLiveVerificationText(activity.Reason, 240)
+	activity.RepairAttempt = clamp(activity.RepairAttempt, 0, 999)
+	activity.RepairLimit = clamp(activity.RepairLimit, 0, 999)
+	if activity.RepairLimit > 0 && activity.RepairAttempt > activity.RepairLimit {
+		activity.RepairAttempt = activity.RepairLimit
+	}
+	activity.MissingActions = compactLiveVerificationActions(activity.MissingActions)
+	switch activity.Phase {
+	case tools.VerificationPhaseChecking,
+		tools.VerificationPhaseRepairing,
+		tools.VerificationPhaseCompleted,
+		tools.VerificationPhaseStopped:
+	default:
+		activity.Phase = tools.VerificationPhaseStopped
+	}
+	switch activity.StopReason {
+	case tools.VerificationStopNone,
+		tools.VerificationStopNoProgress,
+		tools.VerificationStopCapabilityUnavailable,
+		tools.VerificationStopRepairLimit,
+		tools.VerificationStopIterationLimit,
+		tools.VerificationStopVerifierUnavailable:
+	default:
+		activity.StopReason = tools.VerificationStopNone
+	}
+	return activity
+}
+
+func normalizedVerificationStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "satisfied":
+		return "satisfied"
+	case "unsatisfied":
+		return "unsatisfied"
+	case "uncertain":
+		return "uncertain"
+	case "pending":
+		return "pending"
+	case "unavailable":
+		return "unavailable"
+	case "not_run":
+		return "not run"
+	case "not run":
+		return "not run"
+	case "":
+		return ""
+	default:
+		return "unknown"
+	}
+}
+
+func compactLiveVerificationActions(actions []string) []string {
+	result := make([]string, 0, minInt(len(actions), 3))
+	for _, action := range actions {
+		if len(result) == 3 {
+			break
+		}
+		if compact := compactLiveVerificationText(action, 160); compact != "" {
+			result = append(result, compact)
+		}
+	}
+	return result
+}
+
+func compactLiveVerificationText(value string, limit int) string {
+	value = strings.Join(strings.Fields(secrets.Mask(value)), " ")
+	if value == "" {
+		return ""
+	}
+	return truncate(value, limit)
+}
+
 func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 	if result.Target.TargetID != "" {
 		t.target = result.Target.TargetID
@@ -1268,6 +1496,7 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 	t.reconcileToolOutputs(result.Observed)
 
 	blockedForApproval := result.TaskState == state.TaskStateBlockedWaitingUser
+	t.reconcileVerificationOutcome(result, err, blockedForApproval)
 	switch result.TaskState {
 	case state.TaskStateBlockedWaitingUser:
 		t.status = "APPROVAL REQUIRED"
@@ -1330,6 +1559,52 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 	if strings.TrimSpace(result.Output) != "" {
 		t.messages = append(t.messages, liveChatMessage{role: "assistant", content: result.Output, at: time.Now(), turn: t.activeTurn})
 	}
+}
+
+func (t *chatTab) reconcileVerificationOutcome(result agent.ChatTurnResult, err error, blockedForApproval bool) {
+	verification := result.Verification
+	if verification.Status != "" {
+		phase := tools.VerificationPhaseStopped
+		if strings.EqualFold(verification.Status, "satisfied") {
+			phase = tools.VerificationPhaseCompleted
+		}
+		t.applyVerificationActivity(tools.VerificationActivity{
+			Phase:                 phase,
+			Status:                verification.Status,
+			RepairAttempt:         verification.RepairAttempts,
+			RepairLimit:           verification.RepairLimit,
+			Reason:                verification.Reason,
+			MissingActions:        append([]string(nil), verification.MissingActions...),
+			CapabilitiesEvaluated: verification.CapabilitiesEvaluated,
+			CapabilitiesChanged:   verification.CapabilitiesChanged,
+			StopReason:            verification.StopReason,
+			Final:                 true,
+		})
+		return
+	}
+	if result.TaskState == state.TaskStateCompleted && err == nil {
+		// Focused harnesses may deliberately disable completion verification.
+		// Preserve the existing NOT REPORTED context state without inserting a
+		// synthetic verifier timeline entry that never occurred.
+		return
+	}
+
+	activity := tools.VerificationActivity{
+		Phase:  tools.VerificationPhaseStopped,
+		Status: "not run",
+		Final:  true,
+	}
+	switch {
+	case blockedForApproval:
+		activity.Reason = "waiting for explicit approval before completion verification"
+	case errors.Is(err, context.Canceled) || t.stopping:
+		activity.Reason = "turn canceled before completion verification"
+	case err != nil:
+		activity.Reason = "turn failed before completion verification"
+	default:
+		activity.Reason = "turn ended before completion verification"
+	}
+	t.applyVerificationActivity(activity)
 }
 
 func (t *chatTab) latestUserPrompt() string {
@@ -1752,11 +2027,11 @@ func wrapRawLine(line string, width int) []string {
 func renderNamedStatus(status string) string {
 	status = strings.ToUpper(strings.TrimSpace(status))
 	switch status {
-	case "SUCCEEDED", "READY", "VERIFIED", "COMPLETE", "COMPLETED":
+	case "SUCCEEDED", "READY", "VERIFIED", "COMPLETE", "COMPLETED", "SATISFIED":
 		return styleSuccess.Render("✓ " + status)
-	case "FAILED", "DENIED", "UNAVAILABLE", "INTERRUPTED":
+	case "FAILED", "DENIED", "UNAVAILABLE", "INTERRUPTED", "STOPPED", "UNSATISFIED":
 		return styleError.Render("! " + status)
-	case "APPROVAL REQUIRED", "APPROVAL CHECK", "PENDING", "INTERRUPTING":
+	case "APPROVAL REQUIRED", "APPROVAL CHECK", "PENDING", "INTERRUPTING", "UNCERTAIN":
 		return styleWarning.Render("! " + status)
 	default:
 		return styleAccent.Render("• " + firstNonEmptyText(status, "WORKING"))
@@ -1766,11 +2041,11 @@ func renderNamedStatus(status string) string {
 func statusIconText(status string) string {
 	status = strings.ToUpper(strings.TrimSpace(status))
 	switch status {
-	case "READY", "SUCCEEDED", "VERIFIED":
+	case "READY", "SUCCEEDED", "VERIFIED", "SATISFIED":
 		return "✓ " + status
-	case "FAILED", "UNAVAILABLE", "INTERRUPTED":
+	case "FAILED", "UNAVAILABLE", "INTERRUPTED", "VERIFICATION STOPPED", "UNSATISFIED":
 		return "! " + status
-	case "APPROVAL REQUIRED", "APPROVAL CHECK", "PENDING", "INTERRUPTING":
+	case "APPROVAL REQUIRED", "APPROVAL CHECK", "PENDING", "INTERRUPTING", "UNCERTAIN":
 		return "! " + status
 	default:
 		return "• " + firstNonEmptyText(status, "WORKING")

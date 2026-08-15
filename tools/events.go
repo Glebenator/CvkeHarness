@@ -19,7 +19,48 @@ const (
 	EventShellOutput          EventType = "shell_output"
 	EventShellCommandFinished EventType = "shell_command_finished"
 	EventMemoryInjected       EventType = "memory_injected"
+	EventVerificationActivity EventType = "verification_activity"
 )
+
+// VerificationPhase names the operator-visible phase of completion
+// verification. These phases expose workflow state, never model reasoning.
+type VerificationPhase string
+
+const (
+	VerificationPhaseChecking  VerificationPhase = "checking"
+	VerificationPhaseRepairing VerificationPhase = "repairing"
+	VerificationPhaseCompleted VerificationPhase = "completed"
+	VerificationPhaseStopped   VerificationPhase = "stopped"
+)
+
+// VerificationStopReason is a fixed, UI-safe explanation for why completion
+// repair stopped before the verifier was satisfied.
+type VerificationStopReason string
+
+const (
+	VerificationStopNone                  VerificationStopReason = ""
+	VerificationStopNoProgress            VerificationStopReason = "no_progress"
+	VerificationStopCapabilityUnavailable VerificationStopReason = "capability_unavailable"
+	VerificationStopRepairLimit           VerificationStopReason = "repair_limit"
+	VerificationStopIterationLimit        VerificationStopReason = "iteration_limit"
+	VerificationStopVerifierUnavailable   VerificationStopReason = "verifier_unavailable"
+)
+
+// VerificationActivity is a compact, redacted progress summary for operator
+// interfaces. It deliberately excludes prompts, candidate answers, repair
+// instructions, tool names, and unrestricted tool details.
+type VerificationActivity struct {
+	Phase                 VerificationPhase
+	Status                string
+	RepairAttempt         int
+	RepairLimit           int
+	Reason                string
+	MissingActions        []string
+	CapabilitiesEvaluated bool
+	CapabilitiesChanged   bool
+	StopReason            VerificationStopReason
+	Final                 bool
+}
 
 // MemorySource is a bounded, UI-safe description of one memory section used
 // for a model call. Preview is intentionally compact and may still contain
@@ -46,6 +87,7 @@ type Event struct {
 	Duration      time.Duration
 	ErrorMessage  string
 	MemorySources []MemorySource
+	Verification  VerificationActivity
 	SessionID     string
 	TurnID        string
 }

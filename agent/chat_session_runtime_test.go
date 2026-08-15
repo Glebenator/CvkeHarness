@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/tools"
@@ -234,19 +235,20 @@ func TestChatRepairRebuildsCapabilitiesAndExecutesNewTool(t *testing.T) {
 }
 
 func TestChatRepairStopsOnNoProgress(t *testing.T) {
+	observer := &memoryEventObserver{}
 	p := newScriptedProvider(t,
 		scriptedProviderStep{name: "refusal", resp: assistantText("I cannot do that.")},
 		scriptedProviderStep{name: "uncertain", resp: verifierJSON(verificationUnsatisfied, "Action missing.", []string{"Complete it."}, "Complete it.")},
 		scriptedProviderStep{name: "same refusal", resp: assistantText("I cannot do that.")},
 		scriptedProviderStep{name: "same verifier", resp: verifierJSON(verificationUnsatisfied, "Action missing.", []string{"Complete it."}, "Complete it.")},
 	)
-	a := New(Options{Provider: p, ProviderName: "test", ToolRegistry: tools.NewRegistry(), DefaultModel: "model", MaxIterations: 25, MaxTokens: 256, MemoryRetriever: &memoryStub{}})
+	a := New(Options{Provider: p, ProviderName: "test", ToolRegistry: tools.NewRegistry(), EventObserver: observer, DefaultModel: "model", MaxIterations: 25, MaxTokens: 256, MemoryRetriever: &memoryStub{}})
 	session, _, err := a.StartChat(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	result, err := session.Turn(context.Background(), "do the task")
-	if err == nil || !strings.Contains(err.Error(), "task incomplete") {
+	if err == nil || !strings.Contains(err.Error(), "task incomplete") || !strings.Contains(err.Error(), "no progress") {
 		t.Fatalf("expected bounded incomplete result, got %v", err)
 	}
 	p.AssertComplete(t)
@@ -258,6 +260,137 @@ func TestChatRepairStopsOnNoProgress(t *testing.T) {
 	}
 	if assistantMessages != 1 {
 		t.Fatalf("expected only final refusal persisted, transcript=%#v", result.Transcript)
+	}
+	if result.Verification.StopReason != tools.VerificationStopNoProgress || result.Verification.RepairAttempts != 1 || result.Verification.RepairLimit != 2 {
+		t.Fatalf("expected explicit no-progress stop after repair 1/2, got %#v", result.Verification)
+	}
+	var final tools.VerificationActivity
+	for _, event := range observer.events {
+		if event.Type == tools.EventVerificationActivity && event.Verification.Final {
+			final = event.Verification
+		}
+	}
+	if final.Phase != tools.VerificationPhaseStopped || final.StopReason != tools.VerificationStopNoProgress {
+		t.Fatalf("expected final no-progress verifier activity, got %#v", final)
+	}
+}
+
+func TestChatVerificationActivityIsCorrelatedBoundedAndRedacted(t *testing.T) {
+	observer := &memoryEventObserver{}
+	p := newScriptedProvider(t,
+		scriptedProviderStep{name: "premature answer", resp: assistantText("candidate-answer-must-not-enter-events")},
+		scriptedProviderStep{name: "unsatisfied", resp: verifierJSON(
+			verificationUnsatisfied,
+			"Need api_key=supersecretvalue before completion.",
+			[]string{"Use password=anothersecretvalue to finish the requested action."},
+			"Finish the action.",
+		)},
+		scriptedProviderStep{name: "repaired answer", resp: assistantText("done")},
+		scriptedProviderStep{name: "satisfied", resp: verifierJSON(verificationSatisfied, "The requested action is complete.", nil, "")},
+	)
+	a := New(Options{
+		Provider:        p,
+		ProviderName:    "test",
+		ToolRegistry:    tools.NewRegistry(),
+		EventObserver:   observer,
+		DefaultModel:    "model",
+		MaxIterations:   3,
+		MaxTokens:       256,
+		MemoryRetriever: &memoryStub{},
+	})
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := telemetry.WithFields(context.Background(), telemetry.Fields{SessionID: "session-visible", TurnID: "turn-visible"})
+	result, err := session.Turn(ctx, "finish the task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.AssertComplete(t)
+
+	var activities []tools.Event
+	for _, event := range observer.events {
+		if event.Type != tools.EventVerificationActivity {
+			continue
+		}
+		activities = append(activities, event)
+		if event.SessionID != "session-visible" || event.TurnID != "turn-visible" {
+			t.Fatalf("verification event lost turn correlation: %#v", event)
+		}
+		if event.Command != "" || event.Output != "" || event.ErrorMessage != "" {
+			t.Fatalf("verification event exposed unrestricted runtime detail: %#v", event)
+		}
+		serialized := fmt.Sprintf("%#v", event.Verification)
+		for _, forbidden := range []string{"candidate-answer-must-not-enter-events", "supersecretvalue", "anothersecretvalue"} {
+			if strings.Contains(serialized, forbidden) {
+				t.Fatalf("verification event exposed %q: %s", forbidden, serialized)
+			}
+		}
+	}
+	if len(activities) != 5 {
+		t.Fatalf("expected checking, repair planning/update, checking, and final activity snapshots, got %d: %#v", len(activities), activities)
+	}
+	if got := activities[0].Verification; got.Phase != tools.VerificationPhaseChecking || got.RepairAttempt != 0 || got.RepairLimit != 2 {
+		t.Fatalf("unexpected initial checking activity: %#v", got)
+	}
+	capabilitySnapshot := activities[2].Verification
+	if capabilitySnapshot.Phase != tools.VerificationPhaseRepairing || !capabilitySnapshot.CapabilitiesEvaluated || capabilitySnapshot.CapabilitiesChanged || capabilitySnapshot.RepairAttempt != 1 {
+		t.Fatalf("expected repair 1/2 with unchanged capabilities, got %#v", capabilitySnapshot)
+	}
+	if !strings.Contains(capabilitySnapshot.Reason, "[REDACTED]") || len(capabilitySnapshot.MissingActions) != 1 || !strings.Contains(capabilitySnapshot.MissingActions[0], "[REDACTED]") {
+		t.Fatalf("expected bounded redacted verifier summary, got %#v", capabilitySnapshot)
+	}
+	final := activities[len(activities)-1].Verification
+	if !final.Final || final.Phase != tools.VerificationPhaseCompleted || final.Status != verificationSatisfied || final.RepairAttempt != 1 || final.RepairLimit != 2 {
+		t.Fatalf("unexpected final verifier activity: %#v", final)
+	}
+	if result.Verification.RepairAttempts != 1 || result.Verification.RepairLimit != 2 || !result.Verification.CapabilitiesEvaluated || result.Verification.CapabilitiesChanged {
+		t.Fatalf("final result did not reconcile verifier progress: %#v", result.Verification)
+	}
+}
+
+func TestChatVerificationStopsWhenRequiredCapabilityIsUnavailable(t *testing.T) {
+	observer := &memoryEventObserver{}
+	p := newScriptedProvider(t,
+		scriptedProviderStep{name: "answer without lookup", resp: assistantText("I cannot look that up.")},
+		scriptedProviderStep{name: "verification requires web", resp: verifierJSON(
+			verificationUnsatisfied,
+			"Current information is missing.",
+			[]string{"Use web_search."},
+			"Use web_search and answer from its result.",
+		)},
+	)
+	a := New(Options{
+		Provider:        p,
+		ProviderName:    "test",
+		ToolRegistry:    tools.NewRegistry(),
+		EventObserver:   observer,
+		DefaultModel:    "model",
+		MaxIterations:   25,
+		MaxTokens:       256,
+		MemoryRetriever: &memoryStub{},
+	})
+	session, _, err := a.StartChat(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.Turn(context.Background(), "look up the current result")
+	if err == nil || !strings.Contains(err.Error(), "task incomplete") || !strings.Contains(err.Error(), "required capability was unavailable") {
+		t.Fatalf("expected capability-unavailable incomplete result, got %v", err)
+	}
+	p.AssertComplete(t)
+	if result.Verification.StopReason != tools.VerificationStopCapabilityUnavailable || result.Verification.RepairAttempts != 1 || !result.Verification.CapabilitiesEvaluated {
+		t.Fatalf("expected capability-unavailable stop on repair 1/2, got %#v", result.Verification)
+	}
+	var final tools.VerificationActivity
+	for _, event := range observer.events {
+		if event.Type == tools.EventVerificationActivity && event.Verification.Final {
+			final = event.Verification
+		}
+	}
+	if final.Phase != tools.VerificationPhaseStopped || final.StopReason != tools.VerificationStopCapabilityUnavailable {
+		t.Fatalf("expected final capability-unavailable activity, got %#v", final)
 	}
 }
 

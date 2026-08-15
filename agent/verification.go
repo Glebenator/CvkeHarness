@@ -9,10 +9,12 @@ import (
 
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/promptdump"
+	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/state"
+	"github.com/coolcake/cvkeharness/tools"
 )
 
 const (
@@ -29,6 +31,11 @@ type CompletionVerification struct {
 	RepairInstruction     string
 	RepairTriggered       bool
 	MalformedVerifierJSON bool
+	RepairAttempts        int
+	RepairLimit           int
+	CapabilitiesEvaluated bool
+	CapabilitiesChanged   bool
+	StopReason            tools.VerificationStopReason
 }
 
 func (v CompletionVerification) missingActionsText() string {
@@ -82,6 +89,61 @@ func emitRepairAttempt(ctx context.Context, attempt int, reason string, capabili
 	_ = telemetry.Record(ctx, telemetry.Event{Type: telemetry.EventRepairAttempted, Payload: payload})
 }
 
+func emitVerificationActivity(ctx context.Context, verification CompletionVerification, phase tools.VerificationPhase, final bool) {
+	activity := tools.VerificationActivity{
+		Phase:                 phase,
+		Status:                compactVerificationEventText(verification.Status, 32),
+		RepairAttempt:         verification.RepairAttempts,
+		RepairLimit:           verification.RepairLimit,
+		Reason:                compactVerificationEventText(verification.Reason, 240),
+		MissingActions:        compactVerificationMissingActions(verification.MissingActions),
+		CapabilitiesEvaluated: verification.CapabilitiesEvaluated,
+		CapabilitiesChanged:   verification.CapabilitiesChanged,
+		StopReason:            verification.StopReason,
+		Final:                 final,
+	}
+	tools.EmitEvent(ctx, tools.Event{Type: tools.EventVerificationActivity, Verification: activity})
+}
+
+func compactVerificationMissingActions(actions []string) []string {
+	const maxActions = 3
+	result := make([]string, 0, minInt(len(actions), maxActions))
+	for _, action := range actions {
+		if len(result) == maxActions {
+			break
+		}
+		if compact := compactVerificationEventText(action, 160); compact != "" {
+			result = append(result, compact)
+		}
+	}
+	return result
+}
+
+func compactVerificationEventText(value string, limit int) string {
+	value = strings.Join(strings.Fields(secrets.Mask(value)), " ")
+	if value == "" || limit <= 0 {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "..."
+}
+
+func verificationStopReason(noProgress bool, repairAttempts, repairLimit, iteration, iterationLimit int) tools.VerificationStopReason {
+	switch {
+	case noProgress:
+		return tools.VerificationStopNoProgress
+	case repairLimit > 0 && repairAttempts >= repairLimit:
+		return tools.VerificationStopRepairLimit
+	case iteration >= iterationLimit:
+		return tools.VerificationStopIterationLimit
+	default:
+		return tools.VerificationStopIterationLimit
+	}
+}
+
 func requiredCapabilityUnavailable(verification CompletionVerification, toolNames []string) bool {
 	text := strings.ToLower(strings.Join(append(append([]string{}, verification.MissingActions...), verification.RepairInstruction), " "))
 	available := make(map[string]bool, len(toolNames))
@@ -107,6 +169,20 @@ func (e incompleteTaskError) Error() string {
 	reason := strings.TrimSpace(e.verification.Reason)
 	if reason == "" {
 		reason = "completion verification did not pass"
+	}
+	stop := ""
+	switch e.verification.StopReason {
+	case tools.VerificationStopNoProgress:
+		stop = "no progress was detected"
+	case tools.VerificationStopCapabilityUnavailable:
+		stop = "a required capability was unavailable"
+	case tools.VerificationStopRepairLimit:
+		stop = "the repair limit was reached"
+	case tools.VerificationStopIterationLimit:
+		stop = "the iteration limit was reached"
+	}
+	if stop != "" {
+		return "task incomplete after verification repair; stopped because " + stop + ": " + reason
 	}
 	return "task incomplete after verification repair: " + reason
 }
