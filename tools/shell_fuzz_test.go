@@ -65,6 +65,10 @@ func shellFuzzSeeds() []string {
 		"ps aux",
 		"df -h && uptime",
 		"ps aux | grep docker",
+		"<<'00'\n00\n0",
+		"\\ \n0",
+		"> &",
+		">&&0",
 		`printf "hello world"`,
 		`printf hello\ world`,
 		"ps > /tmp/output.txt",
@@ -84,9 +88,17 @@ func renderParsedShellCommand(parsed ParsedShellCommand) string {
 	var b strings.Builder
 	for idx, segment := range parsed.Segments {
 		if idx > 0 {
-			b.WriteByte(' ')
-			b.WriteString(parsed.Operators[idx-1])
-			b.WriteByte(' ')
+			operator := parsed.Operators[idx-1]
+			if operator == "\n" {
+				// A newline may immediately follow a heredoc terminator. Adding
+				// formatting spaces would change the terminator line and turn a
+				// valid parsed command into an invalid rendered command.
+				b.WriteByte('\n')
+			} else {
+				b.WriteByte(' ')
+				b.WriteString(operator)
+				b.WriteByte(' ')
+			}
 		}
 		b.WriteString(segment.Normalized)
 	}

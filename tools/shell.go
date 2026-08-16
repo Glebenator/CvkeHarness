@@ -262,7 +262,7 @@ func validateShellSegment(segment ShellSegment, allowedCommands, approvedCommand
 // breaks are command separators, matching normal shell behavior; line breaks
 // inside quotes are preserved as command content.
 func ParseShellCommand(command string) (ParsedShellCommand, error) {
-	cmd := strings.TrimSpace(command)
+	cmd := trimShellBoundaryWhitespace(command)
 	if cmd == "" {
 		return ParsedShellCommand{}, fmt.Errorf("command cannot be empty")
 	}
@@ -275,7 +275,7 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 	currentHeredoc := false
 
 	flush := func(operator string) error {
-		raw := strings.TrimSpace(current.String())
+		raw := trimShellBoundaryWhitespace(current.String())
 		if raw == "" {
 			if operator == "" && len(parsed.Segments) == 0 {
 				return fmt.Errorf("command cannot be empty")
@@ -410,15 +410,16 @@ func ParseShellCommand(command string) (ParsedShellCommand, error) {
 				return ParsedShellCommand{}, err
 			}
 		case '&':
+			currentCommand := current.String()
+			if len(currentCommand) > 0 && currentCommand[len(currentCommand)-1] == '>' {
+				current.WriteByte(ch)
+				continue
+			}
 			if i+1 < len(cmd) && cmd[i+1] == '&' {
 				if err := flush("&&"); err != nil {
 					return ParsedShellCommand{}, err
 				}
 				i++
-				continue
-			}
-			if strings.HasSuffix(strings.TrimSpace(current.String()), ">") {
-				current.WriteByte(ch)
 				continue
 			}
 			return ParsedShellCommand{}, fmt.Errorf("blocked shell syntax %q", "&")
@@ -517,7 +518,7 @@ func parseQuotedHeredoc(command string, start int) (string, int, error) {
 }
 
 func normalizeShellWhitespace(segment string) string {
-	trimmed := strings.TrimSpace(segment)
+	trimmed := trimShellBoundaryWhitespace(segment)
 	if trimmed == "" {
 		return ""
 	}
@@ -591,7 +592,30 @@ func normalizeShellWhitespace(segment string) string {
 		}
 	}
 
-	return strings.TrimSpace(normalized.String())
+	return trimShellBoundaryWhitespace(normalized.String())
+}
+
+// trimShellBoundaryWhitespace removes unquoted command separators and padding
+// without erasing an escaped trailing byte. Preserving escaped spaces keeps the
+// normalized approval identity semantically exact; preserving an escaped
+// newline lets ParseShellCommand reject it as a blocked line continuation.
+func trimShellBoundaryWhitespace(command string) string {
+	command = strings.TrimLeft(command, " \t\r\n")
+	for len(command) > 0 {
+		last := len(command) - 1
+		if !strings.ContainsRune(" \t\r\n", rune(command[last])) {
+			break
+		}
+		backslashes := 0
+		for i := last - 1; i >= 0 && command[i] == '\\'; i-- {
+			backslashes++
+		}
+		if backslashes%2 == 1 {
+			break
+		}
+		command = command[:last]
+	}
+	return command
 }
 
 func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultStr string, execErr error) {
