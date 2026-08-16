@@ -321,6 +321,38 @@ func TestQuotedHeredocApprovalIdentityPreservesBodyWhitespace(t *testing.T) {
 	}
 }
 
+func TestParseShellCommandPreservesEscapedTrailingWhitespace(t *testing.T) {
+	t.Parallel()
+
+	parsed, err := ParseShellCommand("printf x\\ \nuptime")
+	if err != nil {
+		t.Fatalf("ParseShellCommand returned unexpected error: %v", err)
+	}
+	if len(parsed.Segments) != 2 || len(parsed.Operators) != 1 || parsed.Operators[0] != "\n" {
+		t.Fatalf("unexpected parsed command: %#v", parsed)
+	}
+	if got := parsed.Segments[0].Normalized; got != "printf x\\ " {
+		t.Fatalf("escaped trailing space changed approval identity: %q", got)
+	}
+	if _, err := ParseShellCommand(parsed.Segments[0].Normalized + "\n" + parsed.Segments[1].Normalized); err != nil {
+		t.Fatalf("normalized command did not round-trip: %v", err)
+	}
+}
+
+func TestParseShellCommandRejectsSeparatedRedirectionAmpersand(t *testing.T) {
+	t.Parallel()
+
+	if _, err := ParseShellCommand("printf x > &1"); err == nil || !strings.Contains(err.Error(), "blocked shell syntax") {
+		t.Fatalf("expected separated ampersand to fail closed, got %v", err)
+	}
+	if _, err := ParseShellCommand("printf x 2>&1"); err != nil {
+		t.Fatalf("expected adjacent descriptor redirection to remain supported: %v", err)
+	}
+	if _, err := ParseShellCommand("printf x >&&0"); err == nil || !strings.Contains(err.Error(), "blocked shell syntax") {
+		t.Fatalf("expected malformed redirection/operator overlap to fail closed, got %v", err)
+	}
+}
+
 type staticApprover struct {
 	decision ShellApprovalDecision
 	err      error
