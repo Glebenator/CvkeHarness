@@ -73,11 +73,10 @@ func TestCLIHelpShowsPrimaryUserJourneys(t *testing.T) {
 	}
 
 	for _, expected := range []string{
-		"A provider-agnostic Go harness",
+		"Run one bounded operations task and exit",
 		"setup",
 		"run",
-		"chat",
-		"tui",
+		"console",
 		"commands",
 	} {
 		assertContains(t, output, expected)
@@ -127,28 +126,22 @@ func TestChatLocalCommandsStayLocal(t *testing.T) {
 	defer server.Close()
 	paths := writeConfig(t, home, server.URL+"/v1")
 
-	input := strings.Join([]string{
-		"/help",
-		"/memory",
-		"/tools",
-		"/missing",
-		"/exit",
-		"",
-	}, "\n")
-	output, err := runCLI(t, home, input, "chat")
-	if err != nil {
-		t.Fatalf("local command journey failed: %v\n%s", err, output)
-	}
+	output := runConsoleChatJourney(t, home, []consoleChatStep{
+		{input: "/help", waitFor: "Start a fresh in-process chat session"},
+		{input: "/memory", waitFor: "No memory has been retrieved yet"},
+		{input: "/tools", waitFor: "Availability is not authorization"},
+		{input: "/missing", waitFor: "Unknown command: /missing"},
+	})
 
 	for _, expected := range []string{
-		"CvkeHarness chat",
+		"Chat",
 		"/memory",
 		"No memory has been retrieved yet",
-		"Registered capabilities are not authorization",
+		"Registered tools",
+		"Availability is not authorization",
 		"shell_execute",
 		"Unknown command",
 		"Prefix with //",
-		"Exited by user",
 	} {
 		assertContains(t, output, expected)
 	}
@@ -165,7 +158,7 @@ func TestChatLocalCommandsStayLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list chat sessions: %v", err)
 	}
-	if len(sessions) != 1 || sessions[0].TurnCount != 0 || sessions[0].ExitReason != "user_exit" {
+	if len(sessions) != 1 || sessions[0].TurnCount != 0 || sessions[0].ExitReason != "tui_exit" {
 		t.Fatalf("unexpected local-command session: %#v", sessions)
 	}
 }
@@ -176,11 +169,10 @@ func TestToolBackedChatPersistsAndExportsVerifiedTurn(t *testing.T) {
 	defer model.Close()
 	paths := writeConfig(t, home, model.URL+"/v1")
 
-	input := "run the shell command echo E2E_TOOL_OK then confirm the result\n/export\n/exit\n"
-	output, err := runCLI(t, home, input, "chat")
-	if err != nil {
-		t.Fatalf("tool-backed chat journey failed: %v\n%s", err, output)
-	}
+	output := runConsoleChatJourney(t, home, []consoleChatStep{
+		{input: "run the shell command echo E2E_TOOL_OK then confirm the result", waitFor: "Tool-backed response complete."},
+		{input: "/export", waitFor: "Export complete:"},
+	})
 
 	for _, expected := range []string{
 		"echo E2E_TOOL_OK",
@@ -188,24 +180,26 @@ func TestToolBackedChatPersistsAndExportsVerifiedTurn(t *testing.T) {
 		"Tool-backed response complete.",
 		"Export complete",
 		"Private file (0600)",
-		"Tool calls: 1 total, 1 succeeded, 0 failed",
-		"Exited by user",
+		"SUCCEEDED",
 	} {
 		assertContains(t, output, expected)
 	}
 
 	requests := model.Requests()
-	if len(requests) != 3 {
-		t.Fatalf("model received %d requests, want tool call, final response, and verifier", len(requests))
+	if len(requests) != 4 {
+		t.Fatalf("model received %d requests, want classifier, tool call, final response, and verifier", len(requests))
 	}
-	if !toolAdvertised(requests[0], "shell_execute") {
-		t.Fatalf("first model request did not advertise shell_execute: %#v", requests[0].Tools)
+	if len(requests[0].Tools) != 0 || !strings.Contains(lastMessage(requests[0]).Content, "current_user_prompt") {
+		t.Fatalf("first model request was not the advisory task classifier: %#v", requests[0])
 	}
-	if last := lastMessage(requests[1]); last.Role != "tool" || !strings.Contains(last.Content, "E2E_TOOL_OK") {
-		t.Fatalf("second model request did not contain the shell result: %#v", last)
+	if !toolAdvertised(requests[1], "shell_execute") {
+		t.Fatalf("second model request did not advertise shell_execute: %#v", requests[1].Tools)
 	}
-	if last := lastMessage(requests[2]); last.Role != "user" || !strings.Contains(last.Content, "assistant_final_output") {
-		t.Fatalf("third model request was not completion verification: %#v", last)
+	if last := lastMessage(requests[2]); last.Role != "tool" || !strings.Contains(last.Content, "E2E_TOOL_OK") {
+		t.Fatalf("third model request did not contain the shell result: %#v", last)
+	}
+	if last := lastMessage(requests[3]); last.Role != "user" || !strings.Contains(last.Content, "assistant_final_output") {
+		t.Fatalf("fourth model request was not completion verification: %#v", last)
 	}
 
 	if _, err := os.Stat(paths.stateDB); err != nil {
@@ -220,7 +214,7 @@ func TestToolBackedChatPersistsAndExportsVerifiedTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list chat sessions: %v", err)
 	}
-	if len(sessions) != 1 || sessions[0].TurnCount != 1 || sessions[0].ExitReason != "user_exit" {
+	if len(sessions) != 1 || sessions[0].TurnCount != 1 || sessions[0].ExitReason != "tui_exit" {
 		t.Fatalf("unexpected persisted sessions: %#v", sessions)
 	}
 	detail, err := store.GetChatSessionDetail(context.Background(), sessions[0].ID)
@@ -296,12 +290,12 @@ func TestManualApprovalOnceExecutesExactCommandWithoutRemembering(t *testing.T) 
 		true,
 	)
 	for _, expected := range []string{
-		"Action requires approval",
+		"APPROVAL REQUIRED",
 		"echo E2E_TOOL_OK",
-		"Approve once",
+		"approve once + continue",
+		"APPROVED ONCE",
 		"E2E_TOOL_OK",
 		"Tool-backed response complete.",
-		"Exited by user",
 	} {
 		assertContains(t, output, expected)
 	}
@@ -311,8 +305,8 @@ func TestManualApprovalOnceExecutesExactCommandWithoutRemembering(t *testing.T) 
 		t.Fatalf("model received %d requests, want tool call, final response, and verifier", len(requests))
 	}
 	toolResult := lastMessage(requests[1])
-	if toolResult.Role != "tool" || !strings.Contains(toolResult.Content, "approved by the user for this run only") || !strings.Contains(toolResult.Content, "E2E_TOOL_OK") {
-		t.Fatalf("approved tool result did not preserve one-time approval evidence: %#v", toolResult)
+	if toolResult.Role != "tool" || !strings.Contains(toolResult.Content, "E2E_TOOL_OK") {
+		t.Fatalf("approved tool result did not preserve the exact execution result: %#v", toolResult)
 	}
 
 	store := state.Open(paths.stateDB)
@@ -324,9 +318,16 @@ func TestManualApprovalOnceExecutesExactCommandWithoutRemembering(t *testing.T) 
 	if len(approvals) != 0 {
 		t.Fatalf("approve-once unexpectedly persisted reusable approvals: %#v", approvals)
 	}
+	grants, err := store.ListSecurityActionGrants(context.Background())
+	if err != nil {
+		t.Fatalf("list scoped action grants: %v", err)
+	}
+	if len(grants) != 1 || grants[0].RemainingUses != 0 || grants[0].UsedAt.IsZero() {
+		t.Fatalf("approval continuation did not atomically consume one exact grant: %#v", grants)
+	}
 }
 
-func TestManualApprovalRejectionPreventsExecution(t *testing.T) {
+func TestUnapprovedManualActionNeverExecutes(t *testing.T) {
 	home := t.TempDir()
 	marker := filepath.Join(home, "rejected-command-must-not-run")
 	command := "touch " + marker
@@ -342,13 +343,11 @@ func TestManualApprovalRejectionPreventsExecution(t *testing.T) {
 		false,
 	)
 	for _, expected := range []string{
-		"Action requires approval",
+		"APPROVAL REQUIRED",
 		"touch",
-		filepath.Base(marker),
-		"Reject command",
-		"user denied command execution",
-		"Command was rejected and not executed.",
-		"Exited by user",
+		"touch filesystem mutation is ask",
+		"approve once + continue",
+		"turn canceled before completion verification",
 	} {
 		assertContains(t, output, expected)
 	}
@@ -357,12 +356,14 @@ func TestManualApprovalRejectionPreventsExecution(t *testing.T) {
 	}
 
 	requests := model.Requests()
-	if len(requests) != 3 {
-		t.Fatalf("model received %d requests, want tool call, rejection response, and verifier", len(requests))
+	if len(requests) != 2 {
+		t.Fatalf("model received %d requests, want only classifier plus the original blocked tool proposal", len(requests))
 	}
-	toolResult := lastMessage(requests[1])
-	if toolResult.Role != "tool" || !strings.Contains(toolResult.Content, "user denied command execution") {
-		t.Fatalf("model did not receive the rejection as a tool failure: %#v", toolResult)
+	if len(requests[0].Tools) != 0 || !strings.Contains(lastMessage(requests[0]).Content, "current_user_prompt") {
+		t.Fatalf("first request was not the advisory classifier: %#v", requests[0])
+	}
+	if !toolAdvertised(requests[1], "shell_execute") {
+		t.Fatalf("second request was not the original blocked tool proposal: %#v", requests[1])
 	}
 
 	store := state.Open(paths.stateDB)
@@ -376,8 +377,15 @@ func TestManualApprovalRejectionPreventsExecution(t *testing.T) {
 		t.Fatalf("get rejected-command detail: turns=%#v err=%v", detail.Turns, err)
 	}
 	outcomes := detail.ToolsByTurnID[detail.Turns[0].ID]
-	if len(outcomes) != 1 || outcomes[0].Success || !outcomes[0].PolicyDenied {
-		t.Fatalf("rejected command was not persisted as a policy-denied failure: %#v", outcomes)
+	if len(outcomes) != 1 || outcomes[0].Success || !strings.Contains(outcomes[0].ErrorMessage, "approval wait interrupted") {
+		t.Fatalf("interrupted approval wait was not persisted as a non-executed tool outcome: %#v", outcomes)
+	}
+	blocked, err := store.ListBlockedWork(context.Background())
+	if err != nil {
+		t.Fatalf("list blocked work: %v", err)
+	}
+	if len(blocked) != 1 || blocked[0].TaskState != state.TaskStateBlockedWaitingUser {
+		t.Fatalf("unapproved action did not remain explicitly blocked: %#v", blocked)
 	}
 }
 
@@ -436,6 +444,73 @@ func runCLI(t *testing.T, home, input string, args ...string) (string, error) {
 		t.Fatalf("command timed out: cvkeharness %s\n%s", strings.Join(args, " "), output)
 	}
 	return stripANSI(string(output)), err
+}
+
+type consoleChatStep struct {
+	input   string
+	waitFor string
+}
+
+func runConsoleChatJourney(t *testing.T, home string, steps []consoleChatStep) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	command := exec.CommandContext(ctx, testBinaryPath, "console", "--view", "chat")
+	command.Dir = repositoryRoot
+	command.Env = userTestEnv(home)
+	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 36, Cols: 100})
+	if err != nil {
+		t.Fatalf("start console PTY: %v", err)
+	}
+
+	buffer := &lockedBuffer{}
+	copyDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(buffer, terminal)
+		close(copyDone)
+	}()
+
+	abort := func(message string) {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		_ = terminal.Close()
+		t.Fatalf("%s:\n%s", message, stripANSI(buffer.String()))
+	}
+	if !waitForOutput(buffer, "Ask CvkeHarness", 5*time.Second) {
+		abort("console Chat view did not appear")
+	}
+	for _, step := range steps {
+		// Enter focuses the composer when it is blurred and is a no-op when an
+		// already-focused empty composer is ready for the next step.
+		if _, err := terminal.Write([]byte("\r" + step.input + "\r")); err != nil {
+			abort("write console chat input: " + err.Error())
+		}
+		if !waitForOutput(buffer, step.waitFor, 10*time.Second) {
+			abort("console Chat step did not render " + step.waitFor)
+		}
+	}
+	if _, err := terminal.Write([]byte("\x03")); err != nil {
+		abort("quit console: " + err.Error())
+	}
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- command.Wait() }()
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("console exited with error: %v\n%s", err, stripANSI(buffer.String()))
+		}
+	case <-ctx.Done():
+		_ = command.Process.Kill()
+		t.Fatalf("console did not exit after Ctrl+C:\n%s", stripANSI(buffer.String()))
+	}
+	_ = terminal.Close()
+	select {
+	case <-copyDone:
+	case <-time.After(time.Second):
+	}
+	return stripANSI(buffer.String())
 }
 
 func runSetupToProviderAndQuit(t *testing.T, home string, width uint16) string {
@@ -501,12 +576,12 @@ func runChatApprovalDecision(t *testing.T, home, prompt, finalOutput string, app
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	command := exec.CommandContext(ctx, testBinaryPath, "chat")
+	command := exec.CommandContext(ctx, testBinaryPath, "console", "--view", "chat")
 	command.Dir = repositoryRoot
 	command.Env = userTestEnv(home)
 	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 32, Cols: 100})
 	if err != nil {
-		t.Fatalf("start chat PTY: %v", err)
+		t.Fatalf("start console Chat PTY: %v", err)
 	}
 
 	buffer := &lockedBuffer{}
@@ -522,31 +597,38 @@ func runChatApprovalDecision(t *testing.T, home, prompt, finalOutput string, app
 		_ = terminal.Close()
 		t.Fatalf("%s:\n%s", message, stripANSI(buffer.String()))
 	}
-	if !waitForOutput(buffer, "You> ", 5*time.Second) {
-		abort("chat prompt did not appear")
+	if !waitForOutput(buffer, "Ask CvkeHarness", 5*time.Second) {
+		abort("console Chat view did not appear")
 	}
-	if _, err := terminal.Write([]byte(prompt + "\r")); err != nil {
+	if _, err := terminal.Write([]byte("\r" + prompt + "\r")); err != nil {
 		abort("write chat prompt: " + err.Error())
 	}
-	if !waitForOutput(buffer, "Action requires approval", 5*time.Second) {
+	if !waitForOutput(buffer, "approve once + continue", 5*time.Second) {
 		abort("manual approval prompt did not appear")
 	}
 	if approve {
-		if _, err := terminal.Write([]byte("\x1b[B")); err != nil {
-			abort("select approve once: " + err.Error())
+		if _, err := terminal.Write([]byte("a")); err != nil {
+			abort("approve once and continue: " + err.Error())
 		}
-		if !waitForOutput(buffer, "Approve once ─", 2*time.Second) {
-			abort("approve-once selection did not receive focus")
+		if !waitForOutput(buffer, "APPROVED ONCE", 5*time.Second) {
+			abort("console did not confirm the exact one-time grant")
+		}
+		if !waitForOutput(buffer, finalOutput, 10*time.Second) {
+			abort("chat did not render the post-approval response")
+		}
+	} else {
+		if _, err := terminal.Write([]byte("\x1b")); err != nil {
+			abort("interrupt unapproved turn: " + err.Error())
+		}
+		if !waitForOutput(buffer, "turn canceled before completion verification", 5*time.Second) {
+			abort("console did not interrupt the unapproved turn")
+		}
+		if !waitForPersistedChatTurn(filepath.Join(home, ".cvkeharness", "state.db"), 5*time.Second) {
+			abort("console did not finish persisting the interrupted turn")
 		}
 	}
-	if _, err := terminal.Write([]byte("\r")); err != nil {
-		abort("confirm approval decision: " + err.Error())
-	}
-	if !waitForOutput(buffer, finalOutput, 5*time.Second) {
-		abort("chat did not render the post-decision response")
-	}
-	if _, err := terminal.Write([]byte("/exit\r")); err != nil {
-		abort("write chat exit: " + err.Error())
+	if _, err := terminal.Write([]byte("\x03")); err != nil {
+		abort("quit console: " + err.Error())
 	}
 
 	waitDone := make(chan error, 1)
@@ -554,11 +636,11 @@ func runChatApprovalDecision(t *testing.T, home, prompt, finalOutput string, app
 	select {
 	case err := <-waitDone:
 		if err != nil {
-			t.Fatalf("chat exited with error after approval decision: %v\n%s", err, stripANSI(buffer.String()))
+			t.Fatalf("console exited with error after approval decision: %v\n%s", err, stripANSI(buffer.String()))
 		}
 	case <-ctx.Done():
 		_ = command.Process.Kill()
-		t.Fatalf("chat did not exit after approval decision:\n%s", stripANSI(buffer.String()))
+		t.Fatalf("console did not exit after approval decision:\n%s", stripANSI(buffer.String()))
 	}
 	_ = terminal.Close()
 	select {
@@ -573,6 +655,26 @@ func waitForOutput(buffer *lockedBuffer, expected string, timeout time.Duration)
 	for time.Now().Before(deadline) {
 		if strings.Contains(stripANSI(buffer.String()), expected) {
 			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return false
+}
+
+func waitForPersistedChatTurn(stateDB string, timeout time.Duration) bool {
+	store := state.Open(stateDB)
+	defer store.Close()
+	if !store.Available() {
+		return false
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		sessions, err := store.ListRecentChatSessions(context.Background(), 1)
+		if err == nil && len(sessions) == 1 {
+			detail, detailErr := store.GetChatSessionDetail(context.Background(), sessions[0].ID)
+			if detailErr == nil && len(detail.Turns) == 1 {
+				return true
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

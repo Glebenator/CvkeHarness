@@ -108,8 +108,18 @@ func (s *dashboardChatSession) Tools() []agent.ChatTool { return s.conversation.
 
 func (s *dashboardChatSession) Turn(ctx context.Context, prompt string) (agent.ChatTurnResult, error) {
 	result, err := s.conversation.Turn(ctx, prompt)
-	recordChatTurn(ctx, s.store, s.sessionID, prompt, result)
+	recordChatTurn(chatPersistenceContext(ctx), s.store, s.sessionID, prompt, result)
 	return result, err
+}
+
+func chatPersistenceContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	// Canceling provider/tool work must not discard the local audit record
+	// produced by that work. Values remain available, but cancellation and
+	// deadlines do not leak into the short SQLite persistence step.
+	return context.WithoutCancel(ctx)
 }
 
 func (s *dashboardChatSession) ApproveBlockedWork(ctx context.Context, workID string) (state.SecurityActionGrant, error) {

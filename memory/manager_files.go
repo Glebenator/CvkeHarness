@@ -1443,15 +1443,17 @@ Every run receives instructions in this order:
 
 1. Built-in runtime rules
 2. guidance.md
-3. a compact host-target-memory brief from targets.md, playbooks.md, cautions.md, and findings.md
+3. a compact host-target-memory brief filtered from canonical SQLite state
 
-## Managed Files
+## Managed Surfaces
 
 - guidance.md: User-authored operating guidance and collaboration style.
-- targets.md: Target registry, aliases, and concise verified target facts, including the runtime host.
-- playbooks.md: Durable target-specific procedures with verify/action/success-check sections.
-- findings.md: Manual or ad hoc observations only.
-- cautions.md: Target-specific negative memory for bad or unreliable approaches.
+- targets.md: Generated target inventory, lifecycle, and fact view.
+- playbooks.md: Generated candidate and active procedure view with verify/action/success-check sections.
+- findings.md: Generated target-scoped finding and candidate view.
+- cautions.md: Generated target-scoped caution and candidate view.
+
+Generated views are inspection and explicit validated-import material. They are not runtime authority or an authorization surface.
 
 ## Memory Boundaries
 

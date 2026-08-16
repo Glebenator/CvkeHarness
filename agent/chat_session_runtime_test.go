@@ -959,12 +959,6 @@ func TestChatConversationCancellationCompletesPendingToolMessage(t *testing.T) {
 		case 1:
 			return assistantToolCall("cancel-call", "schedule_manage", `{"action":"add"}`), nil
 		case 2:
-			last := req.Messages[len(req.Messages)-1]
-			if last.Role != "tool" || last.ToolCallID != "cancel-call" || !strings.Contains(last.Content, "approval wait interrupted") {
-				return nil, fmt.Errorf("canceled approval left an invalid tool sequence: %#v", last)
-			}
-			return nil, ctx.Err()
-		case 3:
 			roles := make([]string, 0, len(req.Messages))
 			for _, message := range req.Messages {
 				roles = append(roles, message.Role)
@@ -1029,6 +1023,9 @@ func TestChatConversationCancellationCompletesPendingToolMessage(t *testing.T) {
 	}
 	if history := session.History(); len(history) != 3 || history[2].Role != "tool" || history[2].ToolCallID != "cancel-call" {
 		t.Fatalf("canceled approval left incomplete conversation history: %#v", history)
+	}
+	if p.call != 1 {
+		t.Fatalf("canceled approval triggered an extra provider call: %d", p.call)
 	}
 	result, err := session.Turn(context.Background(), "what happened?")
 	if err != nil {

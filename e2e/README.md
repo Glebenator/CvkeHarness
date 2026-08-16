@@ -21,13 +21,13 @@ go test -tags=e2e ./e2e -v
 
 | Journey | User-visible contract | Side-effect assertion |
 | --- | --- | --- |
-| Command discovery | Root help exposes setup, run, chat, TUI, and approvals | None |
+| Command discovery | Root help exposes setup, bounded run, Console, and approvals | None |
 | First-run failure | An unconfigured task tells the user to run setup | No config is created |
 | Guided setup | Keyboard navigation reaches provider selection at 80, 100, and 120 columns | Quitting early saves nothing |
-| Local chat commands | Help, memory, tools, unknown-command handling, and exit remain usable | Zero model requests; zero turns persisted |
-| Tool-backed chat | A model-requested allowlisted command shows output and a verified final response | Tool outcome and turn are persisted |
-| Manual approval | The exact command is shown; approve-once runs without being remembered | No reusable approval is persisted |
-| Manual rejection | Rejecting a non-allowlisted command surfaces the denial | A filesystem marker is not created; denial is persisted |
+| Local Console chat commands | Help, memory, tools, unknown-command handling, and exit remain usable | Zero model requests; zero turns persisted |
+| Tool-backed Console chat | A model-requested allowlisted command shows output and a verified final response | Tool outcome and turn are persisted |
+| Manual approval continuation | The inline policy reason and exact action are shown; `a` creates one scoped grant and continues the same turn | The exact grant is atomically consumed; no legacy reusable approval is persisted |
+| Unapproved interruption | Leaving an approval ungranted and interrupting the turn never runs the proposed action | A filesystem marker is not created; blocked work and the interrupted outcome remain inspectable |
 | Chat export | `/export` produces a readable transcript | Export file is mode `0600` |
 | Approval management | `commands approve` is visible in `commands list` | Approval survives a second process |
 
@@ -45,8 +45,8 @@ go test -tags=e2e ./e2e -v
 ## Deliberate baseline limits
 
 The setup PTY coverage stops at provider selection; it does not yet exercise
-credential validation or review/save. The line-oriented chat covers local
-commands, while the Bubble Tea chat's focus, cancellation, and tool-row
-lifecycle remain covered by package tests rather than this executable suite.
-The model boundary is hermetic, so these tests are not evidence of live-provider
-authentication or availability.
+credential validation or review/save. The executable suite drives the Bubble
+Tea Console Chat at a representative 100-column viewport; broader focus,
+scrolling, cancellation, approval, and tool-row layout cases remain covered by
+package tests at 80, 100, and 120 columns. The model boundary is hermetic, so
+these tests are not evidence of live-provider authentication or availability.
