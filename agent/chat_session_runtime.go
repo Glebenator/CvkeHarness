@@ -611,6 +611,11 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 			turnChat.AddToolResult(call.ID, resultStr)
 			c.history.Add(toolMessage)
 			transcript = append(transcript, toolMessage)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				// Complete the assistant/tool pair in local history, but never send
+				// another provider request after an interrupted approval wait.
+				return phaseRecord, latestVerificationRecord, latestVerification, toolOutcomes, observedCalls, targetResolution, transcript, "", ctxErr
+			}
 		}
 	}
 

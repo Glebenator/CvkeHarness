@@ -1179,9 +1179,17 @@ func TestLiveChatSurfacesApprovalAndInterruptionStates(t *testing.T) {
 	}
 
 	tab.stopping = true
+	tab.pendingApproval = &pendingChatApproval{workID: "blocked-interrupted"}
+	tab.approvalInFlight = true
 	tab.applyTurnResult(agent.ChatTurnResult{TaskState: state.TaskStateIncomplete}, nil)
 	if tab.status != "INTERRUPTED" {
 		t.Fatalf("expected interrupted state, got %q", tab.status)
+	}
+	if tab.pendingApproval != nil || tab.approvalInFlight {
+		t.Fatalf("interrupted turn retained a stale approval action: pending=%#v in_flight=%t", tab.pendingApproval, tab.approvalInFlight)
+	}
+	if hints := strings.Join(tab.StatusHints(), " "); strings.Contains(hints, "approve once + continue") {
+		t.Fatalf("interrupted turn still advertised a stale approval action: %q", hints)
 	}
 	tab.refreshViewport()
 	if view := tab.viewport.View(); !strings.Contains(view, "Outcome: NOT RUN") || !strings.Contains(view, "turn canceled before completion verification") {

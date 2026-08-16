@@ -1504,9 +1504,15 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 		}
 	case state.TaskStateCompleted:
 		t.pendingApproval = nil
+		t.approvalInFlight = false
 		t.status = "READY"
 		t.statusDetail = "turn completed"
 	default:
+		// Once a turn has finished or been interrupted, its in-process waiter no
+		// longer exists. Do not leave a stale approval action that can only fail
+		// or be mistaken for authority over a later turn.
+		t.pendingApproval = nil
+		t.approvalInFlight = false
 		if err != nil && !errors.Is(err, context.Canceled) {
 			t.status = "FAILED"
 		} else if errors.Is(err, context.Canceled) || t.stopping {
