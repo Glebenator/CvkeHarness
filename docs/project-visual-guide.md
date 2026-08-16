@@ -26,8 +26,8 @@ flowchart TD
     tools["tools.Registry\nshell_execute\nmemory_record_finding"]
     memory["memory.Manager"]
     store["state.Store\n~/.cvkeharness/state.db"]
-    provider["provider.Provider\nOpenRouter or LM Studio"]
-    files["Readable managed files\nguidance.md\ntargets.md\nplaybooks.md\nfindings.md\ncautions.md"]
+    provider["provider.Provider\nCodex, OpenRouter, OpenAI, or LM Studio"]
+    files["guidance.md + generated views\ntargets.md\nplaybooks.md\nfindings.md\ncautions.md"]
     safety["safety package\nscorecard + redteam"]
     telemetry["telemetry/live/events.jsonl\ncanonical runtime events"]
 
@@ -56,10 +56,10 @@ flowchart TD
 
 Key idea: the CLI builds one runtime from config, provider, router, tool registry, memory manager, and SQLite state, then hands control to `agent.Agent`.
 
-The runtime is intentionally split into two worlds:
+The runtime keeps two persistence roles distinct:
 
-- readable files for durable operator understanding
-- SQLite for routing stats, approvals, indexing, chat history, and operational memory lookup
+- `guidance.md` for user-authored prompt context plus generated Markdown views for operator inspection and explicit validated import
+- SQLite for canonical operational memory, routing stats, exact action grants, chat history, and runtime records
 
 ## 2. Context Management
 
@@ -73,7 +73,7 @@ flowchart TD
     retrieval["core.RetrievalContext\nphase + task_class + active_model\n+ runtime_host_id + target_id\n+ target_kind + tool_names + trouble"]
     ensure["memory.Manager.EnsureFiles()"]
     files["Read guidance.md"]
-    stateLoad["LoadOperationalMemory()\nor parse markdown fallback"]
+    stateLoad["LoadOperationalMemory()\nfrom canonical SQLite\nfail closed if unavailable"]
     rank["Select one compact brief\nruntime host summary\n+ optional target summary\n+ optional playbook\n+ optional caution\n+ optional finding"]
     stack["buildPromptPlan()\n1. compiled guidance prefix\n2. stable tool policy\n3. host-target-memory brief\n4. volatile turn context"]
     chat["agent.ChatState"]
@@ -177,82 +177,72 @@ That means a model can be preferred for execution on debugging tasks with `shell
 
 ## 5. Operational Memory Lifecycle
 
-Memory is now target-aware and structured around verified operational outcomes.
+Memory is target-aware, canonical in SQLite, and review-gated.
 
 ```mermaid
 flowchart TD
     task["Task or chat turn"]
-    resolve["Resolve target\nruntime host or remote target"]
-    run["Execute tools and collect outcomes"]
-    facts["Extract cheap verified host facts\nhostname, os-release,\npackage manager,\nservice manager,\ncontainer runtime"]
-    success{"Verified successful sequence?"}
-    playbook["Create or update\nplaybook"]
+    resolve["Resolve exact target\nruntime host or provisional remote target"]
+    run["Execute tools and collect bounded outcomes"]
+    verifier{"Completion verifier\nand explicit postcondition satisfied?"}
+    fact["Typed host-fact candidate"]
+    playbook["Playbook candidate\nwith verifier evidence + success check"]
     failure{"Concrete failure or denial?"}
-    caution["Create or update\ncaution"]
-    note["Optional ad hoc note\nmemory_record_finding"]
-    findings["Write finding"]
-    snapshot["Snapshot managed files"]
-    reindex["Reindex markdown into SQLite"]
-    fallback["If SQLite is unavailable,\nparse markdown directly"]
+    caution["Short-lived caution candidate"]
+    note["memory_record_finding"]
+    finding["Untrusted finding candidate"]
+    sqlite["Persist candidate in canonical SQLite"]
+    views["Regenerate Markdown views\nand snapshot drift"]
+    review{"Operator review"}
+    active["Bounded active memory"]
+    terminal["Rejected, revoked, or expired"]
 
     task --> resolve --> run
-    run --> facts
-    run --> success
-    success -- "yes" --> playbook
+    run --> fact --> sqlite
+    run --> verifier
+    verifier -- "yes" --> playbook --> sqlite
     run --> failure
-    failure -- "yes" --> caution
-    note --> findings
-    facts --> snapshot
-    playbook --> snapshot
-    caution --> snapshot
-    findings --> snapshot --> reindex
-    fallback --> facts
-    fallback --> playbook
-    fallback --> caution
-    fallback --> findings
+    failure -- "yes" --> caution --> sqlite
+    note --> finding --> sqlite
+    sqlite --> views --> review
+    review -- "promote exact record" --> active
+    review -- "reject" --> terminal
+    active -- "revoke or expire" --> terminal
 ```
 
 Important behaviors:
 
-- the runtime host is represented as a normal target inside `targets.md`
-- remote targets live in `targets.md` with aliases and verified facts
-- playbooks only come from successful verified operational sequences
-- cautions come from concrete failures or policy denials
-- `memory_record_finding` is the narrow manual note path, not the main executable memory path
+- remote targets begin with `environment=unknown` and cannot contribute retrievable memory until an operator binds environment and remote identity labels
+- all model-, tool-, and probe-derived records begin as candidates
+- exit code zero alone does not produce a promotable playbook; verifier evidence and a meaningful success check are required
+- candidates never enter prompts before explicit promotion
+- generated Markdown is not a runtime fallback authority
 
-## 6. Retrieval Priorities
+## 6. Retrieval Gates
 
-The retrieval system deliberately favors precision over breadth.
+The retrieval system deliberately favors fail-closed precision over breadth.
 
 ```mermaid
 flowchart TD
     request["Target-aware retrieval request"]
-    runtime["Always include\nruntime-host summary"]
-    exact1["1. exact target + intent + tool"]
-    exact2["2. exact target + intent"]
-    exact3["3. exact target + tool"]
-    caution["4. exact target caution"]
-    fallback["5. fallback finding\nonly if no strong playbook"]
-    render["Render compact brief\nnever whole files"]
+    sqlite["Load canonical SQLite state"]
+    target{"Live, unexpired, exact\ntarget + environment?"}
+    integrity{"Active status, trusted, unexpired,\nvalid evidence hash?"}
+    playbook{"For playbook: meaningful\nsuccess check present?"}
+    select["Select at most one target summary,\none playbook, one caution,\nand one fallback finding"]
+    render["Render historical verify-first brief\nnever whole files"]
+    withhold["Withhold target-scoped memory"]
 
-    request --> runtime --> exact1 --> render
-    request --> exact2 --> render
-    request --> exact3 --> render
-    request --> caution --> render
-    request --> fallback --> render
+    request --> sqlite --> target
+    target -- "no" --> withhold
+    target -- "yes" --> integrity
+    integrity -- "no" --> withhold
+    integrity -- "yes" --> playbook
+    playbook -- "no" --> withhold
+    playbook -- "yes or not a playbook" --> select --> render
 ```
 
-Freshness buckets:
-
-- `fresh`
-- `stale`
-- `cold`
-
-Rendering behavior:
-
-- fresh, high-confidence playbooks can be marked direct-use eligible
-- stale or cold playbooks render as verify-first
-- unrelated target memory does not leak into the brief
+Candidate, rejected, revoked, expired, untrusted, wrong-environment, and tampered records are excluded from every injection path, including target summaries. There is no direct-use mode.
 
 ## 7. Safety Model
 
@@ -261,26 +251,22 @@ Safety is not just one guard. It is a stack of boundaries around shell access pl
 ```mermaid
 flowchart TD
     call["Model requests shell_execute"]
-    parse["ParseShellCommand()\nsegment command\nreject blocked syntax"]
-    blocked["Blocked syntax\nredirection, substitution,\nbackticks, raw newlines,\nsingle &, malformed chains"]
-    allow["Allowlist or learned\napproved segments?"]
-    gate["Secondary approval gate"]
-    judge["LLM judge\nSAFE or DANGEROUS"]
-    user["User confirm\nreject, approve once,\napprove and remember"]
-    remember["Persist approved segments\ninto command_approvals"]
+    parse["Parse command and\nclassify concrete effects"]
+    policy["Evaluate immutable security policy\ndeny > ask > llm_review > allow"]
+    blocked["Deny or malformed action"]
+    judge["Optional advisory LLM review\nnever authority"]
+    user["Human approval\nexact action + effects + policy +\nhost + principal + working directory"]
+    grant["Process-local exact grant or\n15-minute atomic single-use\nsecurity_action_grant"]
     exec["Run sh -c with timeout\ncapture and stream output"]
     events["Emit structured events\nand telemetry"]
 
-    call --> parse
-    parse -- "invalid" --> blocked
-    parse -- "valid" --> allow
-    allow -- "yes" --> exec --> events
-    allow -- "no" --> gate
-    gate --> judge
-    gate --> user
-    judge --> remember
-    user --> remember
-    remember --> exec
+    call --> parse --> policy
+    policy -- "deny" --> blocked
+    policy -- "allow" --> exec --> events
+    policy -- "llm_review" --> judge --> user
+    policy -- "ask" --> user
+    user -- "reject" --> blocked
+    user -- "approve exact action" --> grant --> exec
 ```
 
 The separate safety commands then evaluate those rails from two angles:
@@ -305,7 +291,7 @@ flowchart LR
 
 If we compress the whole codebase into one sentence, it is this:
 
-CvkeHarness is a phase-routed tool-using LLM runtime whose behavior is shaped by a layered prompt stack, approval-aware safety rails, and a compact target-aware operational memory system backed by readable markdown and SQLite indexing.
+CvkeHarness is a phase-routed tool-using LLM runtime whose behavior is shaped by a layered prompt stack, effect-aware safety rails, exact scoped grants, and compact target-aware operational memory that is canonical in SQLite and exposed through generated views.
 
 If you want to re-enter the code quickly, this is the best reading order:
 

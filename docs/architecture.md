@@ -21,7 +21,7 @@ It focuses on:
 | `provider/` | Provider abstraction plus concrete Codex ChatGPT, OpenRouter, OpenAI, and LM Studio adapters. |
 | `router/` | Historical model routing based on SQLite-backed model statistics and approval state. |
 | `tools/` | Tool registry, shell execution guardrails, and ad hoc memory recording tool. |
-| `memory/` | Target-aware readable memory files, target resolution, retrieval brief rendering, deterministic curation, reindex, rollback. |
+| `memory/` | Target resolution, candidate lifecycle, fail-closed retrieval, deterministic curation, generated views, validated import/export, migration, and rollback. |
 | `state/` | SQLite persistence for runs, phases, tool outcomes, routing candidates, approvals, operational memory tables, snapshots, and chat history. |
 | `safety/` | Deterministic scorecard generation and live red-team harness. |
 | `internal/httputil` | Shared HTTP client with timeout and retry/backoff. |
@@ -40,7 +40,7 @@ flowchart TB
         setup["setup / settings\nInteractive wizard"]
         run["run [task]\nPrimary agent runtime"]
         console["console [--view]\nInteractive operations workspace"]
-        memoryCmd["memory show|rollback|reindex"]
+        memoryCmd["memory show|inbox|promote|reject|revoke|delete|export|import|rollback"]
         modelsCmd["models shortlist|approve|stats"]
         commandsCmd["commands list|approve"]
         scorecardCmd["scorecard\nDeterministic safety analysis"]
@@ -86,31 +86,29 @@ flowchart TB
         memoryTool["MemoryRecordFindingTool\nmemory_record_finding"]
         parser["ParseShellCommand\nsyntax segmentation"]
         allowlist["Static allowlist\nconfig.allowed_commands"]
-        learnedApprovals["Learned command approvals\nfrom SQLite"]
-        approver["ShellApprover\nLLM judge or user confirm"]
+        actionGrants["Exact one-time action grants\nsecurity_action_grants"]
+        approver["ShellApprover\nadvisory LLM review or human"]
         hostShell["Host shell\nsh -c"]
     end
 
-    subgraph Memory["Readable Operational Memory (`memory/`)"]
+    subgraph Memory["Operational Memory (`memory/`)"]
         manager["memory.Manager"]
-        ensureFiles["EnsureFiles\nbootstrap files + snapshots dir"]
-        resolveTarget["ResolveTarget\nregistry + alias merge"]
+        ensureFiles["EnsureFiles\nbootstrap or repair generated views"]
+        resolveTarget["ResolveTarget\nexact scope + provisional targets"]
         retrievePlan["RetrievePlan\nruntime summary + target summary + playbook + caution + finding"]
-        curateOutcome["CurateRunOutcome\nfacts + playbooks + cautions + findings"]
-        reindex["Reindex / parse managed markdown files"]
-        guidanceFile["guidance.md"]
-        targetsFile["targets.md"]
-        playbooksFile["playbooks.md"]
-        findingsFile["findings.md"]
-        cautionsFile["cautions.md"]
+        curateOutcome["CurateRunOutcome\ncandidate facts + playbooks + cautions + findings"]
+        reviewLifecycle["Review lifecycle\npromote|reject|revoke|delete"]
+        importExport["Explicit validated import/export"]
+        guidanceFile["guidance.md\nuser-authored prompt context"]
+        generatedViews["targets.md / playbooks.md / findings.md / cautions.md\ngenerated views"]
         snapshotsDir["snapshots/"]
     end
 
     subgraph State["Structured State (`state/`)"]
-        store["state.Store\nSQLite wrapper with graceful degradation"]
+        store["state.Store\nSQLite canonical operational state"]
         runsTable["runs / phase_records / tool_outcomes"]
         statsTable["model_stats / routing_candidates"]
-        approvalsTable["model_approvals / command_approvals"]
+        approvalsTable["model_approvals / security_action_grants\nlegacy command_approvals quarantined"]
         targetsTable["targets / target_aliases"]
         factsTable["host_facts"]
         playbooksTable["playbooks"]
@@ -200,10 +198,10 @@ flowchart TB
     registry --> memoryTool
     shellTool --> parser
     shellTool --> allowlist
-    shellTool --> learnedApprovals
+    shellTool --> actionGrants
     shellTool --> approver
     shellTool --> hostShell
-    learnedApprovals --> store
+    actionGrants --> store
     approver --> providerIface
     approver --> user
     shellTool --> telemetry
@@ -212,28 +210,18 @@ flowchart TB
     manager --> resolveTarget
     manager --> retrievePlan
     manager --> curateOutcome
-    manager --> reindex
-    retrievePlan --> operatorFile
-    retrievePlan --> soulFile
-    retrievePlan --> targetsFile
-    retrievePlan --> hostFile
-    retrievePlan --> playbooksFile
-    retrievePlan --> findingsFile
-    retrievePlan --> cautionsFile
+    manager --> reviewLifecycle
+    manager --> importExport
+    retrievePlan --> guidanceFile
     retrievePlan --> store
-    curateOutcome --> targetsFile
-    curateOutcome --> hostFile
-    curateOutcome --> playbooksFile
-    curateOutcome --> findingsFile
-    curateOutcome --> cautionsFile
+    curateOutcome --> generatedViews
     curateOutcome --> snapshotsDir
     curateOutcome --> store
-    reindex --> targetsFile
-    reindex --> hostFile
-    reindex --> playbooksFile
-    reindex --> findingsFile
-    reindex --> cautionsFile
-    reindex --> store
+    reviewLifecycle --> store
+    importExport --> generatedViews
+    importExport --> snapshotsDir
+    importExport --> store
+    ensureFiles --> generatedViews
 
     store --> runsTable
     store --> statsTable
@@ -281,7 +269,7 @@ sequenceDiagram
     participant P as provider.Provider
     participant SH as ShellTool
     participant DB as state.db
-    participant MEM as managed markdown files
+    participant MEM as guidance + generated views
     participant TEL as telemetry/live/events.jsonl
 
     U->>C: cvkeharness run "task"
@@ -289,11 +277,10 @@ sequenceDiagram
     C->>S: Open(state.db)
     C->>M: NewManager(memoryDir, store)
     C->>M: EnsureFiles()
-    C->>M: Reindex()
-    M->>MEM: Parse targets.md, playbooks.md, findings.md, cautions.md
-    M->>DB: ReplaceOperationalMemory(...)
+    M->>DB: Load canonical operational state
+    M->>MEM: Repair generated views from SQLite if missing or drifted
     C->>T: NewDefaultRegistryWithStoreAndMemory(...)
-    T->>DB: ListCommandApprovals()
+    Note over T,DB: Legacy command approvals are not loaded as authority
     C->>R: New(routingConfigFromConfig(cfg, store))
     C->>A: New(Options{provider, router, memory, tools, store})
     C->>A: Run(task)
@@ -311,7 +298,7 @@ sequenceDiagram
         end
         A->>M: RetrievePlan(planning context)
         M->>MEM: Read guidance.md
-        M->>DB: LoadOperationalMemory() or parse fallback files
+        M->>DB: Load and fail-closed filter canonical memory
         A->>P: ChatCompletion(plan prompt)
         P-->>A: concise planning notes
     end
@@ -320,7 +307,7 @@ sequenceDiagram
     R->>DB: ListModelStats(execution, taskClass, toolset)
     A->>M: RetrievePlan(execution context)
     M->>MEM: Read guidance.md
-    M->>DB: LoadOperationalMemory() or parse fallback files
+    M->>DB: Load and fail-closed filter canonical memory
     A->>A: Build system prompt stack
 
     loop Up to MaxIterations
@@ -333,20 +320,20 @@ sequenceDiagram
                 A->>T: ExecuteTool(call)
                 alt shell_execute
                     T->>SH: Execute(arguments)
-                    SH->>SH: ParseShellCommand / validate allowlist
-                    opt Not auto-approved
-                        SH->>P: LLM judge approval
-                        or
-                        SH->>U: Manual confirm approval
-                        SH->>DB: SaveCommandApproval(...)
+                    SH->>SH: Parse / classify effects / evaluate policy
+                    SH->>DB: Atomically consume exact action grant if present
+                    opt Policy requires a person
+                        SH-->>A: ApprovalRequired(exact captured action)
+                        A-->>U: Blocked work ID + approve-work command
+                        U->>DB: Create one 15-minute, single-use grant
                     end
                     SH->>TEL: RecordEvent(...)
                     SH-->>T: stdout/stderr or error
                     A->>M: ResolveTarget(observed shell command)
                 else memory_record_finding
-                    T->>M: PersistLessons(single finding)
-                    M->>MEM: Update findings.md
+                    T->>M: PersistLessons(untrusted finding candidate)
                     M->>DB: ReplaceOperationalMemory(...)
+                    M->>MEM: Regenerate findings view
                 end
                 T-->>A: Tool result
                 A->>A: Append tool result to ChatState
@@ -360,8 +347,8 @@ sequenceDiagram
     end
 
     A->>M: CurateRunOutcome(observed tool calls + target resolution + output)
-    M->>MEM: Snapshot and rewrite managed files
-    M->>DB: ReplaceOperationalMemory(...)
+    M->>DB: Persist candidate records transactionally
+    M->>MEM: Snapshot drift and regenerate views
     A->>S: RecordRun(run record + phases + tools)
     S->>DB: Insert runs / phase_records / tool_outcomes
     S->>DB: Upsert model_stats
@@ -449,50 +436,53 @@ The registry currently exposes:
 
 1. parse and segment the shell command
 2. reject unsupported syntax such as redirects, command substitution, backgrounding, and malformed chaining
-3. validate each segment against:
-   - the static allowlist from config
-   - previously approved normalized segments from SQLite
-4. if validation fails, defer to a secondary approval gate:
-   - LLM-as-a-judge, or
-   - direct user confirmation
-5. persist newly approved segments for reuse
-6. execute through `sh -c` with timeout
-7. record telemetry with approval mode and outcome
+3. classify filesystem, service, privilege, network, remote, cloud, container, database, schedule, and credential effects
+4. apply the immutable effective security policy with `deny > ask > llm_review > allow`
+5. treat LLM review as advisory and require a person whenever the resulting decision is `ask`
+6. consume only an exact process-local session grant or an atomic, expiring, single-use `security_action_grants` row bound to action, effects, policy, host, principal, and working directory
+7. execute through `sh -c` with timeout and bounded, redacted output
+8. record masked telemetry with approval mode and correlation
 
-The memory note tool is intentionally narrower: it writes reusable ad hoc findings into `findings.md` through the same structured memory manager, but it does not create playbooks or cautions directly.
+Legacy `command_approvals` rows remain inspectable but are not loaded or persisted by the configured security-profile runtime. Tool advertisement is also separate from authorization: non-shell tools pass through registry-level effect policy before their implementation is invoked.
+
+The memory note tool is intentionally narrower: it submits one untrusted target-scoped finding candidate through the structured memory manager. It cannot create policy, permission, approval, playbooks, or cautions, and the candidate is excluded from retrieval until operator promotion.
 
 The optional web tools are read-only public research tools. They call Tavily directly over HTTP, return bounded structured JSON, reject obvious secrets, and prevent `web_fetch` from sending localhost, private, metadata, or internal-looking URLs to the external provider. Successful web-only output is not promoted into target-aware operational memory automatically.
 
 ### 6. Target-aware operational memory
 
-The memory subsystem has a dual representation by design.
+SQLite at the configured `state_db_path` is the only runtime authority for live target inventory and operational knowledge. If it is unavailable, memory retrieval and mutation fail closed.
 
-Readable files in `~/.cvkeharness/`:
+Files in `~/.cvkeharness/`:
 
 - `guidance.md`
+  User-authored prompt context, not policy.
 - `targets.md`
-  Includes the runtime host as a normal target record.
+  Generated target and fact view.
 - `playbooks.md`
+  Generated playbook and candidate view.
 - `findings.md`
+  Generated finding and candidate view.
 - `cautions.md`
+  Generated caution and candidate view.
 
-Structured SQLite metadata:
+Canonical SQLite metadata:
 
 - target registry
 - alias mapping
-- verified host facts
-- durable playbooks
-- provisional findings
-- cautions
+- lifecycle, provenance, evidence hash, trust, environment, freshness, and expiry for facts, playbooks, findings, and cautions
 - snapshots
 
-This split allows:
+The boundary provides:
 
-- user-editable readable files
-- fast scoped retrieval and ranking
+- explicit validated import/export instead of silent file authority
+- generated readable views with drift snapshots
+- one-time legacy Markdown migration into quarantined untrusted candidates
 - deterministic target resolution
-- strict prompt budget enforcement
+- small exact-target retrieval with fail-closed filtering
 - rollback through snapshots
+
+Model-derived findings, verifier-derived procedures, failed-output cautions, and typed probe facts all begin as candidates. Promotion requires exact live target scope and valid integrity metadata. Playbooks additionally require a verifier timestamp, evidence reference, and meaningful success check. Retrieval never has a direct-use mode; every selected procedure is a historical verify-first hint.
 
 ### 7. State database
 
@@ -500,12 +490,13 @@ This split allows:
 
 - runtime observability through `runs`, `phase_records`, and `tool_outcomes`
 - adaptive routing through `model_stats` and `routing_candidates`
-- approval memory through `model_approvals` and `command_approvals`
-- operational memory indexing through `targets`, `target_aliases`, `host_facts`, `playbooks`, `findings`, and `cautions`
+- model-routing decisions through `model_approvals`
+- exact one-time execution authority through `security_action_grants`, with legacy `command_approvals` quarantined
+- canonical operational memory through `targets`, `target_aliases`, `host_facts`, `playbooks`, `findings`, and `cautions`
 - rollback support through `snapshots`
 - chat history through `chat_sessions`, `chat_turns`, and `chat_messages`
 
-An important resilience detail: the store degrades to an unavailable/no-op style if SQLite cannot be opened. The CLI warns and continues with file-backed memory fallback where possible.
+Some non-memory runtime paths can report a degraded store, but operational memory deliberately does not fall back to Markdown. Its CLI and runtime paths fail closed until SQLite is available.
 
 ### 8. Provider abstraction and HTTP behavior
 
@@ -548,9 +539,9 @@ The red-team harness deliberately reuses `agent.Agent`, which means the safety w
 
 - clear composition roots for bounded work in `cmd/run.go` and interactive work in `cmd/tui.go`
 - good separation between orchestration, routing, tools, memory, persistence, and providers
-- target-aware memory balances human readability with deterministic retrieval
+- target-aware memory combines generated readable views with deterministic, canonical retrieval
 - routing is adaptive but still approval-bounded
-- shell execution is guarded by both syntax restrictions and approval workflows
+- shell and non-shell execution are guarded by effect policy and exact scoped approval workflows
 - safety tooling is first-class rather than bolted on
 - SQLite-backed stats make learning and auditability possible without external infrastructure
 
