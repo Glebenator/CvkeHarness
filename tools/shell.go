@@ -822,16 +822,7 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 	return result, nil
 }
 
-func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedShellCommand, decision ShellApprovalDecision) {
-	source := decision.Mode
-	if source == "" {
-		source = "unknown"
-	}
-	rationale := strings.TrimSpace(decision.HistoryNote)
-	if rationale == "" {
-		rationale = "approved after secondary review"
-	}
-
+func (s *ShellTool) rememberApprovedSegments(_ context.Context, parsed ParsedShellCommand, _ ShellApprovalDecision) {
 	for _, segment := range parsed.Segments {
 		if segment.Normalized == "" {
 			continue
@@ -843,18 +834,9 @@ func (s *ShellTool) rememberApprovedSegments(ctx context.Context, parsed ParsedS
 			continue
 		}
 
-		if s.approvalStore == nil || !s.approvalStore.Available() {
-			continue
-		}
-		if err := s.approvalStore.SaveCommandApproval(ctx, state.CommandApproval{
-			Command:    segment.Normalized,
-			Status:     state.ApprovalStatusApproved,
-			Source:     source,
-			Rationale:  rationale,
-			ApprovedAt: time.Now().UTC(),
-		}); err != nil {
-			log.FromContext(ctx).Warn("failed to persist command approval", "command", segment.Normalized, "error", err)
-		}
+		// Legacy durable command strings are audit history only. They lack the
+		// exact policy, effect, host, principal, working-directory, expiry, and
+		// single-use bindings required by the current authorization model.
 	}
 }
 

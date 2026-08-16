@@ -31,6 +31,11 @@ func (r *chatRouterStub) Select(context.Context, core.Phase, string, core.TaskCl
 type memoryStub struct {
 	retrievals []core.RetrievalContext
 	resultFn   func(input core.RetrievalContext) memory.RetrievalResult
+	resolution memory.TargetResolution
+}
+
+func (m *memoryStub) ResolveTarget(_ context.Context, _ memory.TargetResolutionInput) (memory.TargetResolution, error) {
+	return m.resolution, nil
 }
 
 func (m *memoryStub) Retrieve(_ context.Context, input core.RetrievalContext) (memory.RetrievalResult, error) {

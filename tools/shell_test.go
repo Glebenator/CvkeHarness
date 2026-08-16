@@ -490,7 +490,7 @@ func TestBlockingApproverReturnsApprovalRequiredError(t *testing.T) {
 	}
 }
 
-func TestShellTool_PersistsApprovedSegments(t *testing.T) {
+func TestShellTool_RemembersApprovedSegmentsOnlyInProcess(t *testing.T) {
 	t.Parallel()
 
 	store := state.Open(t.TempDir() + "/state.db")
@@ -513,8 +513,8 @@ func TestShellTool_PersistsApprovedSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCommandApprovals returned unexpected error: %v", err)
 	}
-	if len(approvals) != 2 {
-		t.Fatalf("expected 2 persisted approvals, got %d", len(approvals))
+	if len(approvals) != 0 {
+		t.Fatalf("durable legacy approvals must remain quarantined, got %#v", approvals)
 	}
 
 	tool.approver = staticApprover{

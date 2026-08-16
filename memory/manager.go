@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -75,8 +76,9 @@ type Lesson struct {
 
 // TargetResolutionInput carries deterministic clues for resolving a target.
 type TargetResolutionInput struct {
-	Task    string
-	Command string
+	Task        string
+	Command     string
+	Environment string
 }
 
 // TargetResolution is the resolved runtime and active target identity.
@@ -84,7 +86,9 @@ type TargetResolution struct {
 	RuntimeHostID string
 	TargetID      string
 	TargetKind    string
+	Environment   string
 	PrimaryName   string
+	Ambiguous     bool
 }
 
 // ObservedToolCall captures a tool invocation for post-run curation.
@@ -92,6 +96,7 @@ type ObservedToolCall struct {
 	ToolName     string
 	Command      string
 	Result       string
+	TargetID     string
 	Success      bool
 	PolicyDenied bool
 	DenialClass  string
@@ -100,13 +105,15 @@ type ObservedToolCall struct {
 
 // RunOutcome is the structured input to deterministic memory curation.
 type RunOutcome struct {
-	Task           string
-	TaskClass      core.TaskClass
-	Intent         string
-	Target         TargetResolution
-	Output         string
-	ExecutionError string
-	ToolCalls      []ObservedToolCall
+	Task                 string
+	TaskClass            core.TaskClass
+	Intent               string
+	Target               TargetResolution
+	Output               string
+	ExecutionError       string
+	VerifiedOutcome      bool
+	VerificationEvidence string
+	ToolCalls            []ObservedToolCall
 }
 
 type fileState struct {
@@ -171,9 +178,10 @@ func allManagedFiles() []string {
 func (m *Manager) loadState(ctx context.Context) (fileState, error) {
 	if m.store != nil && m.store.Available() {
 		mem, err := m.store.LoadOperationalMemory(ctx)
-		if err == nil && (len(mem.Targets) > 0 || len(mem.Playbooks) > 0 || len(mem.Findings) > 0 || len(mem.Cautions) > 0 || len(mem.HostFacts) > 0) {
-			return stateFromOperationalMemory(mem), nil
+		if err != nil {
+			return fileState{}, err
 		}
+		return stateFromOperationalMemory(mem), nil
 	}
-	return m.parseManagedFiles()
+	return fileState{}, fmt.Errorf("SQLite state is unavailable; operational memory fails closed")
 }

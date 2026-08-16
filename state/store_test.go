@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -483,4 +484,83 @@ func TestListRecentModelUsageIncludesRunsAndChat(t *testing.T) {
 
 func timeNowForTest() time.Time {
 	return time.Now().UTC()
+}
+
+func TestLegacyOperationalSchemaIsQuarantinedAndMigratedTransactionally(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "legacy-state.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open returned error: %v", err)
+	}
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, stmt := range []string{
+		`CREATE TABLE targets (
+			id TEXT PRIMARY KEY, kind TEXT NOT NULL, primary_name TEXT NOT NULL,
+			transport TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'active', first_seen_at DATETIME NOT NULL,
+			last_seen_at DATETIME NOT NULL
+		)`,
+		`CREATE TABLE playbooks (
+			id TEXT PRIMARY KEY, target_id TEXT NOT NULL, intent TEXT NOT NULL DEFAULT 'general',
+			tool_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active',
+			title TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0,
+			success_count INTEGER NOT NULL DEFAULT 0, failure_count INTEGER NOT NULL DEFAULT 0,
+			last_verified_at DATETIME NOT NULL, last_used_at DATETIME NOT NULL,
+			created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL,
+			match_terms_json TEXT NOT NULL DEFAULT '[]', preconditions_json TEXT NOT NULL DEFAULT '[]',
+			verify_steps_json TEXT NOT NULL DEFAULT '[]', action_steps_json TEXT NOT NULL DEFAULT '[]',
+			success_checks_json TEXT NOT NULL DEFAULT '[]', notes TEXT NOT NULL DEFAULT ''
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create legacy schema: %v", err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO targets (
+		id, kind, primary_name, transport, confidence, status, first_seen_at, last_seen_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, "legacy-target", "ssh", "legacy.internal", "ssh", 0.8, "active", now, now); err != nil {
+		t.Fatalf("insert legacy target: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO playbooks (
+		id, target_id, intent, tool_name, status, title, confidence, success_count, failure_count,
+		last_verified_at, last_used_at, created_at, updated_at, match_terms_json, preconditions_json,
+		verify_steps_json, action_steps_json, success_checks_json, notes
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"legacy-playbook", "legacy-target", "restart_service", "shell_execute", "active", "Legacy restart", 0.7, 1, 0,
+		now, now, now, now, `[]`, `[]`, `[]`, `["systemctl restart demo"]`, `["systemctl is-active demo"]`, ""); err != nil {
+		t.Fatalf("insert legacy playbook: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	store := Open(path)
+	defer store.Close()
+	if !store.Available() {
+		t.Fatalf("migrated store unavailable: %v", store.Err())
+	}
+	mem, err := store.LoadOperationalMemory(context.Background())
+	if err != nil {
+		t.Fatalf("LoadOperationalMemory returned error: %v", err)
+	}
+	if len(mem.Targets) != 1 || mem.Targets[0].Status != MemoryStatusCandidate || mem.Targets[0].Environment != EnvironmentUnknown {
+		t.Fatalf("legacy target was not quarantined: %#v", mem.Targets)
+	}
+	if len(mem.Playbooks) != 1 || mem.Playbooks[0].Status != MemoryStatusCandidate || mem.Playbooks[0].Trust != MemoryTrustUntrusted || mem.Playbooks[0].EvidenceHash != "" {
+		t.Fatalf("legacy playbook was not quarantined: %#v", mem.Playbooks)
+	}
+
+	notNull, err := columnIsNotNull(context.Background(), store.db, "playbooks", "last_verified_at")
+	if err != nil {
+		t.Fatalf("columnIsNotNull returned error: %v", err)
+	}
+	if notNull {
+		t.Fatal("legacy playbooks.last_verified_at constraint was not relaxed")
+	}
+	mem.Playbooks[0].LastVerifiedAt = time.Time{}
+	if err := store.ReplaceOperationalMemory(context.Background(), mem); err != nil {
+		t.Fatalf("nullable post-migration playbook write failed: %v", err)
+	}
 }

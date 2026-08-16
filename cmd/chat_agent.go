@@ -5,7 +5,6 @@ import (
 
 	"github.com/coolcake/cvkeharness/agent"
 	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/log"
 	"github.com/coolcake/cvkeharness/internal/promptdump"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/router"
@@ -33,10 +32,6 @@ func newChatAgent(
 	if err := mem.EnsureFiles(); err != nil {
 		return nil, err
 	}
-	if err := mem.Reindex(ctx); err != nil {
-		log.FromContext(ctx).Warn("failed to reindex memory metadata", "error", err)
-	}
-
 	promptDumper := promptdump.NewWithRetentionDays(cfg.DebugPromptDumps, cfg.PromptDumpDir, cfg.PromptDumpRetentionDays)
 	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper, blockManualApprovals)
 	if err != nil {
