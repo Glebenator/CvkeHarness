@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
@@ -34,6 +35,20 @@ func (echoTool) Execute(_ context.Context, args json.RawMessage) (string, error)
 
 type runRecorderStub struct {
 	records []state.RunRecord
+}
+
+type capturingMemoryCurator struct {
+	memoryStub
+	outcomes []memory.RunOutcome
+}
+
+func (c *capturingMemoryCurator) PersistLessons(context.Context, []memory.Lesson) error {
+	return nil
+}
+
+func (c *capturingMemoryCurator) CurateRunOutcome(_ context.Context, outcome memory.RunOutcome) error {
+	c.outcomes = append(c.outcomes, outcome)
+	return nil
 }
 
 func (r *runRecorderStub) RecordRun(_ context.Context, record state.RunRecord) error {
@@ -269,6 +284,42 @@ func TestRunScenarioVerificationSatisfied(t *testing.T) {
 	}
 	if len(result.Run.Phases) != 2 || result.Run.Phases[1].Phase != core.PhaseVerification || !result.Run.Phases[1].Success {
 		t.Fatalf("expected successful verification phase, got %#v", result.Run.Phases)
+	}
+}
+
+func TestVerifiedCurationCarriesEvidenceAndPerCallTarget(t *testing.T) {
+	t.Parallel()
+
+	provider := newScriptedProvider(t,
+		scriptedProviderStep{name: "request tool", resp: assistantToolCall("call-1", "echo_tool", `{"text":"tool result"}`)},
+		scriptedProviderStep{name: "final answer", expect: expectLastMessage("tool", "tool result"), resp: assistantText("done")},
+		scriptedProviderStep{name: "verification satisfied", resp: verifierJSON(verificationSatisfied, "health check confirms the requested result", nil, "")},
+	)
+	registry := tools.NewRegistry()
+	registry.Register(echoTool{})
+	curator := &capturingMemoryCurator{memoryStub: memoryStub{resolution: memory.TargetResolution{
+		RuntimeHostID: "runtime-1", TargetID: "target-prod", TargetKind: memory.TargetKindSSH,
+		Environment: "production", PrimaryName: "prod.internal",
+	}}}
+
+	result, err := New(Options{
+		Provider: provider, ProviderName: "openrouter", ToolRegistry: registry,
+		DefaultModel: "test-model", MaxIterations: 3, MaxTokens: 512,
+		MemoryRetriever: curator, MemoryCurator: curator,
+	}).Run(context.Background(), "check prod")
+	if err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+	provider.AssertComplete(t)
+	if result.Verification.Status != verificationSatisfied || len(curator.outcomes) != 1 {
+		t.Fatalf("expected one verified curation outcome, got verification=%#v outcomes=%#v", result.Verification, curator.outcomes)
+	}
+	outcome := curator.outcomes[0]
+	if !outcome.VerifiedOutcome || outcome.VerificationEvidence != "health check confirms the requested result" {
+		t.Fatalf("verification evidence was not carried into curation: %#v", outcome)
+	}
+	if len(outcome.ToolCalls) != 1 || outcome.ToolCalls[0].TargetID != "target-prod" {
+		t.Fatalf("tool call was not attributed to the resolved target: %#v", outcome.ToolCalls)
 	}
 }
 

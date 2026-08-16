@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"os"
 
 	"github.com/coolcake/cvkeharness/internal/promptdump"
@@ -31,9 +30,9 @@ func NewDefaultRegistry(allowedCommands []string, judge provider.Provider, safet
 	return NewDefaultRegistryWithStoreAndMemory(allowedCommands, nil, nil, judge, safetyMode, safetyModel, primaryModel)
 }
 
-// NewDefaultRegistryWithStore creates the standard registry. Legacy runtimes
-// may reuse old command approvals; effect-policy runtimes consume only scoped
-// one-time action grants.
+// NewDefaultRegistryWithStore creates the standard registry. Durable legacy
+// command approvals are quarantined; effect-policy runtimes consume only
+// exact, expiring, one-time action grants.
 func NewDefaultRegistryWithStore(allowedCommands []string, store *state.Store, judge provider.Provider, safetyMode, safetyModel, primaryModel string) *Registry {
 	return NewDefaultRegistryWithStoreAndMemory(allowedCommands, store, nil, judge, safetyMode, safetyModel, primaryModel)
 }
@@ -85,15 +84,6 @@ func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, erro
 		approver = humanApprover
 	}
 
-	var approvedCommands []string
-	if opts.SecurityPolicy == nil && opts.Store != nil && opts.Store.Available() {
-		if approvals, err := opts.Store.ListApprovedCommandApprovals(context.Background()); err == nil {
-			for _, approval := range approvals {
-				approvedCommands = append(approvedCommands, approval.Command)
-			}
-		}
-	}
-
 	if opts.Memory != nil {
 		registry.Register(NewMemoryRecordFindingTool(opts.Memory))
 	}
@@ -108,7 +98,7 @@ func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, erro
 			registry.Register(tool)
 		}
 	}
-	shell := NewShellToolWithApprovals(opts.AllowedCommands, approvedCommands, approver, opts.PrimaryModel, opts.Store)
+	shell := NewShellToolWithApprovals(opts.AllowedCommands, nil, approver, opts.PrimaryModel, opts.Store)
 	if opts.SecurityPolicy != nil {
 		shell.applySecurityPolicy(*opts.SecurityPolicy, humanApprover, llmApprover)
 	}

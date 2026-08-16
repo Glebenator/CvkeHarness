@@ -249,9 +249,6 @@ func newScheduledAgentRunner(ctx context.Context, store *state.Store) (scheduled
 	if err := mem.EnsureFiles(); err != nil {
 		return scheduledAgentRunner{}, err
 	}
-	if err := mem.Reindex(ctx); err != nil {
-		log.FromContext(ctx).Warn("failed to reindex memory metadata", "error", err)
-	}
 	promptDumper := promptdump.NewWithRetentionDays(cfg.DebugPromptDumps, cfg.PromptDumpDir, cfg.PromptDumpRetentionDays)
 	telemetryWriter := telemetryWriterFromConfig(cfg, store)
 	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper, true)

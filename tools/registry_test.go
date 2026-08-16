@@ -39,6 +39,31 @@ func TestDefinitionsForTaskExcludesIrrelevantTools(t *testing.T) {
 	}
 }
 
+func TestDefaultRegistryDoesNotLoadLegacyCommandApprovals(t *testing.T) {
+	t.Parallel()
+
+	store := state.Open(filepath.Join(t.TempDir(), "state.db"))
+	defer store.Close()
+	if err := store.SaveCommandApproval(context.Background(), state.CommandApproval{
+		Command: "printf legacy-authority", Status: state.ApprovalStatusApproved,
+		Source: "legacy-test", ApprovedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SaveCommandApproval returned error: %v", err)
+	}
+	registry := NewDefaultRegistryWithStore([]string{"echo"}, store, nil, SafetyModeUserConfirm, "", "primary")
+	tool, ok := registry.Get("shell_execute")
+	if !ok {
+		t.Fatal("shell_execute was not registered")
+	}
+	shell, ok := tool.(*ShellTool)
+	if !ok {
+		t.Fatalf("shell tool has unexpected type %T", tool)
+	}
+	if shell.approvedCommands["printf legacy-authority"] {
+		t.Fatal("legacy command approval was loaded into execution authorization")
+	}
+}
+
 func TestRegistryConsumesExactToolGrantOnce(t *testing.T) {
 	t.Parallel()
 	policy, err := securitypolicy.Resolve(securitypolicy.DefaultSelection())

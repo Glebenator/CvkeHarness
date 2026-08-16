@@ -541,12 +541,16 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS targets (
 			id TEXT PRIMARY KEY,
 			kind TEXT NOT NULL,
+			environment TEXT NOT NULL DEFAULT 'unknown',
 			primary_name TEXT NOT NULL,
 			transport TEXT NOT NULL DEFAULT '',
+			remote_identity TEXT NOT NULL DEFAULT '',
 			confidence REAL NOT NULL DEFAULT 0,
 			status TEXT NOT NULL DEFAULT 'active',
 			first_seen_at DATETIME NOT NULL,
-			last_seen_at DATETIME NOT NULL
+			last_seen_at DATETIME NOT NULL,
+			verified_at DATETIME,
+			expires_at DATETIME
 		);`,
 		`CREATE TABLE IF NOT EXISTS target_aliases (
 			target_id TEXT NOT NULL,
@@ -559,10 +563,18 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		);`,
 		`CREATE TABLE IF NOT EXISTS host_facts (
 			host_id TEXT NOT NULL,
+			environment TEXT NOT NULL DEFAULT 'unknown',
 			key TEXT NOT NULL,
 			value TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'candidate',
+			source TEXT NOT NULL DEFAULT '',
+			evidence_ref TEXT NOT NULL DEFAULT '',
+			evidence_hash TEXT NOT NULL DEFAULT '',
+			trust TEXT NOT NULL DEFAULT 'untrusted',
 			confidence REAL NOT NULL DEFAULT 0,
+			observed_at DATETIME,
 			verified_at DATETIME NOT NULL,
+			expires_at DATETIME,
 			updated_at DATETIME NOT NULL,
 			PRIMARY KEY(host_id, key),
 			FOREIGN KEY(host_id) REFERENCES targets(id)
@@ -570,14 +582,21 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS playbooks (
 			id TEXT PRIMARY KEY,
 			target_id TEXT NOT NULL,
+			environment TEXT NOT NULL DEFAULT 'unknown',
 			intent TEXT NOT NULL DEFAULT 'general',
 			tool_name TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'active',
+			status TEXT NOT NULL DEFAULT 'candidate',
+			source TEXT NOT NULL DEFAULT '',
+			evidence_ref TEXT NOT NULL DEFAULT '',
+			evidence_hash TEXT NOT NULL DEFAULT '',
+			trust TEXT NOT NULL DEFAULT 'untrusted',
 			title TEXT NOT NULL DEFAULT '',
 			confidence REAL NOT NULL DEFAULT 0,
 			success_count INTEGER NOT NULL DEFAULT 0,
 			failure_count INTEGER NOT NULL DEFAULT 0,
-			last_verified_at DATETIME NOT NULL,
+			observed_at DATETIME,
+			last_verified_at DATETIME,
+			expires_at DATETIME,
 			last_used_at DATETIME NOT NULL,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL,
@@ -592,13 +611,21 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS findings (
 			id TEXT PRIMARY KEY,
 			target_id TEXT NOT NULL,
+			environment TEXT NOT NULL DEFAULT 'unknown',
 			intent TEXT NOT NULL DEFAULT 'general',
 			tool_name TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'active',
+			status TEXT NOT NULL DEFAULT 'candidate',
 			origin TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT '',
+			evidence_ref TEXT NOT NULL DEFAULT '',
+			evidence_hash TEXT NOT NULL DEFAULT '',
+			trust TEXT NOT NULL DEFAULT 'untrusted',
 			body TEXT NOT NULL,
 			confidence REAL NOT NULL DEFAULT 0,
 			seen_count INTEGER NOT NULL DEFAULT 1,
+			observed_at DATETIME,
+			verified_at DATETIME,
+			expires_at DATETIME,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL,
 			FOREIGN KEY(target_id) REFERENCES targets(id)
@@ -606,12 +633,20 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS cautions (
 			id TEXT PRIMARY KEY,
 			target_id TEXT NOT NULL,
+			environment TEXT NOT NULL DEFAULT 'unknown',
 			intent TEXT NOT NULL DEFAULT 'general',
 			tool_name TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'active',
+			status TEXT NOT NULL DEFAULT 'candidate',
+			source TEXT NOT NULL DEFAULT '',
+			evidence_ref TEXT NOT NULL DEFAULT '',
+			evidence_hash TEXT NOT NULL DEFAULT '',
+			trust TEXT NOT NULL DEFAULT 'untrusted',
 			body TEXT NOT NULL,
 			confidence REAL NOT NULL DEFAULT 0,
 			failure_count INTEGER NOT NULL DEFAULT 1,
+			observed_at DATETIME,
+			verified_at DATETIME,
+			expires_at DATETIME,
 			last_seen_at DATETIME NOT NULL,
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL,
@@ -892,13 +927,157 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		`ALTER TABLE scheduled_jobs ADD COLUMN blocked_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE scheduled_jobs ADD COLUMN blocked_work_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE scheduler_health_projection ADD COLUMN claim_lease_ms INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE targets ADD COLUMN environment TEXT NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE targets ADD COLUMN remote_identity TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE targets ADD COLUMN verified_at DATETIME`,
+		`ALTER TABLE targets ADD COLUMN expires_at DATETIME`,
+		`ALTER TABLE host_facts ADD COLUMN environment TEXT NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE host_facts ADD COLUMN status TEXT NOT NULL DEFAULT 'candidate'`,
+		`ALTER TABLE host_facts ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE host_facts ADD COLUMN evidence_ref TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE host_facts ADD COLUMN evidence_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE host_facts ADD COLUMN trust TEXT NOT NULL DEFAULT 'untrusted'`,
+		`ALTER TABLE host_facts ADD COLUMN observed_at DATETIME`,
+		`ALTER TABLE host_facts ADD COLUMN expires_at DATETIME`,
+		`ALTER TABLE playbooks ADD COLUMN environment TEXT NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE playbooks ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE playbooks ADD COLUMN evidence_ref TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE playbooks ADD COLUMN evidence_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE playbooks ADD COLUMN trust TEXT NOT NULL DEFAULT 'untrusted'`,
+		`ALTER TABLE playbooks ADD COLUMN observed_at DATETIME`,
+		`ALTER TABLE playbooks ADD COLUMN expires_at DATETIME`,
+		`ALTER TABLE findings ADD COLUMN environment TEXT NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE findings ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE findings ADD COLUMN evidence_ref TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE findings ADD COLUMN evidence_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE findings ADD COLUMN trust TEXT NOT NULL DEFAULT 'untrusted'`,
+		`ALTER TABLE findings ADD COLUMN observed_at DATETIME`,
+		`ALTER TABLE findings ADD COLUMN verified_at DATETIME`,
+		`ALTER TABLE findings ADD COLUMN expires_at DATETIME`,
+		`ALTER TABLE cautions ADD COLUMN environment TEXT NOT NULL DEFAULT 'unknown'`,
+		`ALTER TABLE cautions ADD COLUMN source TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE cautions ADD COLUMN evidence_ref TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE cautions ADD COLUMN evidence_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE cautions ADD COLUMN trust TEXT NOT NULL DEFAULT 'untrusted'`,
+		`ALTER TABLE cautions ADD COLUMN observed_at DATETIME`,
+		`ALTER TABLE cautions ADD COLUMN verified_at DATETIME`,
+		`ALTER TABLE cautions ADD COLUMN expires_at DATETIME`,
 	}
 	for _, stmt := range optionalColumns {
 		if _, err := db.ExecContext(ctx, stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 			return err
 		}
 	}
+	if err := migrateOperationalMemoryCompatibility(ctx, db); err != nil {
+		return err
+	}
 	return nil
+}
+
+func migrateOperationalMemoryCompatibility(ctx context.Context, db *sql.DB) error {
+	legacyPlaybooks, err := columnIsNotNull(ctx, db, "playbooks", "last_verified_at")
+	if err != nil {
+		return err
+	}
+	if legacyPlaybooks {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS playbooks_memory_migration`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE playbooks_memory_migration (
+			id TEXT PRIMARY KEY,
+			target_id TEXT NOT NULL,
+			environment TEXT NOT NULL DEFAULT 'unknown',
+			intent TEXT NOT NULL DEFAULT 'general',
+			tool_name TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'candidate',
+			source TEXT NOT NULL DEFAULT '',
+			evidence_ref TEXT NOT NULL DEFAULT '',
+			evidence_hash TEXT NOT NULL DEFAULT '',
+			trust TEXT NOT NULL DEFAULT 'untrusted',
+			title TEXT NOT NULL DEFAULT '',
+			confidence REAL NOT NULL DEFAULT 0,
+			success_count INTEGER NOT NULL DEFAULT 0,
+			failure_count INTEGER NOT NULL DEFAULT 0,
+			observed_at DATETIME,
+			last_verified_at DATETIME,
+			expires_at DATETIME,
+			last_used_at DATETIME NOT NULL,
+			created_at DATETIME NOT NULL,
+			updated_at DATETIME NOT NULL,
+			match_terms_json TEXT NOT NULL DEFAULT '[]',
+			preconditions_json TEXT NOT NULL DEFAULT '[]',
+			verify_steps_json TEXT NOT NULL DEFAULT '[]',
+			action_steps_json TEXT NOT NULL DEFAULT '[]',
+			success_checks_json TEXT NOT NULL DEFAULT '[]',
+			notes TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY(target_id) REFERENCES targets(id)
+		)`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO playbooks_memory_migration (
+			id, target_id, environment, intent, tool_name, status, source, evidence_ref, evidence_hash,
+			trust, title, confidence, success_count, failure_count, observed_at, last_verified_at,
+			expires_at, last_used_at, created_at, updated_at, match_terms_json, preconditions_json,
+			verify_steps_json, action_steps_json, success_checks_json, notes
+		) SELECT
+			id, target_id, environment, intent, tool_name, status, source, evidence_ref, evidence_hash,
+			trust, title, confidence, success_count, failure_count, observed_at, last_verified_at,
+			expires_at, last_used_at, created_at, updated_at, match_terms_json, preconditions_json,
+			verify_steps_json, action_steps_json, success_checks_json, notes
+		FROM playbooks`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DROP TABLE playbooks`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE playbooks_memory_migration RENAME TO playbooks`); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	// Rows written before evidence-bound lifecycle metadata existed are retained
+	// for review but cannot remain active merely because an old schema defaulted
+	// them to active.
+	for _, stmt := range []string{
+		`UPDATE targets SET status = 'candidate' WHERE environment = 'unknown' OR expires_at IS NULL`,
+		`UPDATE host_facts SET status = 'candidate', trust = 'untrusted' WHERE evidence_hash = ''`,
+		`UPDATE playbooks SET status = 'candidate', trust = 'untrusted' WHERE evidence_hash = ''`,
+		`UPDATE findings SET status = 'candidate', trust = 'untrusted' WHERE evidence_hash = ''`,
+		`UPDATE cautions SET status = 'candidate', trust = 'untrusted' WHERE evidence_hash = ''`,
+	} {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func columnIsNotNull(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return notNull != 0, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func boolToInt(v bool) int {

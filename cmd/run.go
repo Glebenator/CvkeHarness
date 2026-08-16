@@ -64,7 +64,7 @@ var runCmd = &cobra.Command{
 
 		store := state.Open(cfg.StateDBPath)
 		if store.Err() != nil {
-			fmt.Printf("Warning: state DB unavailable, continuing with file-only memory fallback (%v)\n", store.Err())
+			fmt.Printf("Warning: state DB unavailable; operational memory will fail closed (%v)\n", store.Err())
 		}
 		defer store.Close()
 
@@ -72,9 +72,6 @@ var runCmd = &cobra.Command{
 		if err := mem.EnsureFiles(); err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
-		}
-		if err := mem.Reindex(ctx); err != nil {
-			logger.Warn("failed to reindex memory metadata", "error", err)
 		}
 		promptDumper := promptdump.NewWithRetentionDays(cfg.DebugPromptDumps, cfg.PromptDumpDir, cfg.PromptDumpRetentionDays)
 		telemetryWriter := telemetryWriterFromConfig(cfg, store)
