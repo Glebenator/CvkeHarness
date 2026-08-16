@@ -1,76 +1,161 @@
 # CvkeHarness Memory Model
 
-CvkeHarness keeps operational memory readable, conservative, and target-aware. Markdown remains the authoritative surface; SQLite is a derived index and inspection layer, not a second source of truth.
+CvkeHarness memory is a target-scoped planning aid. It is not an authorization system.
 
-## Design goals
+> Memory may influence what the model proposes. Managed policy and explicit approval determine what the harness may execute.
 
-1. Keep user-authored guidance separate from machine-curated operational facts.
-2. Resolve targets conservatively so filler prose never becomes infrastructure inventory.
-3. Retrieve less when uncertain: one target summary, one primary playbook, one caution, and at most one fallback finding.
-4. Curate only concrete verified facts, successful playbooks, and cautions from failures or policy denials.
-5. Keep `findings.md` manual or ad hoc only.
+## Four state planes
 
-## Managed files
+CvkeHarness keeps four concepts separate:
 
-The memory directory contains:
+1. **Managed policy**: configured safety mode, static command allowlist, approval gates, tool validation, and other operator-owned enforcement. Models and memory cannot edit this plane.
+2. **Live fleet inventory**: deterministic endpoint-label IDs, environment, transport, and operator-confirmed remote identity labels.
+3. **Operational knowledge**: target-scoped facts, playbooks, findings, and cautions. This is historical context, filtered before retrieval and presented as a hint.
+4. **Run state**: current task, tool outcomes, telemetry, and resumable blocked work. It is short-lived execution context, not durable operational truth.
 
-- `guidance.md` — user-authored operating guidance and collaboration style.
-- `targets.md` — the target registry, aliases, verified target facts, and the runtime host as a normal `kind=runtime` target.
-- `playbooks.md` — durable target-specific procedures with verify/action/success-check structure.
-- `cautions.md` — concrete negative memory from failures or policy denials.
-- `findings.md` — manual or ad hoc observations only.
+## Canonical persistence
 
-There is no separate runtime-host file. The machine running CvkeHarness is represented in `targets.md` like every other target.
+SQLite at the configured `state_db_path` is canonical for live fleet inventory and operational knowledge. The runtime fails closed if SQLite is unavailable.
+
+The memory directory contains generated operator views:
+
+- `guidance.md`: user-authored operating guidance. It is part of prompt context, not policy.
+- `targets.md`: generated target inventory and fact view.
+- `playbooks.md`: generated playbook view.
+- `findings.md`: generated finding and candidate view.
+- `cautions.md`: generated caution and candidate view.
+
+Editing a generated Markdown view does not change live memory. Apply manual edits only through the explicit validated import boundary:
+
+```bash
+cvkeharness memory export ./memory-review
+# edit the exported Markdown
+cvkeharness memory import ./memory-review
+```
+
+Import validates target scope, environment, status, trust, expiry, playbook success checks, and known secret markers before atomically replacing canonical operational state. Unchanged records must retain valid integrity metadata. Deliberately edited content receives `source=operator_import`, a validated-import evidence reference, and a recalculated integrity hash. A validation rejection leaves SQLite unchanged. Generated view files are written with atomic file replacement; if a view write fails after the database commit, the import returns an error but SQLite contains the imported state, and `cvkeharness memory export` regenerates the views.
+
+On first startup after an upgrade, if canonical operational tables are empty and legacy managed Markdown contains records, CvkeHarness validates and migrates those records once as `candidate`, `untrusted`, `source=legacy_markdown_migration`. It snapshots the legacy views, refuses known secret markers or malformed scope, and never activates migrated knowledge automatically. After canonical state exists, missing or manually changed generated views are snapshotted and repaired from SQLite rather than silently imported.
 
 ## Target identity
 
-CvkeHarness distinguishes:
+Each live target has:
 
-- `runtime_host_id` — the local machine running the harness.
-- `target_id` — the system the agent is acting on.
-- `target_kind` — one of `runtime`, `ssh`, `local_container`, or `unknown`.
+- an opaque `target_id` derived from the endpoint labels known to CvkeHarness;
+- an `environment`, such as `production` or `staging`;
+- a transport, such as `ssh` or `local`;
+- a transport-specific `remote_identity`, such as `ops@api-01`;
+- a bounded verification time and expiry.
 
-Command parsing is allowed to resolve ordinary command targets. Natural-language prose is intentionally conservative: only strong signals such as `user@host`, IP addresses, or explicit dotted hostnames create or resolve a non-runtime target. Phrases such as “ssh into the container” never mint targets from filler words like `into` or `from`.
+CvkeHarness does not collect a live machine fingerprint, SSH host-key fingerprint, or cloud instance identity. A target binding proves only that an operator associated an endpoint label with an environment; it does not cryptographically prove which machine currently answers that endpoint. Operators must still verify the live endpoint before mutation.
+
+New remote targets are provisional and use `environment=unknown`. Provisional or ambiguous targets cannot use target-scoped operational memory. Bind a target deliberately exactly once:
+
+```bash
+cvkeharness memory target set-environment \
+  target-7f31d4b8c0a1 production ops@api-01
+```
+
+Resolution uses explicit command or prose endpoint labels. An already-bound target cannot be rebound with this command. If a requested environment conflicts with the stored endpoint label, or if the same label maps to more than one environment, resolution returns ambiguous and withholds target-scoped memory.
+
+## Operational knowledge metadata
+
+Facts, playbooks, findings, and cautions carry the minimum retrieval metadata:
+
+- target ID and environment;
+- status: `candidate`, `active`, `rejected`, `revoked`, or `expired`;
+- source and evidence reference;
+- content integrity hash;
+- trust: `untrusted`, `operator`, or `verified`;
+- observed and verified timestamps where applicable;
+- expiry.
+
+Read-time gates require an active, unexpired target, exact target and environment match, active status, operator or verified trust, unexpired knowledge, and a valid integrity hash. Playbooks also require an explicit success check. Rejected, revoked, expired, untrusted, wrong-scope, or tampered records are not retrieved.
+
+## Candidate lifecycle
+
+Model-authored notes and learned procedures enter the review inbox:
+
+```text
+candidate -> operator review -> active -> expired or revoked
+                    \-> rejected
+```
+
+The `memory_record_finding` tool submits an untrusted candidate. Failed tool output creates a redacted, short-lived caution candidate. Successful shell sequences create playbook candidates. None of these candidates enter prompt retrieval until an operator promotes them.
+
+Inspect and review:
+
+```bash
+cvkeharness memory inbox
+cvkeharness memory promote finding <id>
+cvkeharness memory reject caution <id>
+cvkeharness memory revoke playbook <id>
+cvkeharness memory delete finding <id>
+```
+
+Facts use `target_id:key` as their review ID. Promotion is refused when target scope is unknown or mismatched. Playbook promotion is also refused unless a completion verifier recorded a verification timestamp, a non-empty evidence reference, and an explicit success check. Only candidates can be promoted or rejected, and only active records can be revoked. Promotion records operator trust and a bounded expiry; it does not invent missing verifier evidence.
+
+## Verification semantics
+
+Exit code zero means a tool process returned successfully. It does not prove that a service is healthy, a rollout completed, or the requested state exists.
+
+- Typed low-risk probes, such as `hostname` or parsed OS identity output, create bounded candidates. Probe output never rewrites target identity or enters retrieval without operator promotion.
+- A shell sequence remains a candidate playbook.
+- A completion verifier plus an explicit postcondition can strengthen a candidate, but operator promotion is still required.
+- Successful unrelated tool calls never verify target identity.
+- Every retrieved playbook is rendered as a historical, verify-first hint. There is no direct-use mode.
 
 ## Retrieval
 
-Each prompt receives:
+Retrieval is deterministic and small:
 
-1. built-in runtime rules,
-2. compiled guidance from `guidance.md`,
-3. one compact host-target-memory brief.
+1. built-in safety rules;
+2. compiled `guidance.md`;
+3. one runtime-host summary;
+4. at most one exact-scope target summary;
+5. at most one playbook;
+6. at most one caution;
+7. at most one fallback finding when no strong playbook is available.
 
-The compact brief may contain:
+Whole memory files are never injected. Prompt text explicitly states that operational memory is historical context, not policy or authorization.
 
-- one runtime-host summary,
-- one active-target summary,
-- one primary playbook,
-- one caution,
-- one fallback finding only when no strong playbook is available.
+## Approvals are not memory
 
-Retrieval is target-first and intentionally bounded. The runtime never injects whole managed files.
+An LLM safety judgment is advisory under the configured security profile and cannot create durable authority. Operational memory never satisfies an approval check.
 
-## Curation
+`cvkeharness commands approve "<command>"` creates one exact, 15-minute, single-use action grant. `cvkeharness commands approve-work <blocked-work-id>` reconstructs the captured action, rechecks it under the current policy, and creates the same kind of grant for the original executor scope. Each grant is bound to:
 
-Automatic curation may write only:
+- the exact action and classified-effect digest;
+- the immutable effective-policy hash;
+- the local executor host and principal;
+- the resolved working directory;
+- an expiry and one remaining use.
 
-- verified host or target facts,
-- successful playbooks,
-- concrete cautions from failures or policy denials.
+Only a digest and masked summary are persisted. A changed action, effect classification, policy, host, principal, directory, expiry, or spent-use count fails closed. Interactive reuse, when enabled by policy, is process-local and uses the same exact binding; it does not revive legacy `command_approvals` rows. Those rows remain inspectable but quarantined from authorization.
 
-Automatic curation never turns assistant final output into generic findings. If a user or operator wants to preserve a one-off observation, they do it explicitly through `findings.md` or the ad hoc memory tool.
+```bash
+cvkeharness commands approve "systemctl restart api"
+cvkeharness commands approve-work bw_123
+```
 
-## Prompt interaction
+The approval grant is intentionally separate from the memory target label. Operators must still verify the live remote endpoint before mutation; the current implementation does not claim remote machine fingerprinting.
 
-`guidance.md` is compiled into a compact runtime form before prompt assembly. The prompt planner then lays out each request as:
+## Privacy and poisoning resistance
 
-1. compiled guidance prefix,
-2. stable tool policy and schemas,
-3. compact host-target-memory brief,
-4. volatile turn context and conversation history.
+- Obvious credential markers are redacted before candidate persistence.
+- Commands containing likely secrets are not learned as playbooks or facts.
+- Third-party and failed tool output is evidence, not instruction, and remains candidate-only.
+- Evidence hashes detect accidental or manual content changes before retrieval.
+- Avoid placing credentials, private keys, bearer tokens, or unnecessary personal data in guidance, candidates, commands, or imported Markdown.
+- Exported Markdown may contain host identities and operational history. Protect it like internal infrastructure documentation.
 
-This keeps the cacheable prefix stable while preserving a small retrieval surface.
+## Operator recovery
 
-## Persistence contract
+- Inspect current state: `cvkeharness memory show`
+- Review candidates: `cvkeharness memory inbox`
+- Correct records: export, edit, then run validated import
+- Stop retrieval immediately: `cvkeharness memory revoke <kind> <id>`
+- Remove a record from canonical operational state: `cvkeharness memory delete <kind> <id>`. Generated-view snapshots remain as local audit history and the current CLI does not purge them.
+- Regenerate stale views: `cvkeharness memory export`
 
-Markdown is authoritative. SQLite stores parsed facts, aliases, playbooks, cautions, telemetry projections, and query-ready summaries rebuilt from the durable surfaces and event stream. If a representation disagrees, the readable markdown plus canonical telemetry stream are the durable record to rebuild from.
+For the complete user guide, open `docs/memory-guide.html` in a browser.
