@@ -100,7 +100,7 @@ func (o channelEventObserver) Observe(event tools.Event) {
 		// and approval waits are compact and control-relevant, so make room for
 		// their latest snapshot; final tool outcomes are still reconciled from
 		// the turn result.
-		if event.Type != tools.EventVerificationActivity && event.Type != tools.EventApprovalRequired {
+		if event.Type != tools.EventVerificationActivity && event.Type != tools.EventApprovalRequired && event.Type != tools.EventTargetResolved {
 			return
 		}
 		select {
@@ -148,6 +148,8 @@ type chatTab struct {
 	status           string
 	statusDetail     string
 	target           string
+	environment      string
+	contextExpanded  bool
 	verification     string
 	lastError        string
 	controlsReady    bool
@@ -457,6 +459,12 @@ func verticalMouseWheelDirection(msg tea.MouseMsg) int {
 }
 
 func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
+	if msg.String() == "ctrl+g" {
+		t.contextExpanded = !t.contextExpanded
+		t.refreshViewport()
+		t.viewport.GotoTop()
+		return t, nil
+	}
 	if !t.composerFocused && t.lastError != "" {
 		if msg.String() == "s" {
 			return t, func() tea.Msg { return navigateMsg{tab: tabConfig} }
@@ -676,6 +684,7 @@ func (t *chatTab) startFreshSession(svc *Service) (tabModel, tea.Cmd) {
 	t.running = false
 	t.stopping = false
 	t.target = ""
+	t.environment = ""
 	t.verification = "NOT RUN"
 	t.lastError = ""
 	t.memorySources = nil
@@ -778,8 +787,7 @@ func (t *chatTab) View(width, height int) string {
 }
 
 func (t *chatTab) viewLive(width, height int) string {
-	contextLine := t.contextLine(width)
-	header := renderPageHeader("Chat", contextLine, width)
+	header := t.liveHeader(width)
 
 	conversation := t.viewport.View()
 	composerWidth := maxInt(width-6, 20)
@@ -888,9 +896,7 @@ func (t *chatTab) renderComposer(width int) string {
 		label = styleMuted.Render("MESSAGE  press Enter to compose")
 	}
 	body := t.composer.View()
-	if t.lastError != "" {
-		body += "\n" + styleError.Render("ERROR  "+truncate(t.lastError, maxInt(width-4, 16)))
-	}
+
 	box := lipgloss.NewStyle().
 		Width(maxInt(width-2, 18)).
 		Border(lipgloss.RoundedBorder()).
@@ -982,9 +988,26 @@ func (t *chatTab) refreshViewport() {
 		t.toolLineStarts[i] = -1
 		t.toolLineEnds[i] = -1
 	}
-	if len(t.messages) == 0 {
+	if t.contextExpanded {
+		lines = append(lines, "  "+styleSectionTitle.Render("Session context"))
+		appendWrappedBlock(&lines, "  ", "Model:", t.configuredModel, t.viewport.Width-4, styleMuted, styleBase)
+		appendWrappedBlock(&lines, "  ", "Activity:", t.statusDetail, t.viewport.Width-4, styleMuted, styleBase)
+		lines = append(lines, "  Ctrl+G returns to the conversation.", "")
+	}
+	if t.lastError != "" {
+		appendWrappedBlock(&lines, "  ", "Unable to continue:", t.lastError, t.viewport.Width-4, styleError, styleBase)
+		lines = append(lines, "  Your draft is preserved. Enter edits it; Enter again retries.", "  Leave the composer, then press s to open Settings.", "")
+	}
+	if len(t.messages) == 0 && t.lastError == "" {
+		title := "Ready for a task"
+		if t.starting {
+			title = "Connecting. Your message is waiting."
+		}
+		if t.running {
+			title = "Working on your task"
+		}
 		lines = append(lines,
-			styleBright.Render("  Ready for a task"),
+			styleBright.Render("  "+title),
 			styleMuted.Render("  Describe the outcome you want. CvkeHarness will keep target, tools,"),
 			styleMuted.Render("  approvals, and verification visible while it works."),
 			"",
@@ -1314,6 +1337,14 @@ func (t *chatTab) applyRuntimeEvent(event tools.Event) {
 			return
 		}
 	}
+	if event.Type == tools.EventTargetResolved {
+		t.target = firstNonEmptyText(event.TargetID, "unresolved")
+		if event.TargetAmbiguous {
+			t.target += " (ambiguous)"
+		}
+		t.environment = firstNonEmptyText(event.Environment, "unknown")
+		return
+	}
 	if event.Type == tools.EventVerificationActivity {
 		t.applyVerificationActivity(event.Verification)
 		return
@@ -1490,6 +1521,7 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 		t.target = result.Target.RuntimeHostID
 	}
 
+	t.environment = firstNonEmptyText(result.Target.Environment, t.environment)
 	t.reconcileToolOutcomes(result.Tools)
 	t.reconcileToolOutputs(result.Observed)
 
@@ -1800,15 +1832,15 @@ func (t *chatTab) resize(width, height int) {
 	}
 	t.viewport.Width = contentWidth
 	composerLines := 7
-	headerLines := 4
+	headerLines := strings.Count(t.liveHeader(width), "\n")
 	selectionLines := 0
 	if len(t.toolCalls) > 0 {
 		selectionLines = 1
 	}
-	minimumViewport := 5
+	minimumViewport := 2
 	t.commandRows = commandMenuLimit
 	if t.commandOpen {
-		minimumViewport = 3
+		minimumViewport = 2
 		availableRows := height - composerLines - headerLines - selectionLines - minimumViewport - 1
 		t.commandRows = clamp(availableRows, 0, commandMenuLimit)
 	}
@@ -2218,4 +2250,22 @@ func firstNonEmptyText(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (t *chatTab) liveHeader(width int) string {
+	verification := t.verification
+	if activity, ok := t.verifierActivity[t.activeTurn]; ok {
+		verification = verificationActivityLabel(activity.VerificationActivity)
+	}
+	lines := []string{
+		"Chat · " + t.status + " · Verification: " + firstNonEmptyText(verification, "not run"),
+		"Target: " + firstNonEmptyText(t.target, "not resolved yet") + " · Environment: " + firstNonEmptyText(t.environment, "unknown"),
+		"Security: " + firstNonEmptyText(t.safety, "unknown") + " · Ctrl+G context",
+	}
+	var b strings.Builder
+	for _, line := range lines {
+		b.WriteString("  " + strings.ReplaceAll(wrapDisplay(line, maxInt(width-4, 20)), "\n", "\n  ") + "\n")
+	}
+	b.WriteString("\n")
+	return b.String()
 }

@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/tools"
 )
 
 func recoveryModel() model {
@@ -91,5 +93,24 @@ func TestHelpCanReachLastShortcutAt80x24(t *testing.T) {
 	m = updated.(model)
 	if !m.showHelp || !strings.Contains(m.View(), "Quit the dashboard") {
 		t.Fatal("help cannot scroll to final group")
+	}
+}
+
+func TestCompactChatShowsTargetSafetyAndVerification(t *testing.T) {
+	tab := newChatTab().(*chatTab)
+	tab.safety = "reasonable"
+	tab.applyRuntimeEvent(tools.Event{Type: tools.EventTargetResolved, TargetID: "staging-api", Environment: "staging"})
+	for _, width := range []int{80, 100, 120} {
+		view := tab.View(width, 20)
+		for _, want := range []string{"staging-api", "staging", "reasonable", "Verification:"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("width %d missing %s", width, want)
+			}
+		}
+		for _, line := range strings.Split(view, "\n") {
+			if lipgloss.Width(line) > width {
+				t.Fatalf("width %d overflow: %q", width, line)
+			}
+		}
 	}
 }

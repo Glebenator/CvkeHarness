@@ -12,6 +12,7 @@ import (
 type EventType string
 
 const (
+	EventTargetResolved       EventType = "target_resolved"
 	EventToolCallStarted      EventType = "tool_call_started"
 	EventToolCallFinished     EventType = "tool_call_finished"
 	EventShellCommandStarted  EventType = "shell_command_started"
@@ -76,6 +77,9 @@ type MemorySource struct {
 // Event captures a single execution update.
 type Event struct {
 	Type            EventType
+	TargetID        string
+	Environment     string
+	TargetAmbiguous bool
 	Timestamp       time.Time
 	ToolName        string
 	ToolCallID      string
