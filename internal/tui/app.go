@@ -284,7 +284,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		owner = tabOverview
 	case jobsDataMsg, jobRunsDataMsg, jobActionMsg:
 		owner = tabJobs
-	case runsDataMsg:
+	case runsDataMsg, runExportMsg:
 		owner = tabRuns
 	case configSavedMsg:
 		owner = tabConfig
