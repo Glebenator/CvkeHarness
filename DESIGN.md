@@ -49,3 +49,11 @@ Use the terminal's native monospace. Establish hierarchy through weight, spacing
 - Asynchronous runtime work crosses Bubble Tea boundaries through typed messages and commands.
 - Do not imply token streaming when the provider/runtime only returns complete turns.
 - Saving configuration is a separate action from applying install or daemon changes.
+
+## Console refinement, September 2026
+
+The console respects the host terminal's background and uses adaptive foreground and selected-surface colors. Light terminals receive dark stone text and darker semantic accents; dark terminals receive brighter stone text. The representative review canvases are warm charcoal and warm off-white, not forced terminal backgrounds.
+
+Page titles use bright neutral text. Reserve amber for actions and focus. Every selected row and active tab has a pointer in addition to its color treatment. Lists use a task-first line and a secondary status/context line; Overview groups attention, scheduling, and completed outcomes. Settings separates values from the selected field's explanation. Inputs have a consistent rounded boundary, with active focus emphasized.
+
+The review artifact is `docs/console-design-review.html`; implementation and verification notes are in `docs/console-visual-design.md`.
