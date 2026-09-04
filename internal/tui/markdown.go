@@ -138,8 +138,11 @@ func cvkeMarkdownStyle() glamouransi.StyleConfig {
 	return style
 }
 
-func markdownColor(color lipgloss.Color) *string {
-	value := string(color)
+func markdownColor(color lipgloss.AdaptiveColor) *string {
+	value := color.Light
+	if lipgloss.HasDarkBackground() {
+		value = color.Dark
+	}
 	return &value
 }
 

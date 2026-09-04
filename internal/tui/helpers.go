@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -92,18 +93,11 @@ func truncate(s string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	if utf8.RuneCountInString(s) <= max {
-		return s
-	}
-	runes := []rune(s)
-	if max <= 1 {
-		return string(runes[:1])
-	}
-	return string(runes[:max-1]) + "…"
+	return ansi.Truncate(s, max, "…")
 }
 
 func padRight(s string, width int) string {
-	n := utf8.RuneCountInString(s)
+	n := ansi.StringWidth(s)
 	if n >= width {
 		return truncate(s, width)
 	}
