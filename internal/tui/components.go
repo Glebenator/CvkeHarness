@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/charmbracelet/x/ansi"
 	"strings"
 )
 
@@ -58,4 +59,9 @@ func renderStatusBadge(label string, active bool) string {
 		return styleSuccess.Render(label)
 	}
 	return styleWarning.Render(label)
+}
+
+// wrapDisplay wraps already-rendered UI text without truncating its contents.
+func wrapDisplay(value string, width int) string {
+	return ansi.Hardwrap(ansi.Wrap(value, maxInt(width, 1), ""), maxInt(width, 1), true)
 }

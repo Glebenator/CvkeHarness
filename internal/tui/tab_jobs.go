@@ -3,7 +3,10 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/coolcake/cvkeharness/scheduler"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -24,8 +27,9 @@ type jobRunsDataMsg struct {
 }
 
 type jobActionMsg struct {
-	action string
-	err    error
+	action  string
+	created bool
+	err     error
 }
 
 // ── modes ───────────────────────────────────────────────────────────
@@ -80,7 +84,11 @@ type jobsTab struct {
 	createName   textinput.Model
 	createKind   int // 0=every, 1=cron, 2=at
 	createSpec   textinput.Model
-	createPrompt textinput.Model
+	createPrompt textarea.Model
+	creating     bool
+	draftReady   bool
+	createScroll int
+	preview      []time.Time
 	createError  string
 
 	// Delete confirmation
@@ -112,11 +120,18 @@ func (t *jobsTab) Consuming() bool {
 func (t *jobsTab) StatusHints() []string {
 	switch t.mode {
 	case jobsModeCreate:
-		step := createStepLabels[t.createStep]
-		return []string{
-			styleMuted.Render("Creating: " + step),
-			renderKeyHint("esc", "cancel"),
+		if t.creating {
+			return []string{styleMuted.Render("Saving job…")}
 		}
+		hints := []string{renderKeyHint("enter", "continue"), renderKeyHint("ctrl+b", "back"), renderKeyHint("esc", "close draft")}
+		if t.createStep == createStepPrompt {
+			hints = append(hints, renderKeyHint("ctrl+j", "newline"))
+		}
+		if t.createStep == createStepConfirm {
+			hints[0] = renderKeyHint("enter", "create")
+			hints = append(hints, renderKeyHint("↑↓", "review"))
+		}
+		return hints
 	case jobsModeDelete:
 		return []string{
 			renderKeyHint("y", "confirm"),
@@ -161,6 +176,16 @@ func (t *jobsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		return t, nil
 
 	case jobActionMsg:
+		if msg.created {
+			t.creating = false
+			if msg.err != nil {
+				t.createError = msg.err.Error()
+				t.mode = jobsModeCreate
+				return t, nil
+			}
+			t.mode = jobsModeList
+			t.draftReady = false
+		}
 		if msg.err != nil {
 			t.message = styleError.Render("Error: " + msg.err.Error())
 		} else {
@@ -211,11 +236,12 @@ func (t *jobsTab) updateList(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.NewJob):
 		t.mode = jobsModeCreate
-		t.createStep = createStepName
-		t.createError = ""
+		if !t.draftReady {
+			t.initCreateInputs()
+			t.createStep = createStepName
+		}
 		t.message = ""
-		t.initCreateInputs()
-		return t, t.createName.Focus()
+		return t, t.focusCreateStep()
 	case key.Matches(msg, keys.DeleteJob):
 		if len(t.jobs) > 0 {
 			t.mode = jobsModeDelete
@@ -287,12 +313,13 @@ func (t *jobsTab) initCreateInputs() {
 	t.createSpec.Prompt = "  › "
 	t.updateSpecPlaceholder()
 
-	t.createPrompt = textinput.New()
+	t.draftReady = true
+	t.createPrompt = textarea.New()
 	t.createPrompt.Placeholder = "Check if the API is responding and report status"
-	t.createPrompt.CharLimit = 500
-	t.createPrompt.Width = 60
-	t.createPrompt.PromptStyle = styleInputPrompt
-	t.createPrompt.TextStyle = styleInputActive
+	t.createPrompt.CharLimit = 16 * 1024
+	t.createPrompt.SetWidth(68)
+	t.createPrompt.SetHeight(4)
+	t.createPrompt.ShowLineNumbers = false
 	t.createPrompt.Prompt = "  › "
 }
 
@@ -301,9 +328,30 @@ func (t *jobsTab) updateSpecPlaceholder() {
 }
 
 func (t *jobsTab) updateCreate(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
+	if t.creating {
+		return t, nil
+	}
+	if msg.String() == "ctrl+b" {
+		if t.createStep > createStepName {
+			t.createStep--
+		}
+		t.createError = ""
+		t.createScroll = 0
+		return t, t.focusCreateStep()
+	}
+	if t.createStep == createStepConfirm {
+		switch msg.String() {
+		case "down", "j":
+			t.createScroll++
+			return t, nil
+		case "up", "k":
+			t.createScroll = maxInt(0, t.createScroll-1)
+			return t, nil
+		}
+	}
 	t.createError = ""
 
-	// Esc always cancels the wizard
+	// Esc closes the draft without discarding its contents.
 	if key.Matches(msg, keys.Back) {
 		t.mode = jobsModeList
 		return t, nil
@@ -347,6 +395,10 @@ func (t *jobsTab) updateCreate(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd)
 				t.createError = "Schedule cannot be empty"
 				return t, nil
 			}
+			if err := t.validateSchedule(); err != nil {
+				t.createError = err.Error()
+				return t, nil
+			}
 			t.createStep = createStepPrompt
 			t.createSpec.Blur()
 			return t, t.createPrompt.Focus()
@@ -356,12 +408,17 @@ func (t *jobsTab) updateCreate(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd)
 		return t, cmd
 
 	case createStepPrompt:
+		if msg.String() == "ctrl+j" {
+			t.createPrompt.InsertString("\n")
+			return t, nil
+		}
 		if msg.String() == "enter" {
 			if strings.TrimSpace(t.createPrompt.Value()) == "" {
 				t.createError = "Prompt cannot be empty"
 				return t, nil
 			}
 			t.createStep = createStepConfirm
+			t.createScroll = 0
 			t.createPrompt.Blur()
 			return t, nil
 		}
@@ -372,15 +429,20 @@ func (t *jobsTab) updateCreate(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd)
 	case createStepConfirm:
 		switch msg.String() {
 		case "y", "enter":
+			if err := t.validateSchedule(); err != nil {
+				t.createStep = createStepSpec
+				t.createError = err.Error()
+				return t, t.focusCreateStep()
+			}
 			name := strings.TrimSpace(t.createName.Value())
 			kind := scheduleKinds[t.createKind].value
 			spec := strings.TrimSpace(t.createSpec.Value())
 			prompt := strings.TrimSpace(t.createPrompt.Value())
-			t.mode = jobsModeList
+			t.creating = true
 			return t, func() tea.Msg {
 				ctx := context.Background()
 				_, err := svc.CreateJob(ctx, name, kind, spec, prompt)
-				return jobActionMsg{action: "Created " + name, err: err}
+				return jobActionMsg{action: "Created " + name, created: true, err: err}
 			}
 		case "n":
 			t.mode = jobsModeList
@@ -614,134 +676,88 @@ func schedulerHeartbeatSummary(health state.SchedulerHealth) string {
 
 // ── create wizard view ──────────────────────────────────────────────
 
-func (t *jobsTab) viewCreate(width, height int) string {
-	var b strings.Builder
-
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(styleTitle.Render("New Scheduled Job"))
-	b.WriteString("\n\n")
-
-	// Progress indicator
-	b.WriteString("  ")
-	for i := createStep(0); i < createStepCount; i++ {
-		if i == t.createStep {
-			b.WriteString(styleAccent.Render("● "))
-			b.WriteString(styleBright.Render(createStepLabels[i]))
-		} else if i < t.createStep {
-			b.WriteString(styleSuccess.Render("● "))
-			b.WriteString(styleMuted.Render(createStepLabels[i]))
-		} else {
-			b.WriteString(styleSubtle.Render("○ "))
-			b.WriteString(styleSubtle.Render(createStepLabels[i]))
-		}
-		if i < createStepCount-1 {
-			b.WriteString(styleMuted.Render("  →  "))
-		}
-	}
-	b.WriteString("\n\n")
-	b.WriteString("  ")
-	b.WriteString(horizontalRule(width - 4))
-	b.WriteString("\n\n")
-
-	// Show completed fields above the current step
-	if t.createStep > createStepName {
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("Name: "))
-		b.WriteString(styleBase.Render(t.createName.Value()))
-		b.WriteString("\n")
-	}
-	if t.createStep > createStepKind {
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("Type: "))
-		b.WriteString(styleBase.Render(scheduleKinds[t.createKind].label))
-		b.WriteString("\n")
-	}
-	if t.createStep > createStepSpec {
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("Schedule: "))
-		b.WriteString(styleBase.Render(t.createSpec.Value()))
-		b.WriteString("\n")
-	}
-	if t.createStep > createStepPrompt {
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("Prompt: "))
-		b.WriteString(styleBase.Render(truncate(t.createPrompt.Value(), width-16)))
-		b.WriteString("\n")
-	}
-	if t.createStep > createStepName {
-		b.WriteString("\n")
-	}
-
+func (t *jobsTab) focusCreateStep() tea.Cmd {
+	t.createName.Blur()
+	t.createSpec.Blur()
+	t.createPrompt.Blur()
 	switch t.createStep {
 	case createStepName:
-		b.WriteString("  ")
-		b.WriteString(styleInputLabel.Render("Job Name"))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("A short, descriptive name for this job"))
-		b.WriteString("\n\n")
-		b.WriteString(t.createName.View())
-
-	case createStepKind:
-		b.WriteString("  ")
-		b.WriteString(styleInputLabel.Render("Schedule Type"))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("How should this job be scheduled?"))
-		b.WriteString("\n\n")
-		for i, kind := range scheduleKinds {
-			b.WriteString("  ")
-			if i == t.createKind {
-				b.WriteString(styleAccent.Render("▸ "))
-				b.WriteString(styleBright.Render(kind.label))
-				b.WriteString("  ")
-				b.WriteString(styleMuted.Render(kind.hint))
-			} else {
-				b.WriteString(styleMuted.Render("  "))
-				b.WriteString(styleBase.Render(kind.label))
-				b.WriteString("  ")
-				b.WriteString(styleSubtle.Render(kind.hint))
-			}
-			b.WriteString("\n")
-		}
-
+		return t.createName.Focus()
 	case createStepSpec:
-		kindInfo := scheduleKinds[t.createKind]
-		b.WriteString("  ")
-		b.WriteString(styleInputLabel.Render("Schedule "))
-		b.WriteString(styleMuted.Render("(" + kindInfo.label + ")"))
-		b.WriteString("\n\n")
-		b.WriteString(t.createSpec.View())
-		b.WriteString("\n\n")
-		b.WriteString("  ")
-		b.WriteString(t.specContextHelp())
-
+		return t.createSpec.Focus()
 	case createStepPrompt:
-		b.WriteString("  ")
-		b.WriteString(styleInputLabel.Render("Agent Prompt"))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(styleMuted.Render("What should the agent do when this job runs?"))
-		b.WriteString("\n\n")
-		b.WriteString(t.createPrompt.View())
+		return t.createPrompt.Focus()
+	}
+	return nil
+}
 
+func (t *jobsTab) validateSchedule() error {
+	t.preview = nil
+	now := time.Now()
+	for i := 0; i < 3; i++ {
+		next, err := scheduler.NextRun(scheduleKinds[t.createKind].value, t.createSpec.Value(), now)
+		if err != nil {
+			return err
+		}
+		if next.IsZero() {
+			if i == 0 {
+				return fmt.Errorf("Choose a time in the future")
+			}
+			break
+		}
+		t.preview = append(t.preview, next)
+		now = next
+	}
+	return nil
+}
+
+func (t *jobsTab) viewCreate(width, height int) string {
+	col := maxInt(width-6, 20)
+	t.createName.Width = col - 4
+	t.createSpec.Width = col - 4
+	t.createPrompt.SetWidth(col)
+	t.createPrompt.SetHeight(maxInt(minInt(height-10, 6), 2))
+	header := renderPageHeader("New Scheduled Job", fmt.Sprintf("Step %d of %d · %s", t.createStep+1, createStepCount, createStepLabels[t.createStep]), width)
+	var body string
+	switch t.createStep {
+	case createStepName:
+		body = "  A short, descriptive name\n\n" + t.createName.View()
+	case createStepKind:
+		body = "  When should this job run?\n\n"
+		for i, kind := range scheduleKinds {
+			body += "  " + renderSelectableRow(kind.label+"  "+kind.hint, i == t.createKind) + "\n"
+		}
+	case createStepSpec:
+		body = "  " + scheduleKinds[t.createKind].label + "\n\n" + t.createSpec.View() + "\n\n  " + t.specContextHelp()
+	case createStepPrompt:
+		body = "  Describe the outcome, target, and constraints.\n\n" + t.createPrompt.View()
 	case createStepConfirm:
-		b.WriteString("  ")
-		b.WriteString(styleBright.Render("Create this job?"))
-		b.WriteString("  ")
-		b.WriteString(renderKeyHint("y/enter", "confirm"))
-		b.WriteString(styleMuted.Render("  "))
-		b.WriteString(renderKeyHint("n/esc", "cancel"))
+		body = "  Name: " + t.createName.Value() + "\n  Schedule: " + scheduleKinds[t.createKind].label + " " + t.createSpec.Value() + "\n  Next executions (UTC):\n"
+		for _, at := range t.preview {
+			body += "    " + at.UTC().Format("Mon Jan 2, 15:04:05 MST") + "\n"
+		}
+		body += "\n  Prompt:\n  " + strings.ReplaceAll(t.createPrompt.Value(), "\n", "\n  ") + "\n\n  Enter creates this job. Ctrl+B revises it."
 	}
-
+	if t.creating {
+		body = "  Saving job…"
+	}
+	// Errors and navigation stay above the review viewport, not below long input.
 	if t.createError != "" {
-		b.WriteString("\n\n")
-		b.WriteString("  ")
-		b.WriteString(styleError.Render("⚠ " + t.createError))
+		header += "  " + styleError.Render(strings.Join(wrapText(t.createError, col), "\n  ")) + "\n\n"
 	}
-
-	return b.String()
+	body = wrapDisplay(body, width-2)
+	available := maxInt(height-strings.Count(header, "\n")-1, 1)
+	lines := strings.Split(body, "\n")
+	t.createScroll = clamp(t.createScroll, 0, maxInt(len(lines)-available, 0))
+	if t.createStep != createStepConfirm {
+		t.createScroll = 0
+	}
+	end := minInt(t.createScroll+available, len(lines))
+	result := header + strings.Join(lines[t.createScroll:end], "\n")
+	if len(lines) > available {
+		result += "\n  " + scrollHints(t.createScroll, end, len(lines))
+	}
+	return result
 }
 
 func (t *jobsTab) specContextHelp() string {
@@ -750,7 +766,7 @@ func (t *jobsTab) specContextHelp() string {
 		return styleMuted.Render("Go duration: 30s, 5m, 1h, 24h, 168h (weekly)")
 	case "cron":
 		lines := []string{
-			styleMuted.Render("Five fields: minute hour day month weekday"),
+			styleMuted.Render("UTC: minute hour day month weekday"),
 			styleMuted.Render("Examples:"),
 			styleMuted.Render("  0 */6 * * *    Every 6 hours"),
 			styleMuted.Render("  30 9 * * 1-5   Weekdays at 9:30"),
@@ -758,7 +774,7 @@ func (t *jobsTab) specContextHelp() string {
 		}
 		return strings.Join(lines, "\n  ")
 	case "at":
-		return styleMuted.Render("RFC3339 timestamp: 2026-05-01T09:00:00Z")
+		return styleMuted.Render("RFC3339 with timezone, e.g. 2030-05-01T09:00:00-07:00")
 	}
 	return ""
 }
