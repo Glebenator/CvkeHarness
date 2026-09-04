@@ -234,6 +234,11 @@ func WriteRunMarkdown(exportDir string, run state.RunSummary, now time.Time) (st
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Run %d\n\nTask: %s\n\nSuccess: %t\n\nVerification: %s\n\n%s\n", run.ID, run.Task, run.Success, run.VerificationStatus, run.FinalOutput)
+	target := run.TargetID
+	if target == "" {
+		target = "unknown (not recorded)"
+	}
+	fmt.Fprintf(&b, "\nLast resolved target: %s\n\nEnvironment: %s\n\nTarget ambiguous: %t\n", target, run.TargetEnvironment, run.TargetAmbiguous)
 	if run.ErrorMessage != "" {
 		fmt.Fprintf(&b, "\nError: %s\n", run.ErrorMessage)
 	}

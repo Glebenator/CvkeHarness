@@ -63,3 +63,41 @@ func TestActivityTotalsIncludeHistoryBeyondVisiblePage(t *testing.T) {
 		t.Fatalf("incorrect totals: %+v %v", totals, err)
 	}
 }
+
+func TestRunTargetFilterUsesRecordedIdentityAndMigratesLegacyRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	db := Open(path)
+	ctx := context.Background()
+	if err := db.RecordRun(ctx, RunRecord{StartedAt: time.Now(), Task: "check target-prod", Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the prior schema, then reopen through the real migration path.
+	for _, column := range []string{"target_id", "target_environment", "target_ambiguous"} {
+		if _, err := db.db.ExecContext(ctx, "ALTER TABLE runs DROP COLUMN "+column); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	db = Open(path)
+	defer db.Close()
+	for _, id := range []string{"target-prod", "target-prod-2"} {
+		if err := db.RecordRun(ctx, RunRecord{StartedAt: time.Now(), Task: "inspect", Success: true, TargetID: id, TargetEnvironment: "production", TargetAmbiguous: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runs, err := db.SearchRunsForTarget(ctx, 25, 0, "", "success", RunTargetFilter{ID: "target-prod"})
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("exact target filter: %+v %v", runs, err)
+	}
+	if runs[0].TargetEnvironment != "production" || !runs[0].TargetAmbiguous {
+		t.Fatalf("lost target context: %+v", runs[0])
+	}
+	unknown, err := db.SearchRunsForTarget(ctx, 25, 0, "target-prod", "all", RunTargetFilter{Unknown: true})
+	if err != nil || len(unknown) != 1 || unknown[0].TargetID != "" {
+		t.Fatalf("legacy target was inferred: %+v %v", unknown, err)
+	}
+	targets, err := db.RunTargets(ctx)
+	if err != nil || len(targets) != 2 || targets[0] != "target-prod" || targets[1] != "target-prod-2" {
+		t.Fatalf("target choices: %v %v", targets, err)
+	}
+}

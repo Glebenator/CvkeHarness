@@ -17,6 +17,17 @@ func (s *Store) ListRecentRuns(ctx context.Context, limit int) ([]RunSummary, er
 // SearchRuns searches persisted tasks, answers, errors and tool commands. Offsets
 // are deterministic for equal timestamps; no user input is interpolated into SQL.
 func (s *Store) SearchRuns(ctx context.Context, limit, offset int, query, status string) ([]RunSummary, error) {
+	return s.SearchRunsForTarget(ctx, limit, offset, query, status, RunTargetFilter{})
+}
+
+// RunTargetFilter selects a recorded identity, or records with no identity.
+// Its zero value includes all targets. Unknown does not infer targets from text.
+type RunTargetFilter struct {
+	ID      string
+	Unknown bool
+}
+
+func (s *Store) SearchRunsForTarget(ctx context.Context, limit, offset int, query, status string, target RunTargetFilter) ([]RunSummary, error) {
 	if !s.Available() {
 		return nil, s.Err()
 	}
@@ -33,13 +44,15 @@ func (s *Store) SearchRuns(ctx context.Context, limit, offset int, query, status
 	rows, err := s.db.QueryContext(ctx, `
   SELECT id, started_at, finished_at, provider, task, task_class, task_state, success,
 			error_message, final_output, verification_status, verification_reason,
-			verification_missing_actions, verification_repair_triggered, routing_enabled
+			verification_missing_actions, verification_repair_triggered, routing_enabled,
+            target_id, target_environment, target_ambiguous
 		FROM runs
   WHERE (? = 'all' OR (? = 'success' AND success = 1) OR (? = 'failed' AND success = 0))
+   AND ((? = 1 AND target_id = '') OR (? = 0 AND (? = '' OR target_id = ?)))
    AND (? = '' OR instr(lower(task || ' ' || final_output || ' ' || error_message), ?) > 0
     OR EXISTS (SELECT 1 FROM tool_outcomes WHERE run_id = runs.id AND instr(lower(command || ' ' || arguments), ?) > 0))
   ORDER BY started_at DESC, id DESC
-  LIMIT ? OFFSET ?`, status, status, status, query, query, query, limit, offset)
+  LIMIT ? OFFSET ?`, status, status, status, boolToInt(target.Unknown), boolToInt(target.Unknown), target.ID, target.ID, query, query, query, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -49,12 +62,13 @@ func (s *Store) SearchRuns(ctx context.Context, limit, offset int, query, status
 	for rows.Next() {
 		var item RunSummary
 		var taskClass, taskState string
-		var success, repair, routing int
+		var success, repair, routing, ambiguous int
 		if err := rows.Scan(
 			&item.ID, &item.StartedAt, &item.FinishedAt, &item.Provider, &item.Task,
 			&taskClass, &taskState, &success, &item.ErrorMessage, &item.FinalOutput,
 			&item.VerificationStatus, &item.VerificationReason,
 			&item.VerificationMissingActions, &repair, &routing,
+			&item.TargetID, &item.TargetEnvironment, &ambiguous,
 		); err != nil {
 			return nil, err
 		}
@@ -63,6 +77,7 @@ func (s *Store) SearchRuns(ctx context.Context, limit, offset int, query, status
 		item.Success = success == 1
 		item.VerificationRepairTriggered = repair == 1
 		item.RoutingEnabled = routing == 1
+		item.TargetAmbiguous = ambiguous == 1
 		item.Phases, err = s.listRunPhases(ctx, item.ID)
 		if err != nil {
 			return nil, err
@@ -74,6 +89,27 @@ func (s *Store) SearchRuns(ctx context.Context, limit, offset int, query, status
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+// RunTargets lists identities actually recorded on runs, independent of pagination.
+func (s *Store) RunTargets(ctx context.Context) ([]string, error) {
+	if !s.Available() {
+		return nil, s.Err()
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT target_id FROM runs WHERE target_id != '' ORDER BY target_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var targets []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		targets = append(targets, id)
+	}
+	return targets, rows.Err()
 }
 
 func (s *Store) listRunPhases(ctx context.Context, runID int64) ([]PhaseRecord, error) {

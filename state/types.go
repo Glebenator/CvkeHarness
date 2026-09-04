@@ -34,8 +34,12 @@ type RunRecord struct {
 	VerificationMissingActions  string
 	VerificationRepairTriggered bool
 	RoutingEnabled              bool
-	Phases                      []PhaseRecord
-	Tools                       []ToolOutcome
+	// Last resolved target at completion; empty means it was not recorded.
+	TargetID          string
+	TargetEnvironment string
+	TargetAmbiguous   bool
+	Phases            []PhaseRecord
+	Tools             []ToolOutcome
 }
 
 // PhaseRecord captures one routed phase invocation.
@@ -389,8 +393,12 @@ type RunSummary struct {
 	VerificationMissingActions  string
 	VerificationRepairTriggered bool
 	RoutingEnabled              bool
-	Phases                      []PhaseRecord
-	Tools                       []ToolOutcome
+	// Last resolved target at completion; empty means it was not recorded.
+	TargetID          string
+	TargetEnvironment string
+	TargetAmbiguous   bool
+	Phases            []PhaseRecord
+	Tools             []ToolOutcome
 }
 
 // ChatSessionSummary is a compact persisted chat session view.
