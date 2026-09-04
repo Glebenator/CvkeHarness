@@ -362,3 +362,15 @@ func (s *Store) ListSystemCronAudits(ctx context.Context, limit int) ([]SystemCr
 	}
 	return out, rows.Err()
 }
+
+// ActivityTotals counts the complete persisted history, independently of UI pages.
+type ActivityTotals struct{ Runs, SuccessfulRuns, ChatSessions, Jobs int }
+
+func (s *Store) ActivityTotals(ctx context.Context) (ActivityTotals, error) {
+	var totals ActivityTotals
+	if !s.Available() {
+		return totals, s.Err()
+	}
+	err := s.db.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM runs), (SELECT COUNT(*) FROM runs WHERE success = 1), (SELECT COUNT(*) FROM chat_sessions), (SELECT COUNT(*) FROM scheduled_jobs)`).Scan(&totals.Runs, &totals.SuccessfulRuns, &totals.ChatSessions, &totals.Jobs)
+	return totals, err
+}

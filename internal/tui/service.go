@@ -91,16 +91,22 @@ func (s *Service) SaveConfig(cfg *config.Config) error {
 
 // RecentRuns returns the most recent agent runs.
 func (s *Service) RecentRuns(ctx context.Context, limit int) ([]state.RunSummary, error) {
-	if s.store == nil || !s.store.Available() {
+	if s.store == nil {
 		return nil, nil
+	}
+	if !s.store.Available() {
+		return nil, s.store.Err()
 	}
 	return s.store.ListRecentRuns(ctx, limit)
 }
 
 // RecentChatSessions returns the most recent chat sessions.
 func (s *Service) RecentChatSessions(ctx context.Context, limit int) ([]state.ChatSessionSummary, error) {
-	if s.store == nil || !s.store.Available() {
+	if s.store == nil {
 		return nil, nil
+	}
+	if !s.store.Available() {
+		return nil, s.store.Err()
 	}
 	return s.store.ListRecentChatSessions(ctx, limit)
 }
@@ -135,24 +141,33 @@ func (s *Service) ExportChatSession(ctx context.Context, id int64) (string, erro
 
 // ScheduledJobs returns all scheduled jobs.
 func (s *Service) ScheduledJobs(ctx context.Context) ([]state.ScheduledJob, error) {
-	if s.store == nil || !s.store.Available() {
+	if s.store == nil {
 		return nil, nil
+	}
+	if !s.store.Available() {
+		return nil, s.store.Err()
 	}
 	return s.store.ListScheduledJobs(ctx, true)
 }
 
 // ScheduledJobRuns returns run history for a job.
 func (s *Service) ScheduledJobRuns(ctx context.Context, jobID string, limit int) ([]state.ScheduledJobRun, error) {
-	if s.store == nil || !s.store.Available() {
+	if s.store == nil {
 		return nil, nil
+	}
+	if !s.store.Available() {
+		return nil, s.store.Err()
 	}
 	return s.store.ListScheduledJobRuns(ctx, jobID, limit)
 }
 
 // SchedulerHealth returns telemetry-derived scheduler health rows.
 func (s *Service) SchedulerHealth(ctx context.Context) ([]state.SchedulerHealth, error) {
-	if s.store == nil || !s.store.Available() {
+	if s.store == nil {
 		return nil, nil
+	}
+	if !s.store.Available() {
+		return nil, s.store.Err()
 	}
 	return s.store.ListSchedulerHealth(ctx)
 }
@@ -168,8 +183,11 @@ func (s *Service) CronEntries(ctx context.Context) ([]systemcron.Entry, error) {
 
 // CronAudits returns system crontab audit records.
 func (s *Service) CronAudits(ctx context.Context, limit int) ([]state.SystemCronAudit, error) {
-	if s.store == nil || !s.store.Available() {
+	if s.store == nil {
 		return nil, nil
+	}
+	if !s.store.Available() {
+		return nil, s.store.Err()
 	}
 	return s.store.ListSystemCronAudits(ctx, limit)
 }
@@ -184,8 +202,11 @@ func (s *Service) RunJobNow(ctx context.Context, id string) (state.ScheduledJobR
 
 // ModelStats returns normalized model performance stats.
 func (s *Service) ModelStats(ctx context.Context) ([]state.ModelStats, error) {
-	if s.store == nil || !s.store.Available() {
+	if s.store == nil {
 		return nil, nil
+	}
+	if !s.store.Available() {
+		return nil, s.store.Err()
 	}
 	return s.store.ListAllModelStats(ctx)
 }
@@ -227,4 +248,17 @@ func (s *Service) ExportRun(run state.RunSummary) (string, error) {
 		return "", err
 	}
 	return chatexport.WriteRunMarkdown(dir, run, time.Now())
+}
+
+func (s *Service) ActivityTotals(ctx context.Context) (state.ActivityTotals, error) {
+	if s.store == nil {
+		return state.ActivityTotals{}, fmt.Errorf("state database unavailable")
+	}
+	return s.store.ActivityTotals(ctx)
+}
+func (s *Service) BlockedWork(ctx context.Context) ([]state.BlockedWork, error) {
+	if s.store == nil {
+		return nil, fmt.Errorf("state database unavailable")
+	}
+	return s.store.ListBlockedWork(ctx)
 }
