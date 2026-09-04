@@ -216,3 +216,39 @@ func formatTime(value time.Time) string {
 	}
 	return value.UTC().Format(time.RFC3339)
 }
+
+// WriteRunMarkdown exports the full stored answer and diagnostic record privately.
+func WriteRunMarkdown(exportDir string, run state.RunSummary, now time.Time) (string, error) {
+	if run.ID <= 0 {
+		return "", fmt.Errorf("run is not persisted")
+	}
+	if err := os.MkdirAll(exportDir, 0700); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(exportDir, 0700); err != nil {
+		return "", err
+	}
+	path, file, err := createPrivateFile(exportDir, fmt.Sprintf("run-%d-%s", run.ID, now.UTC().Format("20060102T150405Z")))
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Run %d\n\nTask: %s\n\nSuccess: %t\n\nVerification: %s\n\n%s\n", run.ID, run.Task, run.Success, run.VerificationStatus, run.FinalOutput)
+	if run.ErrorMessage != "" {
+		fmt.Fprintf(&b, "\nError: %s\n", run.ErrorMessage)
+	}
+	for _, tool := range run.Tools {
+		fmt.Fprintf(&b, "\n## %s\n\nCommand: %s\n\nArguments: %s\n\n%s\n", tool.ToolName, tool.Command, tool.Arguments, tool.OutputInline)
+	}
+	_, err = file.WriteString(secrets.Mask(b.String()))
+	closeErr := file.Close()
+	if err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if closeErr != nil {
+		_ = os.Remove(path)
+		return "", closeErr
+	}
+	return path, nil
+}

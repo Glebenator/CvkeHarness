@@ -3,25 +3,43 @@ package state
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 
 	"github.com/coolcake/cvkeharness/core"
 )
 
 // ListRecentRuns returns recent agent runs with phase and tool summaries.
 func (s *Store) ListRecentRuns(ctx context.Context, limit int) ([]RunSummary, error) {
+	return s.SearchRuns(ctx, limit, 0, "", "all")
+}
+
+// SearchRuns searches persisted tasks, answers, errors and tool commands. Offsets
+// are deterministic for equal timestamps; no user input is interpolated into SQL.
+func (s *Store) SearchRuns(ctx context.Context, limit, offset int, query, status string) ([]RunSummary, error) {
 	if !s.Available() {
 		return nil, s.Err()
 	}
 	if limit <= 0 {
 		limit = 20
 	}
+	if offset < 0 {
+		offset = 0
+	}
+	if status != "all" && status != "success" && status != "failed" {
+		return nil, fmt.Errorf("unknown run filter %q", status)
+	}
+	query = strings.ToLower(strings.TrimSpace(query))
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, started_at, finished_at, provider, task, task_class, task_state, success,
+  SELECT id, started_at, finished_at, provider, task, task_class, task_state, success,
 			error_message, final_output, verification_status, verification_reason,
 			verification_missing_actions, verification_repair_triggered, routing_enabled
 		FROM runs
-		ORDER BY started_at DESC
-		LIMIT ?`, limit)
+  WHERE (? = 'all' OR (? = 'success' AND success = 1) OR (? = 'failed' AND success = 0))
+   AND (? = '' OR instr(lower(task || ' ' || final_output || ' ' || error_message), ?) > 0
+    OR EXISTS (SELECT 1 FROM tool_outcomes WHERE run_id = runs.id AND instr(lower(command || ' ' || arguments), ?) > 0))
+  ORDER BY started_at DESC, id DESC
+  LIMIT ? OFFSET ?`, status, status, status, query, query, query, limit, offset)
 	if err != nil {
 		return nil, err
 	}

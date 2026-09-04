@@ -125,3 +125,20 @@ func TestDirectoryForStateDBUsesSiblingExportsDirectory(t *testing.T) {
 		t.Fatalf("DirectoryForStateDB = %q, want %q", got, want)
 	}
 }
+
+func TestRunExportPreservesLongOutputAndMasksSecrets(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "exports")
+	run := state.RunSummary{ID: 9, Task: "inspect", FinalOutput: strings.Repeat("long result ", 100) + "END", Tools: []state.ToolOutcome{{Command: "echo api_key=secret-test-value"}}}
+	path, err := WriteRunMarkdown(dir, run, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	if info.Mode().Perm() != 0600 || !strings.Contains(string(body), run.FinalOutput) || strings.Contains(string(body), "secret-test-value") {
+		t.Fatal("export lost output or exposed secret")
+	}
+}
