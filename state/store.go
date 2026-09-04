@@ -141,8 +141,8 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 		INSERT INTO runs (
 			started_at, finished_at, provider, task, task_class, task_state, success, error_message,
 			final_output, verification_status, verification_reason, verification_missing_actions,
-			verification_repair_triggered, routing_enabled
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			verification_repair_triggered, routing_enabled, target_id, target_environment, target_ambiguous
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.StartedAt.UTC(),
 		record.FinishedAt.UTC(),
 		record.Provider,
@@ -157,6 +157,9 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 		record.VerificationMissingActions,
 		boolToInt(record.VerificationRepairTriggered),
 		boolToInt(record.RoutingEnabled),
+		record.TargetID,
+		record.TargetEnvironment,
+		boolToInt(record.TargetAmbiguous),
 	)
 	if err != nil {
 		return err
@@ -896,6 +899,9 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	optionalColumns := []string{
+		`ALTER TABLE runs ADD COLUMN target_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE runs ADD COLUMN target_environment TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE runs ADD COLUMN target_ambiguous INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN task_state TEXT NOT NULL DEFAULT 'completed'`,
 		`ALTER TABLE runs ADD COLUMN final_output TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE runs ADD COLUMN verification_status TEXT NOT NULL DEFAULT ''`,

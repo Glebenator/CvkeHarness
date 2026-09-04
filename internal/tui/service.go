@@ -242,6 +242,20 @@ func (s *Service) SearchRuns(ctx context.Context, limit, offset int, query, stat
 	return s.store.SearchRuns(ctx, limit, offset, query, status)
 }
 
+func (s *Service) SearchRunsForTarget(ctx context.Context, limit, offset int, query, status string, target state.RunTargetFilter) ([]state.RunSummary, error) {
+	if s.store == nil || !s.store.Available() {
+		return nil, fmt.Errorf("run history database unavailable")
+	}
+	return s.store.SearchRunsForTarget(ctx, limit, offset, query, status, target)
+}
+
+func (s *Service) RunTargets(ctx context.Context) ([]string, error) {
+	if s.store == nil || !s.store.Available() {
+		return nil, fmt.Errorf("run history database unavailable")
+	}
+	return s.store.RunTargets(ctx)
+}
+
 func (s *Service) ExportRun(run state.RunSummary) (string, error) {
 	dir, err := chatexport.DirectoryForStateDB(s.cfg.StateDBPath)
 	if err != nil {

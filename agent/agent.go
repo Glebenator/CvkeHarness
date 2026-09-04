@@ -224,6 +224,9 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 	result.Output = output
 	result.Routing = routingSelections
 	result.Verification = verification
+	runRecord.TargetID = targetResolution.TargetID
+	runRecord.TargetEnvironment = targetResolution.Environment
+	runRecord.TargetAmbiguous = targetResolution.Ambiguous
 	result.Target = targetResolution
 	if execErr != nil {
 		err = execErr

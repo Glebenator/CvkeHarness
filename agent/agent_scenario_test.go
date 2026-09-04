@@ -314,6 +314,9 @@ func TestVerifiedCurationCarriesEvidenceAndPerCallTarget(t *testing.T) {
 	if result.Verification.Status != verificationSatisfied || len(curator.outcomes) != 1 {
 		t.Fatalf("expected one verified curation outcome, got verification=%#v outcomes=%#v", result.Verification, curator.outcomes)
 	}
+	if result.Run.TargetID != "target-prod" || result.Run.TargetEnvironment != "production" {
+		t.Fatalf("run record lost resolved target: %+v", result.Run)
+	}
 	outcome := curator.outcomes[0]
 	if !outcome.VerifiedOutcome || outcome.VerificationEvidence != "health check confirms the requested result" {
 		t.Fatalf("verification evidence was not carried into curation: %#v", outcome)

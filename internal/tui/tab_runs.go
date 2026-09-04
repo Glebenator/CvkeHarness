@@ -4,20 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/charmbracelet/bubbles/textinput"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/coolcake/cvkeharness/state"
 )
 
 type runsDataMsg struct {
-	runs   []state.RunSummary
-	err    error
-	query  string
-	status string
-	offset int
+	runs    []state.RunSummary
+	err     error
+	query   string
+	status  string
+	target  state.RunTargetFilter
+	targets []string
+	offset  int
 }
 
 type runExportMsg struct {
@@ -33,6 +35,8 @@ type runsTab struct {
 	scroll    int // scroll offset for the detail view
 	query     string
 	status    string
+	target    state.RunTargetFilter
+	targets   []string
 	offset    int
 	more      bool
 	searching bool
@@ -54,13 +58,17 @@ func (t *runsTab) Init(svc *Service) tea.Cmd {
 	if t.expanded || t.searching {
 		return nil
 	}
-	query, status, offset := t.query, t.status, t.offset
+	query, status, offset, target := t.query, t.status, t.offset, t.target
 	if status == "" {
 		status = "all"
 	}
 	return func() tea.Msg {
-		runs, err := svc.SearchRuns(context.Background(), 26, offset, query, status)
-		return runsDataMsg{runs: runs, err: err, query: query, status: status, offset: offset}
+		runs, err := svc.SearchRunsForTarget(context.Background(), 26, offset, query, status, target)
+		var targets []string
+		if err == nil {
+			targets, err = svc.RunTargets(context.Background())
+		}
+		return runsDataMsg{runs: runs, err: err, query: query, status: status, offset: offset, target: target, targets: targets}
 	}
 }
 
@@ -76,7 +84,7 @@ func (t *runsTab) StatusHints() []string {
 			renderKeyHint("↑↓", "scroll"),
 		}
 	}
-	return []string{renderKeyHint("enter", "open"), renderKeyHint("/", "search"), renderKeyHint("f", "filter"), renderKeyHint("[ ]", "pages"), renderKeyHint("r", "retry")}
+	return []string{renderKeyHint("enter", "open"), renderKeyHint("/", "search"), renderKeyHint("f", "status"), renderKeyHint("t", "target"), renderKeyHint("[ ]", "pages"), renderKeyHint("r", "retry")}
 
 }
 
@@ -89,7 +97,7 @@ func (t *runsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 			t.message = "Exported privately: " + msg.path
 		}
 	case runsDataMsg:
-		if msg.query != t.query || msg.offset != t.offset || (msg.status != "" && msg.status != t.status) {
+		if msg.target != t.target || msg.query != t.query || msg.offset != t.offset || (msg.status != "" && msg.status != t.status) {
 			return t, nil
 		}
 		t.loaded = true
@@ -97,6 +105,7 @@ func (t *runsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		if msg.err != nil {
 			return t, nil
 		}
+		t.targets = msg.targets
 		t.more = len(msg.runs) > 25
 		if t.more {
 			msg.runs = msg.runs[:25]
@@ -132,6 +141,21 @@ func (t *runsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 				t.search.SetValue(t.query)
 				t.searching = true
 				return t, t.search.Focus()
+			case "t":
+				options := []state.RunTargetFilter{{}, {Unknown: true}}
+				for _, id := range t.targets {
+					options = append(options, state.RunTargetFilter{ID: id})
+				}
+				next := 0
+				for i, option := range options {
+					if option == t.target {
+						next = (i + 1) % len(options)
+						break
+					}
+				}
+				t.target = options[next]
+				t.offset, t.cursor = 0, 0
+				return t, t.Init(svc)
 			case "f":
 				t.status = nextOption([]string{"all", "success", "failed"}, t.status)
 				t.offset = 0
@@ -224,7 +248,14 @@ func (t *runsTab) View(width, height int) string {
 
 func (t *runsTab) viewList(width, height int) string {
 	header := renderPageHeader("Runs", "outcomes and execution history", width)
-	header += "  " + fmt.Sprintf("%s · Page %d · / search · f filter · [ ] pages", firstNonEmptyText(t.status, "all"), t.offset/25+1) + "\n"
+	header += "  " + fmt.Sprintf("%s · Page %d · / search · f status · t target · [ ] pages", firstNonEmptyText(t.status, "all"), t.offset/25+1) + "\n"
+	targetLabel := "all"
+	if t.target.Unknown {
+		targetLabel = "unknown (not recorded)"
+	} else if t.target.ID != "" {
+		targetLabel = t.target.ID
+	}
+	header += "  " + wrapDisplay("Last target: "+targetLabel, width-4) + "\n"
 	if t.query != "" {
 		header += "  Search: " + t.query + "\n"
 	}
@@ -237,7 +268,7 @@ func (t *runsTab) viewList(width, height int) string {
 		return header
 	}
 	if len(t.runs) == 0 {
-		return header + "\n  No matching runs. Press / to change the search or f to change status."
+		return header + "\n  No matching runs. / changes search, f status, t target."
 	}
 	available := maxInt((height-strings.Count(header, "\n")-2)/2, 1)
 	start, end := listWindow(t.cursor, len(t.runs), available)
@@ -285,6 +316,14 @@ func (t *runsTab) viewDetail(width, height int) string {
 		lines = append(lines, "  "+renderKeyValue("Task Class", string(run.TaskClass)))
 	}
 	lines = append(lines, "  "+renderKeyValue("Provider", run.Provider))
+	targetLabel := firstNonEmptyText(run.TargetID, "unknown (not recorded)")
+	if run.TargetAmbiguous {
+		targetLabel += " (ambiguous)"
+	}
+	lines = append(lines, "  "+renderKeyValue("Last target", targetLabel))
+	if run.TargetEnvironment != "" {
+		lines = append(lines, "  "+renderKeyValue("Environment", run.TargetEnvironment))
+	}
 	if !run.StartedAt.IsZero() {
 		lines = append(lines, "  "+renderKeyValue("Started", fmtTime(run.StartedAt)))
 	}
