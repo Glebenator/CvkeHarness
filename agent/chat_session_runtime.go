@@ -247,6 +247,7 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskClass core.TaskClass) (state.PhaseRecord, state.PhaseRecord, CompletionVerification, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, []provider.Message, string, error) {
 	logger := log.FromContext(ctx)
 	targetResolution := c.agent.resolveTarget(ctx, memory.TargetResolutionInput{Task: prompt})
+	emitChatTarget(ctx, targetResolution)
 	toolDefs := c.agent.toolDefinitionsForTask(taskClass, prompt)
 	toolNames := toolNamesFromDefs(toolDefs)
 	retrieved, err := c.agent.retrieveMemory(ctx, core.RetrievalContext{
@@ -455,6 +456,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 					Command: command,
 				})
 			}
+			emitChatTarget(iterCtx, targetResolution)
 			toolCtx := tools.WithToolCallContext(telemetry.WithFields(telemetry.WithModel(iterCtx, actualModel), telemetry.Fields{
 				ToolCallID: call.ID,
 				TargetID:   targetResolution.TargetID,
@@ -674,4 +676,8 @@ func TranscriptToStateMessages(sessionID, turnID int64, startIndex int, at time.
 		nextIndex++
 	}
 	return out
+}
+
+func emitChatTarget(ctx context.Context, target memory.TargetResolution) {
+	tools.EmitEvent(ctx, tools.Event{Type: tools.EventTargetResolved, TargetID: target.TargetID, Environment: target.Environment, TargetAmbiguous: target.Ambiguous})
 }

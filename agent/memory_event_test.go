@@ -46,3 +46,16 @@ func TestEmitMemoryInjectionIncludesBoundedSourceDetails(t *testing.T) {
 		t.Fatalf("unexpected memory source: %#v", source)
 	}
 }
+
+func TestChatTargetEventReportsResolvedScope(t *testing.T) {
+	observer := &memoryEventObserver{}
+	ctx := tools.WithEventObserver(context.Background(), observer)
+	emitChatTarget(ctx, memory.TargetResolution{TargetID: "ssh_staging", Environment: "staging", Ambiguous: true})
+	if len(observer.events) != 1 {
+		t.Fatal("missing target event")
+	}
+	event := observer.events[0]
+	if event.Type != tools.EventTargetResolved || event.TargetID != "ssh_staging" || event.Environment != "staging" || !event.TargetAmbiguous {
+		t.Fatalf("incorrect target scope: %#v", event)
+	}
+}

@@ -95,8 +95,6 @@ func (t *configTab) StatusHints() []string {
 			renderKeyHint("←→", "change"),
 			renderKeyHint("r", "reset"),
 			renderKeyHint("R", "reset all"),
-			renderKeyHint("s", "save"),
-			renderKeyHint("esc", "back"),
 		}
 		if t.dirty {
 			hints = append(hints, styleWarning.Render("unsaved"))
@@ -393,33 +391,37 @@ func (t *configTab) viewSettings(width, height int) string {
 	}
 	b.WriteString("\n")
 	b.WriteString("  ")
-	b.WriteString(styleMuted.Render("Press s to write ~/.cvkeharness/config.yaml. Select fields cycle values or open an editor."))
+	b.WriteString(styleMuted.Render("s saves settings for new sessions. Enter edits a field."))
 	b.WriteString("\n\n")
 
 	if t.message != "" {
 		b.WriteString("  ")
-		b.WriteString(styleSuccess.Render(t.message))
+		b.WriteString(styleSuccess.Render(wrapDisplay(t.message, width-4)))
 		b.WriteString("\n\n")
 	}
 	if t.saveErr != "" {
 		b.WriteString("  ")
-		b.WriteString(styleError.Render(t.saveErr))
+		b.WriteString(styleError.Render(wrapDisplay(t.saveErr, width-4)))
 		b.WriteString("\n\n")
 	}
 
 	header := padRight("", 3) + padRight("Setting", 20) + "  " + padRight("Value", 34) + "  " + "Notes"
 	b.WriteString(renderTableHeader(width, header))
 
-	listHeight := height - 9
-	if listHeight < 4 {
-		listHeight = 4
+	description := ""
+	if len(t.fields) > 0 {
+		description = "  " + strings.ReplaceAll(wrapDisplay(t.fields[t.cursor].Description, width-4), "\n", "\n  ")
+	}
+	listHeight := height - strings.Count(b.String(), "\n") - strings.Count(description, "\n") - 3
+	if listHeight < 1 {
+		listHeight = 1
 	}
 	start, end := listWindow(t.cursor, len(t.fields), listHeight)
 	t.scroll = start
 
 	for i := start; i < end; i++ {
 		b.WriteString("  ")
-		b.WriteString(t.renderFieldRow(i, col, i == t.cursor))
+		b.WriteString(truncate(t.renderFieldRow(i, col, i == t.cursor), width-4))
 		b.WriteString("\n")
 	}
 	if hint := scrollHints(start, end, len(t.fields)); hint != "" {
@@ -427,6 +429,7 @@ func (t *configTab) viewSettings(width, height int) string {
 		b.WriteString(hint)
 		b.WriteString("\n")
 	}
+	b.WriteString("\n" + description)
 	return b.String()
 }
 
@@ -468,9 +471,13 @@ func (t *configTab) viewSecurity(width, height int) string {
 	header := padRight("", 3) + padRight("Area", 20) + "  " + padRight("Control", 24) + "  " + padRight("Value", 16) + "  Source"
 	b.WriteString(renderTableHeader(width, header))
 	total := len(securitypolicy.Catalog()) + 1
-	listHeight := height - 11
-	if listHeight < 4 {
-		listHeight = 4
+	description := ""
+	if t.securityCursor > 0 {
+		description = wrapDisplay(securitypolicy.Catalog()[t.securityCursor-1].Description, width-4)
+	}
+	listHeight := height - strings.Count(b.String(), "\n") - strings.Count(description, "\n") - 3
+	if listHeight < 1 {
+		listHeight = 1
 	}
 	start, end := listWindow(t.securityCursor, total, listHeight)
 	for index := start; index < end; index++ {
@@ -491,9 +498,9 @@ func (t *configTab) viewSecurity(width, height int) string {
 		row := padRight(truncate(area, 20), 20) + "  " + padRight(truncate(label, 24), 24) + "  " + padRight(truncate(value, 16), 16) + "  " + origin
 		b.WriteString("  ")
 		if selected {
-			b.WriteString(renderSelectableRow(row, true))
+			b.WriteString(renderSelectableRow(truncate(row, width-6), true))
 		} else {
-			b.WriteString("  " + styleBase.Render(row))
+			b.WriteString("  " + styleBase.Render(truncate(row, width-6)))
 		}
 		b.WriteString("\n")
 	}
@@ -522,9 +529,9 @@ func (t *configTab) renderFieldRow(idx, col int, selected bool) string {
 	}
 	row := padRight(field.Label, 20) + "  " + padRight(truncate(value, 34), 34) + "  " + truncate(field.Description, maxInt(col-60, 12))
 	if selected {
-		return renderSelectableRow(row, true)
+		return renderSelectableRow(truncate(row, col-2), true)
 	}
-	return "  " + styleBase.Render(row)
+	return "  " + styleBase.Render(truncate(row, col-2))
 }
 
 func (t *configTab) viewEditor(width int) string {
@@ -540,7 +547,7 @@ func (t *configTab) viewEditor(width int) string {
 	b.WriteString(styleMuted.Render("Enter keeps edit; s in Settings saves. Esc cancels."))
 	if t.saveErr != "" {
 		b.WriteString("\n\n  ")
-		b.WriteString(styleError.Render(t.saveErr))
+		b.WriteString(styleError.Render(wrapDisplay(t.saveErr, width-4)))
 	}
 	return b.String()
 }

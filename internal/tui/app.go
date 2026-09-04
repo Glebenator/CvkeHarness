@@ -483,7 +483,8 @@ func (m model) renderHelp() string {
 		{
 			"Jobs Tab",
 			[][2]string{
-				{"n", "Create a new scheduled job"},
+				{"n", "Create or reopen a job draft"},
+				{"ctrl+b", "Previous step in job wizard"},
 				{"r", "Trigger a job run now"},
 				{"p", "Pause or resume a job"},
 				{"x", "Delete a job"},
@@ -495,6 +496,7 @@ func (m model) renderHelp() string {
 				{"enter", "Focus the composer or send a message"},
 				{"/", "Open chat command suggestions"},
 				{"/new", "Start a fresh chat (/clear remains an alias)"},
+				{"ctrl+g", "Show full session context"},
 				{"esc", "Leave the composer or interrupt active work"},
 				{"ctrl+h", "Toggle live chat and saved conversations"},
 				{"↑/↓", "Select tool calls and scroll at list boundaries"},
@@ -533,7 +535,7 @@ func (m model) renderHelp() string {
 
 	b.WriteString("  ")
 	b.WriteString(styleMuted.Render("↑↓ / PgUp PgDn scroll · Esc closes help"))
-	return b.String()
+	return wrapDisplay(b.String(), m.contentWidth()-2)
 }
 
 func (m model) contentWidth() int {
