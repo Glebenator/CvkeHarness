@@ -383,15 +383,14 @@ func (t *configTab) viewSettings(width, height int) string {
 
 	b.WriteString(renderPageHeader("Settings", "provider, security, memory, and runtime behavior", width))
 	b.WriteString("  ")
-	b.WriteString(styleMuted.Render("State "))
 	if t.dirty {
-		b.WriteString(renderStatusBadge("unsaved", false))
+		b.WriteString(renderStatusBadge("● Unsaved changes", false))
 	} else {
-		b.WriteString(renderStatusBadge("saved", true))
+		b.WriteString(renderStatusBadge("✓ Settings saved", true))
 	}
 	b.WriteString("\n")
 	b.WriteString("  ")
-	b.WriteString(styleMuted.Render("s saves for new sessions; /new in Chat starts one. Enter edits."))
+	b.WriteString(styleMuted.Render("Save with s. Start a new Chat session with /new to use changes."))
 	b.WriteString("\n\n")
 
 	if t.message != "" {
@@ -405,12 +404,12 @@ func (t *configTab) viewSettings(width, height int) string {
 		b.WriteString("\n\n")
 	}
 
-	header := padRight("", 3) + padRight("Setting", 20) + "  " + padRight("Value", 34) + "  " + "Notes"
+	header := "  " + padRight("Setting", 24) + "Value"
 	b.WriteString(renderTableHeader(width, header))
 
 	description := ""
 	if len(t.fields) > 0 {
-		description = "  " + strings.ReplaceAll(wrapDisplay(t.fields[t.cursor].Description, width-4), "\n", "\n  ")
+		description = "  " + styleBright.Render(t.fields[t.cursor].Label) + "\n  " + styleMuted.Render(strings.ReplaceAll(wrapDisplay(t.fields[t.cursor].Description, width-4), "\n", "\n  "))
 	}
 	listHeight := height - strings.Count(b.String(), "\n") - strings.Count(description, "\n") - 3
 	if listHeight < 1 {
@@ -527,9 +526,22 @@ func (t *configTab) renderFieldRow(idx, col int, selected bool) string {
 	if strings.Contains(strings.ToLower(field.Label), "key") && value != "" {
 		value = maskTUISecret(value)
 	}
-	row := padRight(field.Label, 20) + "  " + padRight(truncate(value, 34), 34) + "  " + truncate(field.Description, maxInt(col-60, 12))
+	if value == "" {
+		value = "Not set"
+	}
+	if field.Kind == configFieldToggle {
+		if value == "true" {
+			value = "On"
+		} else {
+			value = "Off"
+		}
+	}
+	if field.Kind == configFieldSecurity {
+		value += "  ›"
+	}
+	row := padRight(field.Label, 24) + truncate(value, maxInt(col-28, 1))
 	if selected {
-		return renderSelectableRow(truncate(row, col-2), true)
+		return styleSelectedRow.Width(col).Render("▸ " + truncate(row, col-2))
 	}
 	return "  " + styleBase.Render(truncate(row, col-2))
 }
@@ -539,10 +551,10 @@ func (t *configTab) viewEditor(width int) string {
 	var b strings.Builder
 	b.WriteString(renderPageHeader(field.Label, "edit setting", width))
 	b.WriteString("  ")
-	b.WriteString(styleMuted.Render(field.Description))
-	b.WriteString("\n\n  ")
-	b.WriteString(styleInputPrompt.Render("▸ "))
-	b.WriteString(styleInputActive.Render(t.input.View()))
+	b.WriteString(styleMuted.Render(strings.ReplaceAll(wrapDisplay(field.Description, width-4), "\n", "\n  ")))
+	b.WriteString("\n\n")
+	t.input.Width = maxInt(width-10, 20)
+	b.WriteString(renderInputSurface(t.input.View(), width))
 	b.WriteString("\n\n  ")
 	b.WriteString(styleMuted.Render("Enter keeps edit; s in Settings saves. Esc cancels."))
 	if t.saveErr != "" {

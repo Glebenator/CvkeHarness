@@ -106,7 +106,7 @@ var scheduleKinds = []struct {
 }{
 	{"Every interval", "every", "e.g. 30m, 1h, 24h"},
 	{"Cron expression", "cron", "e.g. 0 */6 * * *"},
-	{"One-time at", "at", "e.g. 2026-05-01T09:00:00Z"},
+	{"One-time at", "at", "A future date and time, with timezone"},
 }
 
 func newJobsTab() tabModel {
@@ -538,12 +538,18 @@ func (t *jobsTab) viewList(width, height int) string {
 	if t.message != "" {
 		header += "  " + wrapDisplay(t.message, width-4) + "\n"
 	}
-	if t.draftReady {
-		header += "  n Reopen unsaved job draft\n"
-	}
+
 	if len(t.jobs) == 0 {
+		if t.draftReady {
+			return header + renderEmptyState("Your job draft is ready", "Continue where you left off; nothing is scheduled yet.", "n", "Continue draft")
+		}
 		return header + renderEmptyState("No scheduled jobs", "Create recurring or one-time agent work from here.", "n", "new job")
 	}
+	action := "New job"
+	if t.draftReady {
+		action = "Continue draft"
+	}
+	header += "  " + renderKeyHint("n", action) + styleMuted.Render(fmt.Sprintf("    %d scheduled", len(t.jobs))) + "\n\n"
 	count := maxInt((height-strings.Count(header, "\n")-1)/2, 1)
 	start, end := listWindow(t.cursor, len(t.jobs), count)
 	for i := start; i < end; i++ {
@@ -559,8 +565,11 @@ func (t *jobsTab) viewList(width, height int) string {
 		if health.StaleClaim {
 			status = "stale claim"
 		}
-		header += "  " + renderSelectableRow(truncate(job.Name+" · "+status, width-6), i == t.cursor) + "\n"
-		header += "    " + truncate(job.ScheduleKind+" "+job.ScheduleSpec+" · next "+fmtTime(job.NextRunAt), width-6) + "\n"
+		next := "Next " + fmtTime(job.NextRunAt)
+		if !job.Enabled {
+			next = "Paused, no runs scheduled"
+		}
+		header += renderListEntry(job.Name, strings.ToUpper(status)+" · "+job.ScheduleKind+" "+job.ScheduleSpec+" · "+next, i == t.cursor, width)
 	}
 	return header + "  " + scrollHints(start, end, len(t.jobs))
 }
@@ -708,20 +717,22 @@ func (t *jobsTab) viewCreate(width, height int) string {
 	t.createSpec.Width = col - 4
 	t.createPrompt.SetWidth(col)
 	t.createPrompt.SetHeight(maxInt(minInt(height-10, 6), 2))
-	header := renderPageHeader("New Scheduled Job", fmt.Sprintf("Step %d of %d · %s", t.createStep+1, createStepCount, createStepLabels[t.createStep]), width)
+	header := renderPageHeader("New job", fmt.Sprintf("%d of %d · %s", t.createStep+1, createStepCount, createStepLabels[t.createStep]), width)
 	var body string
 	switch t.createStep {
 	case createStepName:
-		body = "  A short, descriptive name\n\n" + t.createName.View()
+		body = "  " + styleTitle.Render("What should this job be called?") + "\n\n" + renderInputSurface(t.createName.View(), width) + "\n\n  " + styleMuted.Render("Use a name you can recognize in activity and history.")
 	case createStepKind:
-		body = "  When should this job run?\n\n"
+		body = "  " + styleTitle.Render("When should this job run?") + "\n\n"
 		for i, kind := range scheduleKinds {
-			body += "  " + renderSelectableRow(kind.label+"  "+kind.hint, i == t.createKind) + "\n"
+			body += renderListEntry(kind.label, kind.hint, i == t.createKind, width)
 		}
 	case createStepSpec:
-		body = "  " + scheduleKinds[t.createKind].label + "\n\n" + t.createSpec.View() + "\n\n  " + t.specContextHelp()
+		body = "  " + styleTitle.Render(scheduleKinds[t.createKind].label) + "\n\n" + renderInputSurface(t.createSpec.View(), width) + "\n\n  " + styleMuted.Render(t.specContextHelp())
 	case createStepPrompt:
-		body = "  Describe the outcome, target, and constraints. Ctrl+J adds a line.\n\n" + t.createPrompt.View()
+		t.createPrompt.SetWidth(maxInt(width-8, 20))
+		t.createPrompt.SetHeight(maxInt(minInt(height-13, 5), 2))
+		body = "  " + styleTitle.Render("What should the agent do?") + "\n  " + styleMuted.Render("Include the target, expected outcome, and constraints.") + "\n\n" + renderInputSurface(t.createPrompt.View(), width) + "\n  " + renderKeyHint("ctrl+j", "New line")
 	case createStepConfirm:
 		body = "  Name: " + t.createName.Value() + "\n  Schedule: " + scheduleKinds[t.createKind].label + " " + t.createSpec.Value() + "\n  Next executions (UTC):\n"
 		for _, at := range t.preview {

@@ -893,18 +893,22 @@ func (t *chatTab) viewHistory(width, height int) string {
 func (t *chatTab) renderComposer(width int) string {
 	width = maxInt(width, 20)
 	t.composer.SetWidth(maxInt(width-4, 16))
-	label := styleSectionTitle.Render("MESSAGE")
+	label := styleAccent.Render("Message")
 	if t.running {
-		label = styleMuted.Render("MESSAGE  locked while the agent is working")
+		label = styleMuted.Render("Message · waiting for the current task")
 	} else if !t.composerFocused {
-		label = styleMuted.Render("MESSAGE  press Enter to compose")
+		label = styleMuted.Render("Message · Enter to write")
 	}
 	body := t.composer.View()
 
+	borderColor := colorSubtle
+	if t.composerFocused && !t.running {
+		borderColor = colorAccent
+	}
 	box := lipgloss.NewStyle().
 		Width(maxInt(width-2, 18)).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorSubtle).
+		BorderForeground(borderColor).
 		Padding(0, 1).
 		Render(body)
 	return "  " + label + "\n  " + strings.ReplaceAll(box, "\n", "\n  ")
@@ -1002,8 +1006,8 @@ func (t *chatTab) refreshViewport() {
 		appendWrappedBlock(&lines, "  ", "Unable to continue:", t.lastError, t.viewport.Width-4, styleError, styleBase)
 		lines = append(lines, "  Your draft is preserved. Enter edits it; Enter again retries.", "  Leave the composer, then press s to open Settings.", "")
 	}
-	if len(t.messages) == 0 && t.lastError == "" {
-		title := "Ready for a task"
+	if len(t.messages) == 0 && len(t.toolCalls) == 0 && t.lastError == "" {
+		title := "What would you like to investigate?"
 		if t.starting {
 			title = "Connecting. Your message is waiting."
 		}
@@ -1012,10 +1016,12 @@ func (t *chatTab) refreshViewport() {
 		}
 		lines = append(lines,
 			styleBright.Render("  "+title),
-			styleMuted.Render("  Describe the outcome you want. CvkeHarness will keep target, tools,"),
-			styleMuted.Render("  approvals, and verification visible while it works."),
+			styleMuted.Render("  Name the target, the outcome, and any constraints."),
 			"",
-			"  "+renderKeyHint("/help", "commands"),
+			styleMuted.Render("  For example"),
+			styleBase.Render("  Inspect staging API health. Report issues without changing it."),
+			"",
+			"  "+renderKeyHint("/", "Commands")+"    "+renderKeyHint("ctrl+h", "Past conversations"),
 		)
 	}
 	renderedTools := make([]bool, len(t.toolCalls))
@@ -1032,7 +1038,7 @@ func (t *chatTab) refreshViewport() {
 		switch message.role {
 		case "user":
 			label = "YOU"
-			labelStyle = styleSuccess
+			labelStyle = styleBright
 		case "system":
 			label = "CONSOLE"
 			labelStyle = styleMuted
@@ -2262,9 +2268,9 @@ func (t *chatTab) liveHeader(width int) string {
 		verification = verificationActivityLabel(activity.VerificationActivity)
 	}
 	lines := []string{
-		"Chat · " + t.status + " · Verification: " + firstNonEmptyText(verification, "not run"),
-		"Target: " + firstNonEmptyText(t.target, "not resolved yet") + " · Environment: " + firstNonEmptyText(t.environment, "unknown"),
-		"Security: " + firstNonEmptyText(t.safety, "unknown") + " · Ctrl+G context",
+		styleTitle.Render("Chat") + "  " + styleAccent.Render(t.status) + "  " + styleMuted.Render("Verification: "+firstNonEmptyText(verification, "not run")),
+		styleMuted.Render("Target: ") + styleBright.Render(firstNonEmptyText(t.target, "not resolved yet")) + styleMuted.Render(" · Environment: "+firstNonEmptyText(t.environment, "unknown")),
+		styleMuted.Render("Security: ") + styleBase.Render(firstNonEmptyText(t.safety, "unknown")) + " · " + renderKeyHint("Ctrl+G", "context"),
 	}
 	var b strings.Builder
 	for _, line := range lines {
