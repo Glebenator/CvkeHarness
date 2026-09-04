@@ -205,7 +205,7 @@ func (t *chatTab) HorizontalTabNavigation() bool {
 }
 
 func (t *chatTab) Init(svc *Service) tea.Cmd {
-	if svc != nil && svc.Config() != nil {
+	if svc != nil && svc.Config() != nil && t.session == nil && !t.starting {
 		cfg := svc.Config()
 		t.configuredModel = strings.Trim(strings.TrimSpace(cfg.Provider)+"/"+strings.TrimSpace(cfg.PrimaryModel()), "/")
 		if effective, err := cfg.EffectiveSecurity(); err == nil {
@@ -691,6 +691,8 @@ func (t *chatTab) startFreshSession(svc *Service) (tabModel, tea.Cmd) {
 	t.markdownWidth = 0
 	t.markdownCache = nil
 	t.closeCommandMenu()
+	t.starting = false
+	t.Init(svc) // Refresh the configuration label only for this new session.
 	t.starting = true
 	t.status = "CONNECTING"
 	t.statusDetail = "starting a fresh in-process session"
@@ -710,6 +712,8 @@ func (t *chatTab) beginTurn(prompt string) (tabModel, tea.Cmd) {
 	t.eventWaitStop = make(chan struct{})
 	t.running = true
 	t.stopping = false
+	t.target = ""
+	t.environment = ""
 	t.status = "THINKING"
 	t.statusDetail = "waiting for a complete provider response"
 	t.lastError = ""
@@ -796,7 +800,7 @@ func (t *chatTab) viewLive(width, height int) string {
 			lipgloss.Top,
 			lipgloss.NewStyle().Width(mainWidth).Render(t.viewport.View()),
 			" ",
-			t.contextPane(paneWidth),
+			clampLines(t.contextPane(paneWidth), t.viewport.Height),
 		)
 		composerWidth = mainWidth - 2
 	}
@@ -933,7 +937,7 @@ func (t *chatTab) contextLine(width int) string {
 		sel := t.session.Selection()
 		cfgModel = firstNonEmptyText(sel.Requested.String(), sel.Requested.Model)
 	}
-	target := firstNonEmptyText(t.target, "runtime host")
+	target := firstNonEmptyText(t.target, "not resolved yet")
 	parts := []string{
 		"target: " + target,
 		"model: " + cfgModel,
@@ -952,7 +956,7 @@ func (t *chatTab) contextPane(width int) string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, styleMuted.Render("TARGET"))
-	lines = append(lines, styleBase.Render(firstNonEmptyText(t.target, "runtime host")))
+	lines = append(lines, styleBase.Render(firstNonEmptyText(t.target, "not resolved yet")))
 	lines = append(lines, "")
 	lines = append(lines, styleMuted.Render("VERIFICATION"))
 	if activity, ok := t.verifierActivity[t.activeTurn]; ok {
@@ -1338,11 +1342,11 @@ func (t *chatTab) applyRuntimeEvent(event tools.Event) {
 		}
 	}
 	if event.Type == tools.EventTargetResolved {
-		t.target = firstNonEmptyText(event.TargetID, "unresolved")
+		t.target = ansi.Strip(secrets.Mask(firstNonEmptyText(event.TargetID, "unresolved")))
 		if event.TargetAmbiguous {
 			t.target += " (ambiguous)"
 		}
-		t.environment = firstNonEmptyText(event.Environment, "unknown")
+		t.environment = ansi.Strip(firstNonEmptyText(event.Environment, "unknown"))
 		return
 	}
 	if event.Type == tools.EventVerificationActivity {

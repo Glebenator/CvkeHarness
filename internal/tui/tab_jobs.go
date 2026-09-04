@@ -127,7 +127,7 @@ func (t *jobsTab) StatusHints() []string {
 		if t.creating {
 			return []string{styleMuted.Render("Saving job…")}
 		}
-		hints := []string{renderKeyHint("enter", "continue"), renderKeyHint("ctrl+b", "back"), renderKeyHint("esc", "close draft")}
+		hints := []string{renderKeyHint("enter", "continue"), renderKeyHint("ctrl+b", "back"), renderKeyHint("esc", "close")}
 		if t.createStep == createStepPrompt {
 			hints = append(hints, renderKeyHint("ctrl+j", "newline"))
 		}
@@ -721,7 +721,7 @@ func (t *jobsTab) viewCreate(width, height int) string {
 	case createStepSpec:
 		body = "  " + scheduleKinds[t.createKind].label + "\n\n" + t.createSpec.View() + "\n\n  " + t.specContextHelp()
 	case createStepPrompt:
-		body = "  Describe the outcome, target, and constraints.\n\n" + t.createPrompt.View()
+		body = "  Describe the outcome, target, and constraints. Ctrl+J adds a line.\n\n" + t.createPrompt.View()
 	case createStepConfirm:
 		body = "  Name: " + t.createName.Value() + "\n  Schedule: " + scheduleKinds[t.createKind].label + " " + t.createSpec.Value() + "\n  Next executions (UTC):\n"
 		for _, at := range t.preview {

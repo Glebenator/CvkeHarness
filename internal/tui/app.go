@@ -441,7 +441,7 @@ func (m model) renderStatusBar() string {
 	if consuming {
 		quitKey = "ctrl+c"
 	}
-	hints := []string{renderKeyHint(quitKey, "quit")}
+	hints := []string{}
 	navigationHint := renderKeyHint("←→", "switch")
 	if consuming {
 		navigationHint = renderKeyHint("tab", "switch")
@@ -449,14 +449,18 @@ func (m model) renderStatusBar() string {
 			navigationHint = renderKeyHint("←→", "switch")
 		}
 	}
-	// Keep the universal escape visible before optional tab-local actions.
+	// Prioritize navigation and local completion/recovery actions over quit.
 	candidates := []string{navigationHint}
-	if tabHints := m.tabs[m.activeTab].StatusHints(); len(tabHints) > 0 {
+	tabHints := m.tabs[m.activeTab].StatusHints()
+	if consuming {
 		candidates = append(candidates, tabHints...)
-	}
-	if !consuming {
+	} else {
+		primary := minInt(len(tabHints), 2)
+		candidates = append(candidates, tabHints[:primary]...)
 		candidates = append(candidates, renderKeyHint("?", "help"))
+		candidates = append(candidates, tabHints[primary:]...)
 	}
+	candidates = append(candidates, renderKeyHint(quitKey, "quit"))
 
 	for _, candidate := range candidates {
 		next := append(append([]string(nil), hints...), candidate)
@@ -521,6 +525,16 @@ func (m model) renderHelp() string {
 			},
 		},
 		{
+			"Runs Tab",
+			[][2]string{
+				{"/", "Search task, answer, errors and commands"},
+				{"f / t", "Filter status / cycle last recorded target"},
+				{"[ / ]", "Previous page / next page"},
+				{"d / e", "Toggle diagnostics / export selected run"},
+				{"PgUp / PgDn", "Scroll run detail"},
+			},
+		},
+		{
 			"Settings Tab",
 			[][2]string{
 				{"enter", "Edit or toggle the selected setting"},
@@ -532,7 +546,7 @@ func (m model) renderHelp() string {
 			"General",
 			[][2]string{
 				{"?", "Toggle this help"},
-				{"q / ctrl+c", "Quit the dashboard"},
+				{"q / ctrl+c", "Quit the dashboard; Ctrl+C forces exit"},
 			},
 		},
 	}

@@ -340,7 +340,7 @@ func (t *runsTab) viewDetail(width, height int) string {
 		lines = append(lines, "  "+styleSectionTitle.Render("Verification"))
 		lines = append(lines, "")
 		verStyle := styleSuccess
-		if run.VerificationStatus != "pass" && run.VerificationStatus != "ok" {
+		if run.VerificationStatus != "satisfied" && run.VerificationStatus != "pass" && run.VerificationStatus != "ok" {
 			verStyle = styleWarning
 		}
 		lines = append(lines, "  "+renderKeyValue("Status", verStyle.Render(run.VerificationStatus)))
