@@ -83,12 +83,14 @@ func (t *configTab) Consuming() bool { return t.editing || t.securityOpen }
 func (t *configTab) StatusHints() []string {
 	if t.editing {
 		return []string{
-			renderKeyHint("enter", "apply"),
+			renderKeyHint("enter", "keep edit"),
 			renderKeyHint("esc", "cancel"),
 		}
 	}
 	if t.securityOpen {
 		hints := []string{
+			renderKeyHint("s", "save"),
+			renderKeyHint("esc", "back"),
 			renderKeyHint("↑↓", "move"),
 			renderKeyHint("←→", "change"),
 			renderKeyHint("r", "reset"),
@@ -317,6 +319,10 @@ func (t *configTab) beginEdit() {
 	t.editIdx = t.cursor
 	t.input = textinput.New()
 	t.input.SetValue(field.Get(t.cfg))
+	if field.Label == "Provider API Key" {
+		t.input.EchoMode = textinput.EchoPassword
+		t.input.EchoCharacter = '•'
+	}
 	t.input.Placeholder = field.Label
 	t.input.CharLimit = 512
 	t.input.Width = 52
@@ -531,7 +537,7 @@ func (t *configTab) viewEditor(width int) string {
 	b.WriteString(styleInputPrompt.Render("▸ "))
 	b.WriteString(styleInputActive.Render(t.input.View()))
 	b.WriteString("\n\n  ")
-	b.WriteString(styleMuted.Render("enter applies, esc cancels"))
+	b.WriteString(styleMuted.Render("Enter keeps edit; s in Settings saves. Esc cancels."))
 	if t.saveErr != "" {
 		b.WriteString("\n\n  ")
 		b.WriteString(styleError.Render(t.saveErr))
