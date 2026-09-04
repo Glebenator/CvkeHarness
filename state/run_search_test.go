@@ -43,3 +43,23 @@ func TestRunSearchFindsOlderResultsAndPaginatesWithoutDuplicates(t *testing.T) {
 		t.Fatalf("literal query failed: %d %v", len(results), err)
 	}
 }
+
+func TestActivityTotalsIncludeHistoryBeyondVisiblePage(t *testing.T) {
+	db := Open(filepath.Join(t.TempDir(), "state.db"))
+	defer db.Close()
+	ctx := context.Background()
+	for i := 0; i < 105; i++ {
+		if err := db.RecordRun(ctx, RunRecord{StartedAt: time.Now(), Success: i < 100}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 7; i++ {
+		if _, err := db.StartChatSession(ctx, ChatSession{StartedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	totals, err := db.ActivityTotals(ctx)
+	if err != nil || totals.Runs != 105 || totals.SuccessfulRuns != 100 || totals.ChatSessions != 7 {
+		t.Fatalf("incorrect totals: %+v %v", totals, err)
+	}
+}

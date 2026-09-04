@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/coolcake/cvkeharness/state"
 	"strings"
 	"time"
 
@@ -69,7 +71,11 @@ func (v InitialView) tabIndex() int {
 
 type tickMsg time.Time
 
-type navigateMsg struct{ tab int }
+type navigateMsg struct {
+	tab   int
+	run   *state.RunSummary
+	jobID string
+}
 type quitSavedMsg struct{ err error }
 
 func tickCmd() tea.Cmd {
@@ -164,6 +170,17 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case navigateMsg:
+		if msg.run != nil {
+			t := m.tabs[tabRuns].(*runsTab)
+			t.selected = msg.run
+			t.expanded = true
+			t.loaded = true
+			t.scroll = 0
+		}
+		if msg.jobID != "" {
+			t := m.tabs[tabJobs].(*jobsTab)
+			t.focusJobID = msg.jobID
+		}
 		return m, m.switchTab(msg.tab)
 	case quitSavedMsg:
 		m.quitSaving = false
@@ -559,22 +576,22 @@ func (m model) contentHeight() int {
 
 func loadOverviewData(svc *Service) tea.Msg {
 	ctx := context.Background()
-	runs, _ := svc.RecentRuns(ctx, 5)
-	jobs, _ := svc.ScheduledJobs(ctx)
-	sessions, _ := svc.RecentChatSessions(ctx, 5)
-	allRuns, _ := svc.RecentRuns(ctx, 100)
-	return overviewDataMsg{cfg: svc.Config(), runs: runs, jobs: jobs, sessions: sessions, allRuns: allRuns}
+	runs, e1 := svc.RecentRuns(ctx, 10)
+	jobs, e2 := svc.ScheduledJobs(ctx)
+	health, e3 := svc.SchedulerHealth(ctx)
+	totals, e4 := svc.ActivityTotals(ctx)
+	blocked, e5 := svc.BlockedWork(ctx)
+	return overviewDataMsg{cfg: svc.Config(), runs: runs, jobs: jobs, health: health, totals: totals, blocked: blocked, setup: svc.SetupMode(), at: time.Now(), err: errors.Join(e1, e2, e3, e4, e5)}
 }
 
 func loadJobsData(svc *Service) tea.Msg {
 	ctx := context.Background()
-	jobs, _ := svc.ScheduledJobs(ctx)
-	health, _ := svc.SchedulerHealth(ctx)
-	return jobsDataMsg{jobs: jobs, health: health}
+	jobs, e1 := svc.ScheduledJobs(ctx)
+	health, e2 := svc.SchedulerHealth(ctx)
+	return jobsDataMsg{jobs: jobs, health: health, err: errors.Join(e1, e2)}
 }
 
 func loadRunsData(svc *Service) tea.Msg {
-	ctx := context.Background()
-	runs, _ := svc.RecentRuns(ctx, 50)
-	return runsDataMsg{runs: runs}
+	runs, err := svc.SearchRuns(context.Background(), 26, 0, "", "all")
+	return runsDataMsg{runs: runs, err: err, status: "all"}
 }

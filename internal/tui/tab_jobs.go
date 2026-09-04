@@ -19,11 +19,13 @@ import (
 type jobsDataMsg struct {
 	jobs   []state.ScheduledJob
 	health []state.SchedulerHealth
+	err    error
 }
 
 type jobRunsDataMsg struct {
 	jobID string
 	runs  []state.ScheduledJobRun
+	err   error
 }
 
 type jobActionMsg struct {
@@ -72,6 +74,8 @@ type jobsTab struct {
 	cursor      int
 	mode        jobsMode
 	loaded      bool
+	loadErr     error
+	focusJobID  string
 	message     string // Transient feedback message
 
 	// Detail mode
@@ -159,7 +163,22 @@ func (t *jobsTab) StatusHints() []string {
 func (t *jobsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case jobsDataMsg:
+		t.loaded = true
+		t.loadErr = msg.err
+		if msg.err != nil {
+			return t, nil
+		}
+		selectedID := ""
+		if t.cursor < len(t.jobs) {
+			selectedID = t.jobs[t.cursor].ID
+		}
 		t.jobs = msg.jobs
+		for i, job := range t.jobs {
+			if job.ID == selectedID {
+				t.cursor = i
+				break
+			}
+		}
 		t.healthByJob = make(map[string]state.SchedulerHealth, len(msg.health))
 		for _, item := range msg.health {
 			t.healthByJob[item.JobID] = item
@@ -168,10 +187,24 @@ func (t *jobsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		if t.cursor >= len(t.jobs) && len(t.jobs) > 0 {
 			t.cursor = len(t.jobs) - 1
 		}
+		if t.focusJobID != "" {
+			id := t.focusJobID
+			t.focusJobID = ""
+			for i, job := range t.jobs {
+				if job.ID == id {
+					t.cursor = i
+					return t, t.openJob(svc, id)
+				}
+			}
+		}
 		return t, nil
 
 	case jobRunsDataMsg:
+		if t.detailJobID != "" && t.detailJobID != msg.jobID {
+			return t, nil
+		}
 		t.detailRuns = msg.runs
+		t.loadErr = msg.err
 		t.detailJobID = msg.jobID
 		return t, nil
 
@@ -194,6 +227,9 @@ func (t *jobsTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		return t, func() tea.Msg { return loadJobsData(svc) }
 
 	case tea.KeyMsg:
+		if t.mode == jobsModeList && msg.String() == "ctrl+r" {
+			return t, t.Init(svc)
+		}
 		switch t.mode {
 		case jobsModeList:
 			return t.updateList(msg, svc)
@@ -225,14 +261,8 @@ func (t *jobsTab) updateList(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		}
 	case key.Matches(msg, keys.Enter):
 		if len(t.jobs) > 0 {
-			t.mode = jobsModeDetail
-			t.detailScroll = 0
 			job := t.jobs[t.cursor]
-			return t, func() tea.Msg {
-				ctx := context.Background()
-				runs, _ := svc.ScheduledJobRuns(ctx, job.ID, 10)
-				return jobRunsDataMsg{jobID: job.ID, runs: runs}
-			}
+			return t, t.openJob(svc, job.ID)
 		}
 	case key.Matches(msg, keys.NewJob):
 		t.mode = jobsModeCreate
@@ -487,95 +517,52 @@ func (t *jobsTab) View(width, height int) string {
 	}
 }
 
-func (t *jobsTab) viewList(width, height int) string {
-	if !t.loaded {
-		return styleMuted.Render("  Loading…")
+func (t *jobsTab) openJob(svc *Service, id string) tea.Cmd {
+	t.mode = jobsModeDetail
+	t.detailScroll = 0
+	t.detailJobID = id
+	return func() tea.Msg {
+		runs, err := svc.ScheduledJobRuns(context.Background(), id, 10)
+		return jobRunsDataMsg{jobID: id, runs: runs, err: err}
 	}
-
-	var b strings.Builder
-	col := width - 4
-
-	b.WriteString(renderPageHeader("Jobs", "scheduled agent work and run history", width))
-
-	if t.message != "" {
-		b.WriteString("  ")
-		b.WriteString(t.message)
-		b.WriteString("\n\n")
-	}
-
-	if len(t.jobs) == 0 {
-		b.WriteString(renderEmptyState("No scheduled jobs", "Create recurring or one-time agent work from here.", "n", "new job"))
-		return b.String()
-	}
-
-	// Column headers
-	nameCol := maxInt(col-65, 15)
-	b.WriteString(renderTableHeader(width,
-		padRight("", 3)+
-			padRight("Name", nameCol)+"  "+
-			padRight("Schedule", 22)+"  "+
-			padRight("Status", 10)+"  "+
-			padRight("Next Run", 16)+"  "+
-			padRight("Last", 10)))
-
-	// Windowed rendering
-	headerLines := 4 // top padding + message + headers + rule
-	if t.message != "" {
-		headerLines += 2
-	}
-	listHeight := height - headerLines
-	if listHeight < 3 {
-		listHeight = 3
-	}
-	start, end := listWindow(t.cursor, len(t.jobs), listHeight)
-
-	if start > 0 {
-		b.WriteString("  ")
-		b.WriteString(styleSubtle.Render(fmt.Sprintf("  ↑ %d more", start)))
-		b.WriteString("\n")
-	}
-
-	for i := start; i < end; i++ {
-		job := t.jobs[i]
-		b.WriteString("  ")
-		b.WriteString(t.renderJobRow(job, col, nameCol, i == t.cursor))
-		b.WriteString("\n")
-	}
-
-	if end < len(t.jobs) {
-		b.WriteString("  ")
-		b.WriteString(styleSubtle.Render(fmt.Sprintf("  ↓ %d more", len(t.jobs)-end)))
-		b.WriteString("\n")
-	}
-
-	return b.String()
 }
 
-func (t *jobsTab) renderJobRow(job state.ScheduledJob, col, nameCol int, selected bool) string {
-	icon := enabledIcon(job.Enabled)
-	name := padRight(truncate(job.Name, nameCol), nameCol)
-	sched := padRight(truncate(job.ScheduleKind+" "+job.ScheduleSpec, 22), 22)
-
-	health := t.healthByJob[job.ID]
-	status := styleMuted.Render(padRight("—", 10))
-	if !job.Enabled {
-		status = styleWarning.Render(padRight("paused", 10))
-	} else if job.Blocked || health.Blocked {
-		status = styleWarning.Render(padRight("blocked", 10))
-	} else if health.Overdue {
-		status = styleError.Render(padRight("overdue", 10))
-	} else if health.StaleClaim {
-		status = styleError.Render(padRight("stale", 10))
-	} else {
-		status = styleSuccess.Render(padRight("active", 10))
+func (t *jobsTab) viewList(width, height int) string {
+	header := renderPageHeader("Jobs", "scheduled agent work and run history", width)
+	if !t.loaded {
+		return header + "  Loading jobs…"
 	}
-
-	next := padRight(fmtTime(job.NextRunAt), 16)
-	last := padRight(timeAgo(job.LastRunAt), 10)
-
-	row := fmt.Sprintf("%s  %s  %s  %s  %s  %s", icon, name, sched, status, next, last)
-
-	return renderSelectableRow(row, selected)
+	if t.loadErr != nil {
+		return header + "  " + wrapDisplay("Jobs unavailable: "+t.loadErr.Error()+". Ctrl+R retries.", width-4)
+	}
+	if t.message != "" {
+		header += "  " + wrapDisplay(t.message, width-4) + "\n"
+	}
+	if t.draftReady {
+		header += "  n Reopen unsaved job draft\n"
+	}
+	if len(t.jobs) == 0 {
+		return header + renderEmptyState("No scheduled jobs", "Create recurring or one-time agent work from here.", "n", "new job")
+	}
+	count := maxInt((height-strings.Count(header, "\n")-1)/2, 1)
+	start, end := listWindow(t.cursor, len(t.jobs), count)
+	for i := start; i < end; i++ {
+		job := t.jobs[i]
+		status := "paused"
+		if job.Enabled {
+			status = "active"
+		}
+		health := t.healthByJob[job.ID]
+		if health.Blocked {
+			status = "blocked"
+		}
+		if health.StaleClaim {
+			status = "stale claim"
+		}
+		header += "  " + renderSelectableRow(truncate(job.Name+" · "+status, width-6), i == t.cursor) + "\n"
+		header += "    " + truncate(job.ScheduleKind+" "+job.ScheduleSpec+" · next "+fmtTime(job.NextRunAt), width-6) + "\n"
+	}
+	return header + "  " + scrollHints(start, end, len(t.jobs))
 }
 
 func (t *jobsTab) viewDetail(width, height int) string {
@@ -609,7 +596,7 @@ func (t *jobsTab) viewDetail(width, height int) string {
 		lines = append(lines, "  "+renderKeyValue("Claim", schedulerClaimSummary(health)))
 		lines = append(lines, "  "+renderKeyValue("Heartbeat", schedulerHeartbeatSummary(health)))
 	}
-	lines = append(lines, "  "+renderKeyValue("Prompt", truncate(job.Prompt, width-22)))
+	lines = append(lines, "  "+renderKeyValue("Prompt", job.Prompt))
 	lines = append(lines, "")
 	lines = append(lines, "  "+styleSectionTitle.Render("Run History"))
 	lines = append(lines, "")
@@ -631,6 +618,10 @@ func (t *jobsTab) viewDetail(width, height int) string {
 		lines = append(lines, line)
 	}
 
+	lines = strings.Split(wrapDisplay(strings.Join(lines, "\n"), width-2), "\n")
+	if t.loadErr != nil {
+		lines = append(lines, "History unavailable: "+t.loadErr.Error())
+	}
 	header := renderPageHeader("Jobs", "scheduled agent work and run history", width)
 	detailHeight := maxInt(height-4, 1)
 
