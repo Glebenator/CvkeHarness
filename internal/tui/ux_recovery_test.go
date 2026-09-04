@@ -114,3 +114,28 @@ func TestCompactChatShowsTargetSafetyAndVerification(t *testing.T) {
 		}
 	}
 }
+
+func TestJobFooterKeepsContinueBackAndCloseAt80Columns(t *testing.T) {
+	m := recoveryModel()
+	m.activeTab = tabJobs
+	tab := m.tabs[tabJobs].(*jobsTab)
+	tab.initCreateInputs()
+	tab.mode = jobsModeCreate
+	bar := m.renderStatusBar()
+	for _, want := range []string{"enter", "ctrl+b", "esc", "tab"} {
+		if !strings.Contains(bar, want) {
+			t.Fatalf("footer lost %s: %s", want, bar)
+		}
+	}
+	if lipgloss.Width(bar) > 80 {
+		t.Fatal("footer overflows")
+	}
+}
+
+func TestWideShortChatKeepsComposerWithinViewport(t *testing.T) {
+	tab := newChatTab().(*chatTab)
+	view := tab.View(120, 20)
+	if lines := strings.Count(view, "\n") + 1; lines > 20 {
+		t.Fatalf("sidebar pushed composer below viewport: %d lines", lines)
+	}
+}

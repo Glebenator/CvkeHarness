@@ -391,7 +391,7 @@ func (t *configTab) viewSettings(width, height int) string {
 	}
 	b.WriteString("\n")
 	b.WriteString("  ")
-	b.WriteString(styleMuted.Render("s saves settings for new sessions. Enter edits a field."))
+	b.WriteString(styleMuted.Render("s saves for new sessions; /new in Chat starts one. Enter edits."))
 	b.WriteString("\n\n")
 
 	if t.message != "" {
