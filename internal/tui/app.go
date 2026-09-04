@@ -399,7 +399,10 @@ func (m model) renderTabBar() string {
 				}
 			}
 		}
-		label := num + "·" + name + badge
+		label := num + " " + name + badge
+		if i == m.activeTab {
+			label = "▸ " + label
+		}
 		// Compact padding preserves badges at 80 columns.
 		if m.width >= 100 {
 			label = " " + label + " "

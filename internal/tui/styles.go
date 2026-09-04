@@ -5,15 +5,15 @@ import "github.com/charmbracelet/lipgloss"
 // ── palette ─────────────────────────────────────────────────────────
 // Warm neutrals. Nothing electric, nothing neon.
 var (
-	colorBase       = lipgloss.Color("#a8a29e") // warm grey — body text
-	colorMuted      = lipgloss.Color("#78716c") // stone — borders, secondary
-	colorSubtle     = lipgloss.Color("#57534e") // deeper stone — faint lines
-	colorAccent     = lipgloss.Color("#d4a574") // warm amber — focus, headers
-	colorSuccess    = lipgloss.Color("#87a987") // sage green — passing, enabled
-	colorWarning    = lipgloss.Color("#c4a35a") // dusty gold — paused, pending
-	colorError      = lipgloss.Color("#c47a5a") // terracotta — failures
-	colorSurface    = lipgloss.Color("#292524") // raised surface
-	colorBrightText = lipgloss.Color("#d6d3d1") // brighter text for emphasis
+	colorBase       = lipgloss.AdaptiveColor{Dark: "#c6c0b9", Light: "#49413b"} // warm grey — body text
+	colorMuted      = lipgloss.AdaptiveColor{Dark: "#a69c92", Light: "#71665c"} // stone — borders, secondary
+	colorSubtle     = lipgloss.AdaptiveColor{Dark: "#655b52", Light: "#b6aa9c"} // deeper stone — faint lines
+	colorAccent     = lipgloss.AdaptiveColor{Dark: "#d6ad7b", Light: "#845321"} // warm amber — focus, headers
+	colorSuccess    = lipgloss.AdaptiveColor{Dark: "#a1b99a", Light: "#3f6746"} // sage green — passing, enabled
+	colorWarning    = lipgloss.AdaptiveColor{Dark: "#d1b17a", Light: "#795820"} // dusty gold — paused, pending
+	colorError      = lipgloss.AdaptiveColor{Dark: "#dea08a", Light: "#a0442f"} // terracotta — failures
+	colorSurface    = lipgloss.AdaptiveColor{Dark: "#2c2723", Light: "#eee7dd"} // raised surface
+	colorBrightText = lipgloss.AdaptiveColor{Dark: "#eee8df", Light: "#302923"} // brighter text for emphasis
 )
 
 // ── shared styles ───────────────────────────────────────────────────
@@ -26,9 +26,9 @@ var (
 
 	styleActiveTab = lipgloss.NewStyle().
 			Foreground(colorAccent).
+			Background(colorHighlight).
 			Bold(true).
-			Padding(0, 2).
-			Underline(true)
+			Padding(0, 2)
 
 	// Headings
 	styleTitle = lipgloss.NewStyle().
@@ -36,10 +36,10 @@ var (
 			Bold(true)
 
 	styleSectionTitle = lipgloss.NewStyle().
-				Foreground(colorAccent).
+				Foreground(colorBrightText).
 				Bold(true)
 
-	styleAccent = styleSectionTitle
+	styleAccent = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 
 	// Text variants
 	styleBase = lipgloss.NewStyle().
@@ -65,7 +65,7 @@ var (
 			Foreground(colorError)
 
 	// Selected row highlight
-	colorHighlight = lipgloss.Color("#3a3533") // clearly raised surface for selection
+	colorHighlight = lipgloss.AdaptiveColor{Dark: "#3c332a", Light: "#e4d6c4"} // clearly raised surface for selection
 
 	styleSelectedRow = lipgloss.NewStyle().
 				Background(colorHighlight).

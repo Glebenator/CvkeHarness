@@ -191,7 +191,7 @@ func TestModelViewClampsTallContentAndKeepsTabBar(t *testing.T) {
 	if got := strings.Count(view, "\n") + 1; got > m.height {
 		t.Fatalf("expected view to fit terminal height %d, got %d lines:\n%s", m.height, got, view)
 	}
-	for _, want := range []string{"1·Overview", "2·Jobs", "CvkeHarness"} {
+	for _, want := range []string{"1 Overview", "2 Jobs", "CvkeHarness"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected clamped view to contain %q, got:\n%s", want, view)
 		}
