@@ -261,6 +261,9 @@ func (t *chatTab) StatusHints() []string {
 		}
 		return hints
 	}
+	if !t.composerFocused && t.lastError != "" {
+		return []string{renderKeyHint("enter", "edit / retry"), renderKeyHint("s", "settings"), renderKeyHint("esc", "dismiss error")}
+	}
 	if !t.composerFocused {
 		hints := []string{
 			renderKeyHint("enter", "compose"),
@@ -312,6 +315,10 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		if msg.err != nil {
 			t.status = "UNAVAILABLE"
 			t.lastError = classifyChatStartError(msg.err)
+			t.composer.SetValue(t.pendingPrompt)
+			t.composer.CursorEnd()
+			t.composerFocused = false
+			t.composer.Blur()
 			t.pendingPrompt = ""
 			t.pendingCommand = chatcmd.None
 			return t, nil
@@ -450,6 +457,15 @@ func verticalMouseWheelDirection(msg tea.MouseMsg) int {
 }
 
 func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
+	if !t.composerFocused && t.lastError != "" {
+		if msg.String() == "s" {
+			return t, func() tea.Msg { return navigateMsg{tab: tabConfig} }
+		}
+		if msg.String() == "esc" {
+			t.lastError = ""
+			return t, nil
+		}
+	}
 	if msg.String() == "a" && !t.composerFocused && t.pendingApproval != nil && !t.approvalInFlight {
 		t.approvalInFlight = true
 		t.status = "APPROVING"
@@ -551,6 +567,7 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 			return t, nil
 		}
 		t.composer.Reset()
+		t.lastError = ""
 		t.closeCommandMenu()
 		if action := chatcmd.Parse(prompt); action != chatcmd.None {
 			return t.runLocalCommand(action, svc)

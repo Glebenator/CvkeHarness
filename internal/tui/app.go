@@ -69,6 +69,9 @@ func (v InitialView) tabIndex() int {
 
 type tickMsg time.Time
 
+type navigateMsg struct{ tab int }
+type quitSavedMsg struct{ err error }
+
 func tickCmd() tea.Cmd {
 	return tea.Tick(5*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
@@ -101,13 +104,18 @@ type horizontalTabNavigator interface {
 // ── root model ──────────────────────────────────────────────────────
 
 type model struct {
-	svc        *Service
-	binaryName string
-	width      int
-	height     int
-	activeTab  int
-	tabs       [tabCount]tabModel
-	showHelp   bool
+	svc         *Service
+	binaryName  string
+	width       int
+	height      int
+	activeTab   int
+	tabs        [tabCount]tabModel
+	showHelp    bool
+	helpScroll  int
+	confirmQuit bool
+	quitSaving  bool
+	quitError   string
+	unread      [tabCount]bool
 }
 
 // Run starts the Bubble Tea operations console.
@@ -155,6 +163,15 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case navigateMsg:
+		return m, m.switchTab(msg.tab)
+	case quitSavedMsg:
+		m.quitSaving = false
+		if msg.err != nil {
+			m.quitError = msg.err.Error()
+			return m, nil
+		}
+		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -165,9 +182,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		// Dismiss help overlay on any key before applying navigation.
+		if m.confirmQuit {
+			if m.quitSaving {
+				return m, nil
+			}
+			switch msg.String() {
+			case "esc", "c":
+				m.confirmQuit = false
+			case "d":
+				return m, tea.Quit
+			case "s":
+				cfg := cloneTUIConfig(m.tabs[tabConfig].(*configTab).cfg)
+				m.quitSaving = true
+				return m, func() tea.Msg { return quitSavedMsg{err: m.svc.SaveConfig(cfg)} }
+			}
+			return m, nil
+		}
 		if m.showHelp {
-			m.showHelp = false
+			switch msg.String() {
+			case "esc", "?":
+				m.showHelp = false
+			case "down", "j":
+				m.helpScroll++
+			case "up", "k":
+				m.helpScroll--
+			case "pgdown":
+				m.helpScroll += m.contentHeight() - 1
+			case "pgup":
+				m.helpScroll -= m.contentHeight() - 1
+			case "home":
+				m.helpScroll = 0
+			case "end":
+				m.helpScroll = 1 << 20
+			}
+			m.helpScroll = clamp(m.helpScroll, 0, maxInt(strings.Count(m.renderHelp(), "\n")+1-m.contentHeight(), 0))
 			return m, nil
 		}
 
@@ -198,6 +246,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch {
 		case key.Matches(msg, keys.Quit):
+			if cfg, ok := m.tabs[tabConfig].(*configTab); ok && cfg.dirty {
+				m.confirmQuit = true
+				m.quitError = ""
+				return m, nil
+			}
 			return m, tea.Quit
 		case key.Matches(msg, keys.Right):
 			return m, m.switchTab((m.activeTab + 1) % tabCount)
@@ -224,15 +277,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, tickCmd())
 	}
 
-	// Forward to the active tab.
-	tab, cmd := m.tabs[m.activeTab].Update(msg, m.svc, m.contentWidth(), m.contentHeight())
-	m.tabs[m.activeTab] = tab
+	// Async results belong to their workspace, even while another tab has focus.
+	owner := m.activeTab
+	switch msg.(type) {
+	case overviewDataMsg:
+		owner = tabOverview
+	case jobsDataMsg, jobRunsDataMsg, jobActionMsg:
+		owner = tabJobs
+	case runsDataMsg:
+		owner = tabRuns
+	case configSavedMsg:
+		owner = tabConfig
+	case chatDataMsg, chatDetailMsg, chatSessionReadyMsg, chatTurnDoneMsg,
+		chatExportDoneMsg, chatApprovalDoneMsg, chatRuntimeEventMsg, chatRuntimeEventWaitStoppedMsg:
+		owner = tabChat
+	}
+	if m.tabs[owner] == nil {
+		return m, nil
+	}
+	tab, cmd := m.tabs[owner].Update(msg, m.svc, m.contentWidth(), m.contentHeight())
+	m.tabs[owner] = tab
+	if owner != m.activeTab {
+		switch msg.(type) {
+		case chatTurnDoneMsg, chatSessionReadyMsg, jobActionMsg, configSavedMsg:
+			m.unread[owner] = true
+		}
+	}
 	return m, cmd
 }
 
 // switchTab changes the active tab and triggers a data refresh.
 func (m *model) switchTab(idx int) tea.Cmd {
 	m.activeTab = idx
+	m.unread[idx] = false
 	if activator, ok := m.tabs[idx].(tabActivator); ok {
 		activator.Activate()
 	}
@@ -249,8 +326,19 @@ func (m model) View() string {
 	b.WriteString("\n")
 
 	// Help overlay replaces content when active.
-	if m.showHelp {
-		b.WriteString(clampLines(m.renderHelp(), m.contentHeight()))
+	if m.confirmQuit {
+		content := "\n  Unsaved settings\n\n  Save settings before leaving?\n\n  s Save and quit    d Discard    Esc Continue editing"
+		if m.quitSaving {
+			content += "\n\n  Saving…"
+		}
+		if m.quitError != "" {
+			content += "\n\n  " + strings.Join(wrapText(m.quitError, m.contentWidth()-4), "\n  ")
+		}
+		b.WriteString(clampLines(content, m.contentHeight()))
+	} else if m.showHelp {
+		lines := strings.Split(m.renderHelp(), "\n")
+		start := clamp(m.helpScroll, 0, maxInt(len(lines)-m.contentHeight(), 0))
+		b.WriteString(clampLines(strings.Join(lines[start:], "\n"), m.contentHeight()))
 	} else {
 		// Content area
 		content := m.tabs[m.activeTab].View(m.contentWidth(), m.contentHeight())
@@ -276,11 +364,33 @@ func (m model) renderTabBar() string {
 	var parts []string
 	for i, name := range tabNames {
 		num := fmt.Sprintf("%d", i+1)
-		label := " " + num + "·" + name + " "
+		badge := ""
+		if m.unread[i] {
+			badge = " +"
+		}
+		if i == tabConfig {
+			if cfg, ok := m.tabs[i].(*configTab); ok && cfg.dirty {
+				badge = " *"
+			}
+		}
+		if i == tabChat {
+			if chat, ok := m.tabs[i].(*chatTab); ok {
+				if chat.pendingApproval != nil {
+					badge = " !"
+				} else if chat.running || chat.starting {
+					badge = " …"
+				}
+			}
+		}
+		label := num + "·" + name + badge
+		// Compact padding preserves badges at 80 columns.
+		if m.width >= 100 {
+			label = " " + label + " "
+		}
 		if i == m.activeTab {
-			parts = append(parts, styleActiveTab.Render(label))
+			parts = append(parts, styleActiveTab.Padding(0, 1).Render(label))
 		} else {
-			parts = append(parts, styleTab.Render(label))
+			parts = append(parts, styleTab.Padding(0, 1).Render(label))
 		}
 	}
 	bar := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
@@ -300,6 +410,12 @@ func clampLines(s string, maxLines int) string {
 
 func (m model) renderStatusBar() string {
 	left := styleStatusBar.Render("CvkeHarness")
+	if m.confirmQuit {
+		return left + "  " + renderKeyHint("esc", "continue editing")
+	}
+	if m.showHelp {
+		return left + "  " + renderKeyHint("↑↓ / PgUp PgDn", "scroll") + "  " + renderKeyHint("esc", "close")
+	}
 
 	// Context-sensitive hints from the active tab. Add only what fits so the
 	// dashboard remains horizontally safe at 80 columns.
@@ -416,7 +532,7 @@ func (m model) renderHelp() string {
 	}
 
 	b.WriteString("  ")
-	b.WriteString(styleMuted.Render("Press any key to dismiss"))
+	b.WriteString(styleMuted.Render("↑↓ / PgUp PgDn scroll · Esc closes help"))
 	return b.String()
 }
 
