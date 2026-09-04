@@ -26,6 +26,9 @@ type overviewDataMsg struct {
 }
 type overviewItem struct {
 	label   string
+	group   string
+	title   string
+	meta    string
 	tab     int
 	run     *state.RunSummary
 	jobID   string
@@ -84,12 +87,12 @@ func (t *overviewTab) Update(msg tea.Msg, svc *Service, width, height int) (tabM
 		t.items = nil
 		for i := range msg.blocked {
 			work := msg.blocked[i]
-			t.items = append(t.items, overviewItem{label: "Approval waiting: " + work.Task, blocked: &work})
+			t.items = append(t.items, overviewItem{label: "Approval waiting: " + work.Task, group: "Needs attention", title: work.Task, meta: "APPROVAL REQUIRED · Review the exact action", blocked: &work})
 		}
 		for i := range msg.runs {
 			run := msg.runs[i]
 			if !run.Success {
-				t.items = append(t.items, overviewItem{label: runStateLabel(run) + ": " + run.Task, tab: tabRuns, run: &run})
+				t.items = append(t.items, overviewItem{label: runStateLabel(run) + ": " + run.Task, group: "Needs attention", title: run.Task, meta: runStateLabel(run) + " · " + timeAgo(run.StartedAt) + " · Open result", tab: tabRuns, run: &run})
 			}
 		}
 		health := map[string]state.SchedulerHealth{}
@@ -109,18 +112,18 @@ func (t *overviewTab) Update(msg tea.Msg, svc *Service, width, height int) (tabM
 				label = "Overdue job: "
 			}
 			if label != "" {
-				t.items = append(t.items, overviewItem{label: label + job.Name, tab: tabJobs, jobID: job.ID})
+				t.items = append(t.items, overviewItem{label: label + job.Name, group: "Needs attention", title: job.Name, meta: strings.TrimSuffix(label, ": ") + " · Open job", tab: tabJobs, jobID: job.ID})
 			}
 		}
 		for _, job := range t.jobs {
 			if job.Enabled && !job.NextRunAt.IsZero() {
-				t.items = append(t.items, overviewItem{label: "Next " + job.NextRunAt.Local().Format("Jan 2 15:04 MST") + ": " + job.Name, tab: tabJobs, jobID: job.ID})
+				t.items = append(t.items, overviewItem{label: "Next " + job.NextRunAt.Local().Format("Jan 2 15:04 MST") + ": " + job.Name, group: "Scheduled next", title: job.Name, meta: job.NextRunAt.Local().Format("Mon Jan 2 · 15:04 MST") + " · Open job", tab: tabJobs, jobID: job.ID})
 			}
 		}
 		for i := range msg.runs {
 			run := msg.runs[i]
 			if run.Success {
-				t.items = append(t.items, overviewItem{label: "Completed: " + run.Task, tab: tabRuns, run: &run})
+				t.items = append(t.items, overviewItem{label: "Completed: " + run.Task, group: "Recent results", title: run.Task, meta: "Completed · verification: " + firstNonEmptyText(run.VerificationStatus, "not run") + " · " + timeAgo(run.StartedAt), tab: tabRuns, run: &run})
 			}
 		}
 		t.cursor = clamp(t.cursor, 0, maxInt(len(t.items)-1, 0))
@@ -197,22 +200,50 @@ func (t *overviewTab) View(width, height int) string {
 		return header + scrollBody(body, width, height-4, &t.scroll)
 	}
 	if t.setup || t.totals.Runs+t.totals.ChatSessions == 0 {
-		header += "  Get started\n  s Connect provider in Settings · v Check configuration locally\n  c Start first task in Chat\n\n"
+		header += "  " + styleTitle.Render("Your operations workspace") + "\n"
+		header += "  " + styleMuted.Render("Connect a provider, then describe your first task.") + "\n\n"
+		header += "  " + renderKeyHint("s", "Set up provider") + "\n  " + renderKeyHint("v", "Check local configuration") + "\n  " + renderKeyHint("c", "Start a conversation") + "\n\n"
 	}
 	if t.notice != "" {
-		header += "  " + strings.ReplaceAll(wrapDisplay(t.notice, width-4), "\n", "\n  ") + "\n\n"
+		header += "  " + styleBase.Render(strings.ReplaceAll(wrapDisplay(t.notice, width-4), "\n", "\n  ")) + "\n\n"
 	}
-	header += fmt.Sprintf("  All history: %d runs · %s success\n  %d chat sessions · %d jobs · updated %s\n\n", t.totals.Runs, successRate(t.totals.Runs, t.totals.SuccessfulRuns), t.totals.ChatSessions, t.totals.Jobs, t.at.Local().Format("15:04:05"))
 	if len(t.items) == 0 {
-		return header + "  No work needs attention. Press c to start a task."
+		return header + renderEmptyState("You're ready to start", "Tasks and scheduled work will appear here.", "c", "Open Chat")
 	}
-	header += "  Attention, upcoming jobs, and recent outcomes\n"
+	header += "  " + styleMuted.Render(fmt.Sprintf("%d runs · %s succeeded · %d chats · %d jobs", t.totals.Runs, successRate(t.totals.Runs, t.totals.SuccessfulRuns), t.totals.ChatSessions, t.totals.Jobs)) + "\n\n"
+	var rows []string
+	group := ""
+	selectedStart, selectedEnd := 0, 0
+	for i, item := range t.items {
+		sectionStart := len(rows)
+		if item.group != group {
+			if len(rows) > 0 {
+				rows = append(rows, "")
+			}
+			count := 0
+			for _, candidate := range t.items {
+				if candidate.group == item.group {
+					count++
+				}
+			}
+			rows = append(rows, strings.TrimSuffix(renderGroupLabel(item.group, count), "\n"))
+			group = item.group
+		}
+		if i == t.cursor {
+			selectedStart = sectionStart
+		}
+		rows = append(rows, strings.Split(strings.TrimSuffix(renderListEntry(firstNonEmptyText(item.title, item.label), item.meta, i == t.cursor, width), "\n"), "\n")...)
+		if i == t.cursor {
+			selectedEnd = len(rows)
+		}
+	}
 	available := maxInt(height-strings.Count(header, "\n")-1, 1)
-	start, end := listWindow(t.cursor, len(t.items), available)
-	for i := start; i < end; i++ {
-		header += "  " + renderSelectableRow(truncate(t.items[i].label, width-6), i == t.cursor) + "\n"
+	start := maxInt(0, selectedEnd-available)
+	if selectedStart < start {
+		start = selectedStart
 	}
-	header += "  " + scrollHints(start, end, len(t.items))
+	end := minInt(len(rows), start+available)
+	header += strings.Join(rows[start:end], "\n") + "\n  " + scrollHints(start, end, len(rows))
 	return header
 }
 

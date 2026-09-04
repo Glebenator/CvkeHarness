@@ -28,7 +28,21 @@ func renderListEntry(title, metadata string, selected bool, width int) string {
 	} else {
 		row = styleBase.Render(marker + line)
 	}
-	return "  " + row + "\n    " + styleMuted.Render(truncate(metadata, maxInt(width-2, 1))) + "\n"
+	stateLabel, detail, split := strings.Cut(metadata, " · ")
+	stateStyle := styleMuted
+	switch strings.ToUpper(stateLabel) {
+	case "FAILED", "UNSATISFIED", "STALE CLAIM":
+		stateStyle = styleError
+	case "APPROVAL REQUIRED", "BLOCKED", "BLOCKED_WAITING_USER", "PAUSED", "OVERDUE JOB":
+		stateStyle = styleWarning
+	case "COMPLETED", "SUCCEEDED", "ACTIVE":
+		stateStyle = styleSuccess
+	}
+	secondary := stateStyle.Render(stateLabel)
+	if split {
+		secondary += styleMuted.Render(" · " + detail)
+	}
+	return "  " + row + "\n    " + truncate(secondary, maxInt(width-2, 1)) + "\n"
 }
 
 func renderGroupLabel(label string, count int) string {

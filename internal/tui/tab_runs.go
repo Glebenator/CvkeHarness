@@ -248,14 +248,14 @@ func (t *runsTab) View(width, height int) string {
 
 func (t *runsTab) viewList(width, height int) string {
 	header := renderPageHeader("Runs", "outcomes and execution history", width)
-	header += "  " + fmt.Sprintf("%s · Page %d · / search · f status · t target · [ ] pages", firstNonEmptyText(t.status, "all"), t.offset/25+1) + "\n"
+	header += "  " + renderKeyHint("f", "Status: "+firstNonEmptyText(t.status, "all")) + "    " + renderKeyHint("[ ]", fmt.Sprintf("Page %d", t.offset/25+1)) + "    " + renderKeyHint("/", "Search") + "\n"
 	targetLabel := "all"
 	if t.target.Unknown {
 		targetLabel = "unknown (not recorded)"
 	} else if t.target.ID != "" {
 		targetLabel = t.target.ID
 	}
-	header += "  " + wrapDisplay("Last target: "+targetLabel, width-4) + "\n"
+	header += "  " + renderKeyHint("t", "Target: "+truncate(targetLabel, width-17)) + "\n\n"
 	if t.query != "" {
 		header += "  Search: " + t.query + "\n"
 	}
@@ -275,9 +275,9 @@ func (t *runsTab) viewList(width, height int) string {
 	for i := start; i < end; i++ {
 		run := t.runs[i]
 		label := runStateLabel(run)
-		row := fmt.Sprintf("#%d %s  %s", run.ID, label, run.Task)
-		header += "  " + renderSelectableRow(truncate(row, width-6), i == t.cursor) + "\n"
-		header += "    " + truncate(fmt.Sprintf("%s · verification: %s · %s", timeAgo(run.StartedAt), firstNonEmptyText(run.VerificationStatus, "not run"), run.Provider), width-6) + "\n"
+		row := run.Task
+		metadata := fmt.Sprintf("%s · #%d · %s · verification: %s", label, run.ID, timeAgo(run.StartedAt), firstNonEmptyText(run.VerificationStatus, "not run"))
+		header += renderListEntry(row, metadata, i == t.cursor, width)
 	}
 	header += "  " + scrollHints(start, end, len(t.runs))
 	return header

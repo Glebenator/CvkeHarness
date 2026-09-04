@@ -298,7 +298,7 @@ func TestLiveChatSlashPaletteKeepsComposerVisibleInShortTerminal(t *testing.T) {
 	tab.composer.SetValue("/")
 	tab.updateCommandMenu()
 	view := tab.View(80, 16)
-	if !strings.Contains(view, "COMMANDS") || !strings.Contains(view, "MESSAGE") {
+	if !strings.Contains(view, "COMMANDS") || !strings.Contains(view, "Message") {
 		t.Fatalf("expected short layout to preserve palette and composer, got:\n%s", view)
 	}
 	if lines := strings.Count(view, "\n") + 1; lines > 16 {
@@ -984,6 +984,8 @@ func TestLiveChatArrowKeysSelectToolsAndScrollAtBoundaries(t *testing.T) {
 	t.Parallel()
 
 	tab := newChatTab().(*chatTab)
+	// Use real transcript context; a tool-only transcript no longer shows onboarding.
+	tab.messages = []liveChatMessage{{role: "user", content: "Inspect staging.\nCheck workers.\nReport health."}}
 	tab.toolCalls = []liveToolCall{
 		{name: "first", status: "SUCCEEDED"},
 		{name: "second", status: "SUCCEEDED"},
