@@ -146,6 +146,7 @@ type chatTab struct {
 	sessionID        string
 	activeTurnID     string
 	status           string
+	activityMarker   string
 	statusDetail     string
 	target           string
 	environment      string
@@ -2268,7 +2269,7 @@ func (t *chatTab) liveHeader(width int) string {
 		verification = verificationActivityLabel(activity.VerificationActivity)
 	}
 	lines := []string{
-		styleTitle.Render("Chat") + "  " + styleAccent.Render(t.status) + "  " + styleMuted.Render("Verification: "+firstNonEmptyText(verification, "not run")),
+		styleTitle.Render("Chat") + "  " + styleAccent.Render(strings.TrimSpace(t.activityMarker+" "+t.status)) + "  " + styleMuted.Render("Verification: "+firstNonEmptyText(verification, "not run")),
 		styleMuted.Render("Target: ") + styleBright.Render(firstNonEmptyText(t.target, "not resolved yet")) + styleMuted.Render(" · Environment: "+firstNonEmptyText(t.environment, "unknown")),
 		styleMuted.Render("Security: ") + styleBase.Render(firstNonEmptyText(t.safety, "unknown")) + " · " + renderKeyHint("Ctrl+G", "context"),
 	}
