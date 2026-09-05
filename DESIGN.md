@@ -57,3 +57,5 @@ The console respects the host terminal's background and uses adaptive foreground
 Page titles use bright neutral text. Reserve amber for actions and focus. Every selected row and active tab has a pointer in addition to its color treatment. Lists use a task-first line and a secondary status/context line; Overview groups attention, scheduling, and completed outcomes. Settings separates values from the selected field's explanation. Inputs have a consistent rounded boundary, with active focus emphasized.
 
 The review artifact is `docs/console-design-review.html`; implementation and verification notes are in `docs/console-visual-design.md`.
+
+Navigation uses Ctrl+O for a global workspace/action switcher, Alt+Left/Right for visited workspaces, and optional tab clicks. Opening an overlay preserves the underlying editor; Esc cancels the overlay. Motion is confined to small activity indicators while work is in progress. Approval waits and idle states are static. Operators can disable animation for the session or set `CVKE_REDUCED_MOTION=1` at launch.

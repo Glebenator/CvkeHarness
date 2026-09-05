@@ -33,3 +33,14 @@ CVKE_PREVIEW_OUTPUT=/tmp/console-preview.json go test -tags=uxpreview ./internal
 ```
 
 The standalone HTML review retains the before/after snapshots from this pass.
+
+## Navigation and motion follow-up
+
+- Ctrl+O opens a searchable workspace/action switcher from any editor. Esc closes it with the original draft and editing state intact. Workspace-name matches rank before description matches. Actions open workspaces, continue/create a draft, open history search, show help, or change session motion preferences; they do not submit work.
+- Alt+Left and Alt+Right revisit workspace history. Visiting a new workspace after going back replaces the forward branch. History is capped at 32 entries.
+- Tab labels accept mouse clicks. Clicking the current tab preserves input focus. The existing Tab/Shift+Tab and contextual arrows remain available. F1 opens help from input modes.
+- Small 120 ms activity indicators accompany connecting, running, and saving. They stop when the activity completes or pauses for approval. Idle screens do not retain an animation timer, and stale queued frames cannot restart one.
+- Search for motion in Ctrl+O to switch to static activity indicators for the session, or launch with `CVKE_REDUCED_MOTION=1`. Screens and transcript content do not slide, fade, or move during navigation.
+- The review now includes Switcher and Connecting states. Play motion cycles the actual Go-rendered indicator frames without running an agent. The exporter checks 54 screen/theme/size combinations.
+
+Tests cover editor preservation, stale switcher input, draft continuation, search ranking, workspace history, tab hitboxes, background results under the switcher, and animation shutdown/reduced motion. PTY verification exercised Ctrl+O, filtering, Chat opening, animated delayed startup, error recovery, and Alt+Left/Right. Mouse hitboxes were tested against rendered tab widths; native mouse operation remains outside the available access.
