@@ -41,6 +41,7 @@ type configTab struct {
 	scroll          int
 	loaded          bool
 	dirty           bool
+	saving          bool
 	message         string
 	saveErr         string
 	editing         bool
@@ -60,7 +61,7 @@ func newConfigTab() tabModel {
 func (t *configTab) Init(svc *Service) tea.Cmd {
 	// Tick refreshes call Init on the active tab. Never replace an in-progress
 	// editor with the last saved config; that silently discards user changes.
-	if t.loaded && (t.dirty || t.editing || t.securityOpen) {
+	if t.loaded && (t.dirty || t.editing || t.securityOpen || t.saving) {
 		return nil
 	}
 	cfg := cloneTUIConfig(svc.Config())
@@ -116,6 +117,7 @@ func (t *configTab) StatusHints() []string {
 func (t *configTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case configSavedMsg:
+		t.saving = false
 		if msg.err != nil {
 			t.saveErr = msg.err.Error()
 			t.message = ""
@@ -127,6 +129,9 @@ func (t *configTab) Update(msg tea.Msg, svc *Service, width, height int) (tabMod
 		t.cfg = cloneTUIConfig(svc.Config())
 		return t, nil
 	case tea.KeyMsg:
+		if t.saving {
+			return t, nil
+		}
 		if t.editing {
 			return t.updateEditor(msg)
 		}
@@ -152,6 +157,7 @@ func (t *configTab) updateList(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd)
 		t.beginEdit()
 	case msg.String() == "s":
 		cfg := cloneTUIConfig(t.cfg)
+		t.saving = true
 		return t, func() tea.Msg {
 			return configSavedMsg{err: svc.SaveConfig(cfg)}
 		}
@@ -229,6 +235,7 @@ func (t *configTab) updateSecurity(msg tea.KeyMsg, svc *Service) (tabModel, tea.
 		t.message = "All security controls reset to the selected profile"
 	case msg.String() == "s":
 		cfg := cloneTUIConfig(t.cfg)
+		t.saving = true
 		return t, func() tea.Msg { return configSavedMsg{err: svc.SaveConfig(cfg)} }
 	}
 	return t, nil
@@ -383,7 +390,9 @@ func (t *configTab) viewSettings(width, height int) string {
 
 	b.WriteString(renderPageHeader("Settings", "provider, security, memory, and runtime behavior", width))
 	b.WriteString("  ")
-	if t.dirty {
+	if t.saving {
+		b.WriteString(styleAccent.Render("Saving settings…"))
+	} else if t.dirty {
 		b.WriteString(renderStatusBadge("● Unsaved changes", false))
 	} else {
 		b.WriteString(renderStatusBadge("✓ Settings saved", true))

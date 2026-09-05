@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/coolcake/cvkeharness/state"
+	"os"
 	"strings"
 	"time"
 
@@ -110,18 +111,26 @@ type horizontalTabNavigator interface {
 // ── root model ──────────────────────────────────────────────────────
 
 type model struct {
-	svc         *Service
-	binaryName  string
-	width       int
-	height      int
-	activeTab   int
-	tabs        [tabCount]tabModel
-	showHelp    bool
-	helpScroll  int
-	confirmQuit bool
-	quitSaving  bool
-	quitError   string
-	unread      [tabCount]bool
+	svc               *Service
+	binaryName        string
+	width             int
+	height            int
+	activeTab         int
+	tabs              [tabCount]tabModel
+	showHelp          bool
+	helpScroll        int
+	confirmQuit       bool
+	quitSaving        bool
+	quitError         string
+	unread            [tabCount]bool
+	navigation        navigationSwitcher
+	navigationHistory []int
+	navigationIndex   int
+	navigationEpoch   uint64
+	reduceMotion      bool
+	motionPending     bool
+	motionEpoch       uint64
+	motionFrame       int
 }
 
 // Run starts the Bubble Tea operations console.
@@ -130,11 +139,12 @@ func Run(svc *Service, binaryName string, initialView InitialView) error {
 		svc.SetBinaryName(binaryName)
 	}
 	m := model{
-		svc:        svc,
-		binaryName: binaryName,
-		width:      80,
-		height:     24,
-		activeTab:  initialView.tabIndex(),
+		svc:          svc,
+		binaryName:   binaryName,
+		reduceMotion: os.Getenv("CVKE_REDUCED_MOTION") == "1",
+		width:        80,
+		height:       24,
+		activeTab:    initialView.tabIndex(),
 		tabs: [tabCount]tabModel{
 			newOverviewTab(),
 			newJobsTab(),
@@ -167,8 +177,19 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case navigationInputMsg:
+		if !m.navigation.open || msg.epoch != m.navigationEpoch {
+			return m, nil
+		}
+		before := m.navigation.input.Value()
+		var cmd tea.Cmd
+		m.navigation.input, cmd = m.navigation.input.Update(msg.msg)
+		if before != m.navigation.input.Value() {
+			m.navigation.cursor = 0
+		}
+		return m, navigationInputCmd(cmd, m.navigationEpoch)
 	case navigateMsg:
 		if msg.run != nil {
 			t := m.tabs[tabRuns].(*runsTab)
@@ -180,6 +201,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.jobID != "" {
 			t := m.tabs[tabJobs].(*jobsTab)
 			t.focusJobID = msg.jobID
+		}
+		if msg.tab == m.activeTab {
+			return m, m.tabs[msg.tab].Init(m.svc)
 		}
 		return m, m.switchTab(msg.tab)
 	case quitSavedMsg:
@@ -194,6 +218,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case tea.MouseMsg:
+		if msg.Y == 0 && msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease && !m.confirmQuit && !m.showHelp && !m.navigation.open {
+			if idx := m.clickedTab(msg.X); idx >= 0 {
+				return m, m.switchTab(idx)
+			}
+		}
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -214,6 +244,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, func() tea.Msg { return quitSavedMsg{err: m.svc.SaveConfig(cfg)} }
 			}
 			return m, nil
+		}
+		if m.navigation.open {
+			return m.updateNavigation(msg)
+		}
+		if msg.String() == "ctrl+o" {
+			return m, m.openNavigation()
+		}
+		if msg.String() == "f1" {
+			m.showHelp = !m.showHelp
+			m.helpScroll = 0
+			return m, nil
+		}
+		if !m.showHelp {
+			switch msg.String() {
+			case "alt+left":
+				return m, m.navigateHistory(-1)
+			case "alt+right":
+				return m, m.navigateHistory(1)
+			}
 		}
 		if m.showHelp {
 			switch msg.String() {
@@ -325,12 +374,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // switchTab changes the active tab and triggers a data refresh.
 func (m *model) switchTab(idx int) tea.Cmd {
-	m.activeTab = idx
-	m.unread[idx] = false
-	if activator, ok := m.tabs[idx].(tabActivator); ok {
-		activator.Activate()
+	if idx < 0 || idx >= tabCount || idx == m.activeTab {
+		return nil
 	}
-	return m.tabs[idx].Init(m.svc)
+	if len(m.navigationHistory) == 0 {
+		m.navigationHistory = []int{m.activeTab}
+		m.navigationIndex = 0
+	}
+	m.navigationHistory = append(m.navigationHistory[:m.navigationIndex+1], idx)
+	if len(m.navigationHistory) > 32 {
+		m.navigationHistory = m.navigationHistory[len(m.navigationHistory)-32:]
+	}
+	m.navigationIndex = len(m.navigationHistory) - 1
+	return m.activateTab(idx)
 }
 
 func (m model) View() string {
@@ -352,6 +408,8 @@ func (m model) View() string {
 			content += "\n\n  " + strings.Join(wrapText(m.quitError, m.contentWidth()-4), "\n  ")
 		}
 		b.WriteString(clampLines(content, m.contentHeight()))
+	} else if m.navigation.open {
+		b.WriteString(clampLines(m.renderNavigation(), m.contentHeight()))
 	} else if m.showHelp {
 		lines := strings.Split(m.renderHelp(), "\n")
 		start := clamp(m.helpScroll, 0, maxInt(len(lines)-m.contentHeight(), 0))
@@ -378,6 +436,10 @@ func (m model) View() string {
 }
 
 func (m model) renderTabBar() string {
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.tabSegments()...)
+}
+
+func (m model) tabSegments() []string {
 	var parts []string
 	for i, name := range tabNames {
 		num := fmt.Sprintf("%d", i+1)
@@ -395,8 +457,18 @@ func (m model) renderTabBar() string {
 				if chat.pendingApproval != nil {
 					badge = " !"
 				} else if chat.running || chat.starting {
-					badge = " …"
+					badge = " " + m.activityGlyph()
 				}
+			}
+		}
+		if i == tabJobs {
+			if jobs, ok := m.tabs[i].(*jobsTab); ok && jobs.creating {
+				badge = " " + m.activityGlyph()
+			}
+		}
+		if i == tabConfig {
+			if cfg, ok := m.tabs[i].(*configTab); ok && cfg.saving {
+				badge = " " + m.activityGlyph()
 			}
 		}
 		label := num + " " + name + badge
@@ -413,8 +485,7 @@ func (m model) renderTabBar() string {
 			parts = append(parts, styleTab.Padding(0, 1).Render(label))
 		}
 	}
-	bar := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-	return bar
+	return parts
 }
 
 func clampLines(s string, maxLines int) string {
@@ -432,6 +503,9 @@ func (m model) renderStatusBar() string {
 	left := styleStatusBar.Render("CvkeHarness")
 	if m.confirmQuit {
 		return left + "  " + renderKeyHint("esc", "continue editing")
+	}
+	if m.navigation.open {
+		return left + "  " + renderKeyHint("↑↓", "choose") + "  " + renderKeyHint("enter", "open") + "  " + renderKeyHint("esc", "back")
 	}
 	if m.showHelp {
 		return left + "  " + renderKeyHint("↑↓ / PgUp PgDn", "scroll") + "  " + renderKeyHint("esc", "close")
@@ -460,7 +534,7 @@ func (m model) renderStatusBar() string {
 	} else {
 		primary := minInt(len(tabHints), 2)
 		candidates = append(candidates, tabHints[:primary]...)
-		candidates = append(candidates, renderKeyHint("?", "help"))
+		candidates = append(candidates, renderKeyHint("ctrl+o", "open"), renderKeyHint("?", "help"))
 		candidates = append(candidates, tabHints[primary:]...)
 	}
 	candidates = append(candidates, renderKeyHint(quitKey, "quit"))
@@ -496,6 +570,10 @@ func (m model) renderHelp() string {
 		{
 			"Navigation",
 			[][2]string{
+				{"ctrl+o", "Find a workspace or action; Esc returns"},
+				{"alt+← / alt+→", "Previous / next visited workspace"},
+				{"f1", "Help from any input mode"},
+				{"click tab", "Open a workspace with the mouse"},
 				{"tab / shift+tab", "Cycle tabs from any input mode"},
 				{"←/→", "Cycle tabs outside text editing"},
 				{"1-5", "Jump to tab directly"},
@@ -549,6 +627,7 @@ func (m model) renderHelp() string {
 			"General",
 			[][2]string{
 				{"?", "Toggle this help"},
+				{"ctrl+o → motion", "Enable or reduce activity animation"},
 				{"q / ctrl+c", "Quit the dashboard; Ctrl+C forces exit"},
 			},
 		},

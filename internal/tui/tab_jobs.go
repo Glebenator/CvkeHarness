@@ -84,16 +84,17 @@ type jobsTab struct {
 	detailScroll int
 
 	// Create wizard
-	createStep   createStep
-	createName   textinput.Model
-	createKind   int // 0=every, 1=cron, 2=at
-	createSpec   textinput.Model
-	createPrompt textarea.Model
-	creating     bool
-	draftReady   bool
-	createScroll int
-	preview      []time.Time
-	createError  string
+	createStep     createStep
+	createName     textinput.Model
+	createKind     int // 0=every, 1=cron, 2=at
+	createSpec     textinput.Model
+	createPrompt   textarea.Model
+	creating       bool
+	draftReady     bool
+	activityMarker string
+	createScroll   int
+	preview        []time.Time
+	createError    string
 
 	// Delete confirmation
 	deleteConfirm bool
@@ -741,7 +742,7 @@ func (t *jobsTab) viewCreate(width, height int) string {
 		body += "\n  Prompt:\n  " + strings.ReplaceAll(t.createPrompt.Value(), "\n", "\n  ") + "\n\n  Enter creates this job. Ctrl+B revises it."
 	}
 	if t.creating {
-		body = "  Saving job…"
+		body = "  " + styleAccent.Render(firstNonEmptyText(t.activityMarker, "…")+" Saving job")
 	}
 	// Errors and navigation stay above the review viewport, not below long input.
 	if t.createError != "" {
