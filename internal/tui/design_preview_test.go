@@ -28,6 +28,7 @@ func TestExportConsolePreview(t *testing.T) {
 		Scene         string
 		Width, Height int
 		Theme, Text   string
+		Animation     []string
 	}
 	var frames []frame
 	now := time.Date(2026, 9, 4, 15, 0, 0, 0, time.Local)
@@ -38,7 +39,7 @@ func TestExportConsolePreview(t *testing.T) {
 			theme = "light"
 		}
 		for _, size := range [][2]int{{80, 24}, {100, 30}, {120, 40}} {
-			for _, scene := range []string{"Overview", "Jobs", "Runs", "Chat", "Settings", "New job", "Run detail"} {
+			for _, scene := range []string{"Overview", "Jobs", "Runs", "Chat", "Settings", "New job", "Run detail", "Switcher", "Connecting"} {
 				m := recoveryModel()
 				m.width, m.height = size[0], size[1]
 				m.svc.cfg.Provider = "openai"
@@ -76,6 +77,14 @@ func TestExportConsolePreview(t *testing.T) {
 					j.createStep = createStepPrompt
 					j.createName.SetValue("Morning service health")
 					j.createPrompt.SetValue("Inspect staging API and worker health.\nReport failures without changing services.")
+				case "Switcher":
+					m.openNavigation()
+				case "Connecting":
+					m.activeTab = tabChat
+					chat := m.tabs[tabChat].(*chatTab)
+					chat.starting = true
+					chat.status = "CONNECTING"
+					m.syncActivity()
 				case "Run detail":
 					m.activeTab = tabRuns
 					r.expanded = true
@@ -90,7 +99,15 @@ func TestExportConsolePreview(t *testing.T) {
 				if strings.Count(view, "\n")+1 > size[1] {
 					t.Errorf("%s exceeds terminal height", scene)
 				}
-				frames = append(frames, frame{scene, size[0], size[1], theme, view})
+				item := frame{Scene: scene, Width: size[0], Height: size[1], Theme: theme, Text: view}
+				if scene == "Connecting" {
+					for i := range activityFrames {
+						m.motionFrame = i
+						m.syncActivity()
+						item.Animation = append(item.Animation, m.View())
+					}
+				}
+				frames = append(frames, item)
 			}
 		}
 	}
