@@ -167,6 +167,27 @@ The setup wizard also reads the official Codex `~/.codex/models_cache.json` mode
 go build -o cvkeharness .
 ```
 
+On Windows, use Go 1.26.2 or newer and build from PowerShell:
+
+```powershell
+go build -o cvkeharness.exe .
+.\cvkeharness.exe --help
+.\cvkeharness.exe setup
+```
+
+The Windows build includes the CLI/Console and checked arithmetic. The native
+recovery executor currently requires Linux or macOS; Windows omits the
+`recovery_manage` and `recovery_fleet` agent tools and returns an explicit
+unsupported-platform error for executor commands. `recovery calculate` works
+without an executor. Use a Linux build inside WSL2 to test recovery, subject to
+each adapter's filesystem/service requirements. The shell tool currently uses
+POSIX `sh`, so native Windows shell execution also requires `sh` on `PATH`; it
+does not automatically translate commands into PowerShell.
+
+The [platform build workflow](.github/workflows/platform-build.yml) builds and
+runs focused platform checks on Windows, Linux and macOS, and cross-compiles
+Windows ARM64. These checks do not replace the recovery Docker/VM fault labs.
+
 ### Initial setup
 
 ```bash

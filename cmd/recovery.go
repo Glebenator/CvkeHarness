@@ -25,6 +25,9 @@ func newRecoveryCommand() *cobra.Command {
 	root.PersistentFlags().StringVar(&expectedTarget, "expect-target", "", "Refuse actions unless this executor identity matches")
 	root.PersistentFlags().StringSliceVar(&roots, "root", nil, "Operator-authorized file root; repeat for multiple roots")
 	open := func() (*recovery.Engine, *state.Store, error) {
+		if !recovery.Supported() {
+			return nil, nil, recovery.ErrUnsupportedPlatform
+		}
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			// An explicit state path is the recovery escape hatch for damaged

@@ -24,6 +24,14 @@ type SnapshotTarget struct {
 	MaxLogicalBytes int64  `json:"max_logical_bytes" yaml:"max_logical_bytes"`
 }
 
+// SnapshotInventory is part of the persisted manifest schema on every platform,
+// even where snapshot execution is unavailable.
+type SnapshotInventory struct {
+	Entries      int    `json:"entries"`
+	LogicalBytes int64  `json:"logical_bytes"`
+	Digest       string `json:"digest"`
+}
+
 type SubvolumeIdentity struct {
 	ID         uint64 `json:"id"`
 	UUID       string `json:"uuid"`

@@ -47,6 +47,9 @@ type Engine struct {
 }
 
 func New(store *state.Store, opts Options) (*Engine, error) {
+	if !Supported() {
+		return nil, ErrUnsupportedPlatform
+	}
 	if !store.Available() || store.Path() == "" {
 		return nil, fmt.Errorf("recovery requires a persistent state database")
 	}
