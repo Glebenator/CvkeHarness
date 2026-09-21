@@ -10,6 +10,7 @@ import (
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/log"
+	"github.com/coolcake/cvkeharness/internal/setupflow"
 	dashboard "github.com/coolcake/cvkeharness/internal/tui"
 	"github.com/coolcake/cvkeharness/scheduler"
 	"github.com/coolcake/cvkeharness/state"
@@ -31,12 +32,12 @@ var consoleCmd = &cobra.Command{
 			return err
 		}
 
-		setupMode := false
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			cfg = config.DefaultConfig()
-			cfg.Normalize()
-			setupMode = true
+			return err
+		}
+		if err := setupflow.ValidateReady(cfg); err != nil {
+			return fmt.Errorf("setup required: %w; run 'cvkeharness setup'", err)
 		}
 		log.Init(cfg.LogLevel, "text")
 
@@ -83,9 +84,6 @@ var consoleCmd = &cobra.Command{
 				sessionID:    sessionID,
 			}, nil
 		})
-		if setupMode {
-			service.MarkSetupMode()
-		}
 		return dashboard.Run(service, os.Args[0], initialView)
 	},
 }

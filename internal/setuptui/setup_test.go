@@ -189,24 +189,20 @@ func TestSetupModelNavigatesFromWelcomeToProvider(t *testing.T) {
 	}
 }
 
-func TestSetupModelCyclesCapabilityPolicy(t *testing.T) {
-	t.Parallel()
-
+func TestOptionalFeaturesDoNotDuplicateSecurityControls(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Normalize()
-	m := setupModel{
-		cfg:  cfg,
-		step: stepCapabilities,
-	}
+	before, _ := cfg.EffectiveSecurity()
+	m := setupModel{cfg: cfg, step: stepCapabilities, cursor: 1}
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 	updated := next.(setupModel)
-	if updated.cfg.CapabilityPolicy.PythonScripts != "allow" {
-		t.Fatalf("expected python policy to cycle to allow, got %#v", updated.cfg.CapabilityPolicy)
+	after, _ := updated.cfg.EffectiveSecurity()
+	if before.Hash != after.Hash {
+		t.Fatal("optional features changed security")
 	}
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	updated = next.(setupModel)
-	if updated.cfg.CapabilityPolicy.PythonScripts != "ask" {
-		t.Fatalf("expected python policy to cycle back to ask, got %#v", updated.cfg.CapabilityPolicy)
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if next.(setupModel).step != stepWebSearch {
+		t.Fatal("optional feature selection did not open web search")
 	}
 }
 
@@ -306,8 +302,9 @@ func TestSetupModelPlansPythonInstallSelection(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Normalize()
 	m := setupModel{
-		cfg:  cfg,
-		step: stepDependencies,
+		cfg:        cfg,
+		step:       stepDependencies,
+		daemonPlan: setupflow.DaemonPlan{Supported: true},
 		hostProfile: setupflow.HostProfile{
 			Python: setupflow.ToolStatus{Name: "python3"},
 		},

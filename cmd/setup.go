@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/internal/setupflow"
 	"github.com/coolcake/cvkeharness/internal/setuptui"
 	"github.com/coolcake/cvkeharness/internal/termui"
 	"github.com/coolcake/cvkeharness/provider"
@@ -875,7 +876,7 @@ func wizardProvider(cfg *config.Config) bool {
 	if idx == goBack {
 		return false
 	}
-	cfg.Provider = providers[idx][0]
+	setupflow.SelectProvider(cfg, providers[idx][0])
 	return true
 }
 
@@ -1419,9 +1420,7 @@ func wizardConfirm(cfg *config.Config, profile soulProfile, hostNotes []string) 
 }
 
 func setDefaultModel(cfg *config.Config, model string) {
-	model = config.NormalizeProviderModelID(cfg.Provider, model)
-	cfg.DefaultModel = model
-	ensureDefaultApproved(cfg)
+	setupflow.SetDefaultModel(cfg, model)
 }
 
 func ensureDefaultApproved(cfg *config.Config) {
@@ -1776,75 +1775,16 @@ func reviewSettingsChanges(cfg *config.Config, profile soulProfile, dirty bool) 
 
 // ─── Command ──────────────────────────────────────────────────────────────────
 
-func loadWizardConfig() *config.Config {
-	// Load any previously saved configuration so we can:
-	//   (a) pre-populate selections with the user's current values, and
-	//   (b) offer to reuse stored credentials without re-typing them.
-	existingCfg, _ := config.LoadConfig()
-	cfg := config.DefaultConfig()
-
-	if existingCfg == nil {
-		return cfg
-	}
-
-	if existingCfg.Provider != "" {
-		cfg.Provider = existingCfg.Provider
-	}
-	if existingCfg.PrimaryModel() != "" {
-		cfg.DefaultModel = existingCfg.PrimaryModel()
-	}
-	// Carry over the full key map so every provider's credential is
-	// available for the reuse prompt regardless of which provider the
-	// user starts from or switches to during this wizard run.
-	if len(existingCfg.APIKeys) > 0 {
-		cfg.APIKeys = existingCfg.APIKeys
-	}
-	if existingCfg.BaseURL != "" {
-		cfg.BaseURL = existingCfg.BaseURL
-	}
-	if existingCfg.MaxTokens > 0 {
-		cfg.MaxTokens = existingCfg.MaxTokens
-	}
-	if existingCfg.MaxIterations > 0 {
-		cfg.MaxIterations = existingCfg.MaxIterations
-	}
-	if existingCfg.LogLevel != "" {
-		cfg.LogLevel = existingCfg.LogLevel
-	}
-	if existingCfg.SafetyModel != "" {
-		cfg.SafetyModel = existingCfg.SafetyModel
-	}
-	if existingCfg.SafetyMode != "" {
-		cfg.SafetyMode = existingCfg.SafetyMode
-	}
-	if existingCfg.Security != nil {
-		cfg.Security = existingCfg.Security.Clone()
-	}
-	cfg.RoutingEnabled = existingCfg.RoutingEnabled
-	if existingCfg.RoutingMode != "" {
-		cfg.RoutingMode = existingCfg.RoutingMode
-	}
-	if len(existingCfg.ApprovedModels) > 0 {
-		cfg.ApprovedModels = existingCfg.ApprovedModels
-	}
-	if len(existingCfg.FavoriteModels) > 0 {
-		cfg.FavoriteModels = existingCfg.FavoriteModels
-	}
-	if existingCfg.MemoryDir != "" {
-		cfg.MemoryDir = existingCfg.MemoryDir
-	}
-	if existingCfg.StateDBPath != "" {
-		cfg.StateDBPath = existingCfg.StateDBPath
-	}
-	if existingCfg.RoutingMinConfidence > 0 {
-		cfg.RoutingMinConfidence = existingCfg.RoutingMinConfidence
-	}
-
-	return cfg
+func loadWizardConfig() (*config.Config, error) {
+	return setupflow.LoadWizardConfig()
 }
 
 func runSetupWizard(mode string) {
-	cfg := loadWizardConfig()
+	cfg, err := loadWizardConfig()
+	if err != nil {
+		fmt.Printf("Could not load configuration: %v\n", err)
+		return
+	}
 
 	// Begin fetching the model list concurrently so it's ready by step 3.
 	modelsCh := make(chan modelsResult, 1)
@@ -1966,7 +1906,11 @@ func finalizeSetup(mode string, cfg *config.Config, selectedSoulProfile soulProf
 }
 
 func runSettingsMenu() {
-	cfg := loadWizardConfig()
+	cfg, err := loadWizardConfig()
+	if err != nil {
+		fmt.Printf("Could not load configuration: %v\n", err)
+		return
+	}
 
 	modelsCh := make(chan modelsResult, 1)
 	go func() { modelsCh <- fetchOpenRouterModels() }()
