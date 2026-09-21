@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/coolcake/cvkeharness/internal/setupflow"
+	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/muesli/termenv"
 )
@@ -74,10 +74,9 @@ func TestExportConsolePreview(t *testing.T) {
 				case "Model picker":
 					m.activeTab = tabConfig
 					cfg := m.tabs[tabConfig].(*configTab)
-					cfg.cfg.Provider = "codex"
-					cfg.cursor = 1
-					cfg.openModelPicker()
-					cfg.acceptModels(setupflow.ModelResult{Source: "codex-cache", Live: true, Timestamp: now, Items: []setupflow.ModelOption{{ID: "gpt-5.4", Description: "General coding model"}, {ID: "example-fast", Description: "Example catalog description"}}})
+					cfg.cfg.Connections["subscription"] = config.Connection{Name: "Codex subscription", Provider: "codex"}
+					cfg.cfg.SetRoleBinding(config.RolePrimary, config.ModelBinding{Connection: "subscription", Model: "gpt-5.2-codex"})
+					cfg.openRolePicker(config.RolePrimary)
 				case "New job":
 					m.activeTab = tabJobs
 					j.initCreateInputs()

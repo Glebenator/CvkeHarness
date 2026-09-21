@@ -95,6 +95,9 @@ func (s *Service) SaveConfig(cfg *config.Config) error {
 	if cfg == nil {
 		return nil
 	}
+	if err := cfg.ValidateConnection(); err != nil {
+		return err
+	}
 	if err := cfg.Save(); err != nil {
 		return err
 	}

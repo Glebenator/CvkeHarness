@@ -19,7 +19,7 @@ func TestFirstRunCommandsRequireSetup(t *testing.T) {
 	t.Cleanup(func() { rootCmd.SetArgs(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
 	for _, args := range [][]string{
 		{}, {"run", "check status"}, {"console"}, {"tui"},
-		{"console", "--view", "chat"}, {"daemon", "--once"}, {"settings"},
+		{"console", "--view", "chat"}, {"daemon", "--once"},
 	} {
 		rootCmd.SetArgs(args)
 		_, err := rootCmd.ExecuteC()
@@ -74,7 +74,7 @@ func TestFirstRunBootstrapAndRecoveryRemainAvailable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	for _, name := range []string{"setup", "recovery", "antigravity"} {
+	for _, name := range []string{"setup", "settings", "recovery", "antigravity"} {
 		c, _, err := rootCmd.Find([]string{name})
 		if err != nil {
 			t.Fatal(err)

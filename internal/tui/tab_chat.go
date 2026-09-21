@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/coolcake/cvkeharness/agent"
+	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/internal/chatcmd"
 	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
@@ -212,7 +213,11 @@ func (t *chatTab) HorizontalTabNavigation() bool {
 func (t *chatTab) Init(svc *Service) tea.Cmd {
 	if svc != nil && svc.Config() != nil && t.session == nil && !t.starting {
 		cfg := svc.Config()
-		t.configuredModel = strings.Trim(strings.TrimSpace(cfg.Provider)+"/"+strings.TrimSpace(cfg.PrimaryModel()), "/")
+		if selected, err := cfg.ResolveRole(config.RoleExecution); err == nil {
+			t.configuredModel = selected.Connection.DisplayName(selected.ConnectionID) + " / " + selected.Model
+		} else {
+			t.configuredModel = "not configured"
+		}
 		if effective, err := cfg.EffectiveSecurity(); err == nil {
 			t.safety = effective.Summary()
 		} else {

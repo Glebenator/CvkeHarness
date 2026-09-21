@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/internal/modelui"
 	"github.com/coolcake/cvkeharness/tools"
 )
 
@@ -70,20 +71,17 @@ func TestQuitPreservesSettingsUntilExplicitDiscard(t *testing.T) {
 func TestAPIKeyEditorNeverRendersExistingKey(t *testing.T) {
 	m := recoveryModel()
 	cfg := m.tabs[tabConfig].(*configTab)
-	cfg.cfg.SetAPIKey(cfg.cfg.Provider, "SYNTHETIC-SECRET-123456")
-	for i, field := range cfg.fields {
-		if field.Label == "Provider API Key" {
-			cfg.cursor = i
-		}
-	}
-	cfg.beginEdit()
+	cfg.cfg.Connections["private"] = config.Connection{Name: "Private", Provider: "openai", APIKey: "SYNTHETIC-SECRET-123456"}
+	cfg.openConnectionEditor("private")
 	if strings.Contains(cfg.View(80, 20), "SYNTHETIC-SECRET") {
 		t.Fatal("editor exposed credential")
 	}
-	cfg.updateEditor(tea.KeyMsg{Type: tea.KeyEnter})
-	if cfg.cfg.GetAPIKey(cfg.cfg.Provider) != "SYNTHETIC-SECRET-123456" {
-		t.Fatal("masked edit corrupted key")
+	id := cfg.connectionEditor.ID()
+	cfg.Update(modelui.ConnectionResultMsg{EditorID: id, Cancelled: true}, m.svc, 80, 20)
+	if cfg.cfg.Connections["private"].APIKey != "SYNTHETIC-SECRET-123456" {
+		t.Fatal("cancel corrupted key")
 	}
+
 }
 
 func TestHelpCanReachLastShortcutAt80x24(t *testing.T) {

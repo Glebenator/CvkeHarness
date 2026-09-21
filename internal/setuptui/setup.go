@@ -3,7 +3,6 @@ package setuptui
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -12,8 +11,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/internal/modelui"
 	"github.com/coolcake/cvkeharness/internal/setupflow"
-	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/securitypolicy"
 )
 
@@ -43,17 +42,11 @@ type inputMode int
 
 const (
 	inputNone inputMode = iota
-	inputOpenRouterKey
-	inputOpenAIKey
 	inputTavilyKey
-	inputLMStudioURL
-	inputCustomModel
-	inputJudgeModel
 	inputDaemonUser
 	inputHostNotes
 )
 
-type modelResultMsg struct{ result setupflow.ModelResult }
 type credentialMsg struct {
 	label string
 	err   error
@@ -86,8 +79,9 @@ type setupModel struct {
 	pendingCredential string
 	pendingProvider   string
 	validating        bool
-	modelsLoading     bool
-	models            setupflow.ModelResult
+	modelPicker       *modelui.Picker
+	connectionEditor  *modelui.ConnectionEditor
+	connectionID      string
 	scanning          bool
 	scanComplete      bool
 	hostProfile       setupflow.HostProfile
@@ -113,6 +107,7 @@ func Run() error {
 	if err != nil {
 		return fmt.Errorf("load setup configuration: %w", err)
 	}
+	cfg.EnsureModelBindings()
 	m := setupModel{
 		cfg:         cfg,
 		step:        stepWelcome,
@@ -129,15 +124,27 @@ func Run() error {
 func (m setupModel) Init() tea.Cmd { return nil }
 
 func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyMsg); ok && key.String() == "ctrl+c" {
+		return m, tea.Quit
+	}
+	switch msg := msg.(type) {
+	case modelui.PickerResultMsg:
+		return m.acceptModel(msg)
+	case modelui.ConnectionResultMsg:
+		return m.acceptConnection(msg)
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+	}
+	if m.modelPicker != nil {
+		return m, m.modelPicker.Update(msg)
+	}
+	if m.connectionEditor != nil {
+		return m, m.connectionEditor.Update(msg)
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
-	case modelResultMsg:
-		m.modelsLoading = false
-		m.models = msg.result
-		m.cursor = m.preferredCursor()
 		return m, nil
 	case credentialMsg:
 		m.validating = false
@@ -189,7 +196,7 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
-		if m.saving || m.validating || m.modelsLoading || m.scanning || m.recommending {
+		if m.saving || m.validating || m.scanning || m.recommending {
 			return m, nil
 		}
 		if m.inputMode != inputNone {
@@ -222,6 +229,8 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case msg.String() == "a":
 			switch m.step {
+			case stepProvider:
+				return m.beginConnectionEditor("")
 			case stepSafety:
 				m.securityCustomize = !m.securityCustomize
 				if m.securityCustomize {
@@ -240,6 +249,11 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			}
+		case msg.String() == "e" && m.step == stepProvider:
+			ids := m.cfg.ConnectionIDs()
+			if m.cursor < len(ids) {
+				return m.beginConnectionEditor(ids[m.cursor])
+			}
 		case msg.String() == "n":
 			if m.canAdvanceWithN() {
 				if m.step == stepSecurityControls {
@@ -257,23 +271,8 @@ func (m setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m setupModel) canAdvanceWithN() bool {
 	switch m.step {
-	case stepCredentials:
-		switch m.cfg.Provider {
-		case "antigravity":
-			_, err := provider.LoadAntigravityAuth(provider.AntigravityAuthPath())
-			return err == nil
-		case "codex":
-			_, ok := setupflow.CodexAuthSummary()
-			return ok
-		case "openai":
-			return strings.TrimSpace(m.cfg.GetAPIKey("openai")) != ""
-		case "lmstudio":
-			return true
-		default:
-			return strings.TrimSpace(m.cfg.GetAPIKey("openrouter")) != ""
-		}
-	case stepModel, stepJudge:
-		return !m.modelsLoading
+	case stepProvider, stepCredentials, stepModel, stepJudge:
+		return false
 	case stepScan:
 		return !m.scanning
 	case stepRecommendations:
@@ -288,6 +287,9 @@ func (m setupModel) canAdvanceWithN() bool {
 }
 
 func (m setupModel) View() string {
+	if m.modelPicker != nil || m.connectionEditor != nil {
+		return m.modelChildView()
+	}
 	if m.step == stepDone {
 		return m.frame("Setup complete", m.viewDone())
 	}
@@ -299,17 +301,17 @@ func (m setupModel) stepView() string {
 	case stepWelcome:
 		return m.viewWelcome()
 	case stepProvider:
-		return m.viewProvider()
+		return m.viewConnections()
 	case stepCredentials:
-		return m.viewCredentials()
+		return line("Press Enter to edit this connection.")
 	case stepModel:
-		return m.viewModel()
+		return line("Press Enter to choose Primary using the shared model picker.")
 	case stepSafety:
 		return m.viewSafety()
 	case stepSecurityControls:
 		return m.viewSecurityControls()
 	case stepJudge:
-		return m.viewModel()
+		return line("Press Enter to choose Safety judge using the shared model picker.")
 	case stepScan:
 		return m.viewScan()
 	case stepDependencies:
@@ -340,132 +342,31 @@ func (m setupModel) viewWelcome() string {
 	) + "\n" + m.renderList([]row{{"Continue to Connect", "Choose the model connection used for conversations and actions"}})
 }
 
-func (m setupModel) viewProvider() string {
-	var rows []row
-	for _, opt := range setupflow.ProviderOptions() {
-		rows = append(rows, row{opt.ID, opt.Description})
-	}
-	return m.renderList(rows)
-}
-
-func (m setupModel) viewCredentials() string {
-	if m.validating {
-		return line("Validating credential...")
-	}
-	switch m.inputMode {
-	case inputOpenRouterKey:
-		return m.viewInputPrompt("API key input active: OpenRouter", "Paste your OpenRouter API key. Characters are hidden; press enter to validate or esc to cancel.", "OpenRouter API key")
-	case inputOpenAIKey:
-		return m.viewInputPrompt("API key input active: OpenAI", "Paste your OpenAI API key. Characters are hidden; press enter to validate or esc to cancel.", "OpenAI API key")
-	case inputLMStudioURL:
-		return m.viewInputPrompt("Base URL input active", "Enter the local OpenAI-compatible base URL; press enter to save or esc to cancel.", "LM Studio URL")
-	}
-	switch m.cfg.Provider {
-	case "antigravity":
-		status := "Run cvkeharness antigravity login in another terminal."
-		if _, err := provider.LoadAntigravityAuth(provider.AntigravityAuthPath()); err == nil {
-			status = "Found personal Google login (unofficial integration)."
-		}
-		return m.paragraph(status) + "\n" + m.renderList([]row{{"Use Google login", "Check saved credentials and continue"}})
-	case "codex":
-		summary, ok := setupflow.CodexAuthSummary()
-		status := summary
-		if !ok {
-			status += " · run `codex login` first"
-		}
-		return m.paragraph(status) + "\n" + m.renderList([]row{{"Use this Codex login", "Continue with Codex CLI authentication"}, {"Check again", "Re-read the Codex auth cache"}})
-	case "openai":
-		return m.apiKeyView("openai", "OpenAI API key")
-	case "lmstudio":
-		base := m.cfg.BaseURL
-		if base == "" {
-			base = "http://localhost:1234/v1"
-		}
-		desc := "Use " + base
-		return m.renderList([]row{{"Use local server", desc}, {"Enter URL", "Set a custom OpenAI-compatible base URL"}})
-	default:
-		return m.apiKeyView("openrouter", "OpenRouter API key")
-	}
-}
-
-func (m setupModel) apiKeyView(providerName, label string) string {
-	keyValue := m.cfg.GetAPIKey(providerName)
-	rows := []row{{"Enter key", "Paste and validate a new " + label}}
-	if keyValue != "" {
-		rows = append([]row{{"Reuse existing key", setupflow.MaskSecret(keyValue)}}, rows...)
-	}
-	return m.renderList(rows)
-}
-
-func (m setupModel) modelOptions() []setupflow.ModelOption {
-	if len(m.models.Items) == 0 && m.step != stepJudge {
-		return nil
-	}
-	items := append([]setupflow.ModelOption(nil), m.models.Items...)
-	current := m.cfg.PrimaryModel()
-	if m.step == stepJudge {
-		items = []setupflow.ModelOption{{ID: m.cfg.PrimaryModel(), Description: "Use the primary model (recommended)"}}
-		for _, item := range m.models.Items {
-			if item.ID != m.cfg.PrimaryModel() {
-				items = append(items, item)
-			}
-		}
-		current = m.cfg.SafetyModel
-	}
-	for _, item := range items {
-		if item.ID == current {
-			return items
-		}
-	}
-	if current != "" {
-		items = append([]setupflow.ModelOption{{ID: current, Description: "Configured model; not listed in this catalog"}}, items...)
-	}
-	return items
-}
-
-func (m setupModel) viewModel() string {
-	if m.inputMode == inputCustomModel || m.inputMode == inputJudgeModel {
-		return m.viewInputPrompt("Custom model input active", "Enter a model ID supported by this provider; press enter to save or esc to cancel.", "Model ID")
-	}
-	if m.modelsLoading {
-		return line("Fetching models...")
-	}
-	items := m.modelOptions()
-	if len(items) == 0 {
-		return line("Press enter to fetch available models.")
-	}
-	status := "offline fallback"
-	if m.models.Live {
-		status = "live models"
-		if m.models.Source == "codex-cache" {
-			status = "recent account cache"
-		}
-	} else if m.models.Source == "codex-cache" {
-		status = "cached choices; refresh in Codex if needed"
-	}
-	intro := "Source: " + status + " · " + m.models.Source
-	if m.step == stepJudge {
-		intro = "The judge reviews proposed actions using your " + m.cfg.Provider + " connection. Choose a model available through that provider."
-	}
-	// Reserve room for the title, status, and footer at 80x24 too.
-	visible := max(1, (m.height-15)/3)
-	start, end := listWindow(m.cursor, len(items), visible)
-	window := m
-	window.cursor -= start
-	position := fmt.Sprintf("Models %d-%d of %d", start+1, end, len(items))
-	return m.paragraph(intro, position) + "\n" + window.renderList(modelRows(items[start:end]))
-}
-
 func (m setupModel) viewSafety() string {
 	effective, _ := m.cfg.EffectiveSecurity()
 	custom := "Press A to customize individual controls after choosing a profile."
 	if m.securityCustomize {
 		custom = "Individual control customization is enabled; press A to use the profile unchanged."
 	}
-	return m.paragraph(
+	intro := m.paragraph(
 		"Choose a security profile. Reasonable is the default: reads run, mutations ask, and credential or raw-device access stays blocked.",
 		custom+" Current policy: "+effective.Summary()+".",
-	) + "\n" + m.renderList(modelRows(setupflow.SafetyOptions()))
+	)
+	rows := modelRows(setupflow.SafetyOptions())
+	var body string
+	for visible := len(rows); visible > 0; visible-- {
+		start, end := listWindow(m.cursor, len(rows), visible)
+		window := m
+		window.cursor -= start
+		body = intro + "\n" + window.renderList(rows[start:end])
+		if start > 0 || end < len(rows) {
+			body += m.paragraph(fmt.Sprintf("↑↓ More profiles · %d/%d", m.cursor+1, len(rows)))
+		}
+		if len(strings.Split(m.frame(stepLabels[m.step], body), "\n")) <= m.height {
+			break
+		}
+	}
+	return body
 }
 
 func (m setupModel) viewSecurityControls() string {
@@ -608,10 +509,9 @@ func (m setupModel) viewReview() string {
 		return m.paragraph("Saving configuration and local setup artifacts. External actions run only when the second option was explicitly selected.")
 	}
 	lines := []string{
-		"Provider: " + m.cfg.Provider,
-		"Model: " + m.cfg.PrimaryModel(),
+		"Primary: " + m.modelRoleSummary(config.RolePrimary),
 		"Security: " + securitySummary(m.cfg),
-		"Judge model: " + m.cfg.SafetyModel,
+		"Safety judge: " + m.modelRoleSummary(config.RoleSafetyJudge),
 		"Web search: " + boolText(m.cfg.WebSearch.Enabled),
 	}
 	if m.installPlan.Selected {
@@ -662,35 +562,20 @@ func (m setupModel) activate() (setupModel, tea.Cmd) {
 	case stepWelcome:
 		return m.nextStep()
 	case stepProvider:
-		opts := setupflow.ProviderOptions()
-		if m.cursor >= 0 && m.cursor < len(opts) {
-			setupflow.SelectProvider(m.cfg, opts[m.cursor].ID)
-			m.models = setupflow.ModelResult{}
-			m.recommendations = nil
+		m.ensureConnections()
+		ids := m.cfg.ConnectionIDs()
+		if m.cursor >= len(ids) {
+			return m.beginConnectionEditor("")
 		}
-		m.cursor = 0
-		return m.nextStep()
+		m.connectionID = ids[m.cursor]
+		return m.beginModelPicker(config.RolePrimary, m.connectionID)
 	case stepCredentials:
-		return m.activateCredentials()
+		return m.beginConnectionEditor(m.connectionID)
 	case stepModel, stepJudge:
-		if len(m.modelOptions()) == 0 {
-			m.modelsLoading = true
-			return m, fetchModelsCmd(m.cfg)
-		}
-		item := m.modelOptions()[m.cursor]
-		if item.ID == "[ custom model ]" {
-			mode, current := inputCustomModel, m.cfg.PrimaryModel()
-			if m.step == stepJudge {
-				mode, current = inputJudgeModel, m.cfg.SafetyModel
-			}
-			return m.beginInput(mode, "Model ID", current, false), nil
-		}
 		if m.step == stepJudge {
-			m.cfg.SafetyModel = config.NormalizeProviderModelID(m.cfg.Provider, item.ID)
-		} else {
-			setupflow.SetDefaultModel(m.cfg, item.ID)
+			return m.beginModelPicker(config.RoleSafetyJudge, "")
 		}
-		return m.nextStep()
+		return m.beginModelPicker(config.RolePrimary, m.connectionID)
 	case stepSafety:
 		opts := setupflow.SafetyOptions()
 		profile := securitypolicy.Profile(opts[m.cursor].ID)
@@ -718,7 +603,7 @@ func (m setupModel) activate() (setupModel, tea.Cmd) {
 		}
 		if !m.scanComplete {
 			m.scanning = true
-			return m, scanCmd(m.cfg.Provider)
+			return m, scanCmd(m.primaryProvider())
 		}
 		return m.nextStep()
 	case stepDependencies:
@@ -779,45 +664,6 @@ func (m setupModel) activate() (setupModel, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
-}
-
-func (m setupModel) activateCredentials() (setupModel, tea.Cmd) {
-	switch m.cfg.Provider {
-	case "antigravity":
-		if _, err := provider.LoadAntigravityAuth(provider.AntigravityAuthPath()); err != nil {
-			m.message = err.Error()
-			return m, nil
-		}
-		return m.nextStep()
-	case "codex":
-		if m.cursor == 1 {
-			m.message = "Codex auth cache refreshed"
-			return m, nil
-		}
-		if _, ok := setupflow.CodexAuthSummary(); !ok {
-			m.errMessage = "Run 'codex login' in another terminal, then choose Check again."
-			return m, nil
-		}
-		return m.nextStep()
-	case "openai":
-		if m.cfg.GetAPIKey("openai") != "" && m.cursor == 0 {
-			return m.nextStep()
-		}
-		return m.beginInput(inputOpenAIKey, "OpenAI API key", "", true), nil
-	case "lmstudio":
-		if m.cursor == 0 {
-			if m.cfg.BaseURL == "" {
-				m.cfg.BaseURL = "http://localhost:1234/v1"
-			}
-			return m.nextStep()
-		}
-		return m.beginInput(inputLMStudioURL, "LM Studio URL", firstNonEmpty(m.cfg.BaseURL, "http://localhost:1234/v1"), false), nil
-	default:
-		if m.cfg.GetAPIKey("openrouter") != "" && m.cursor == 0 {
-			return m.nextStep()
-		}
-		return m.beginInput(inputOpenRouterKey, "OpenRouter API key", "", true), nil
-	}
 }
 
 func (m setupModel) activateWebSearch() (setupModel, tea.Cmd) {
@@ -1002,33 +848,10 @@ func (m setupModel) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.inputMode = inputNone
 		switch mode {
-		case inputOpenRouterKey:
-			m.pendingProvider, m.pendingCredential = "openrouter", value
-			m.validating = true
-			return m, validateOpenRouterCmd(value)
-		case inputOpenAIKey:
-			m.pendingProvider, m.pendingCredential = "openai", value
-			m.validating = true
-			return m, validateOpenAICmd(value)
 		case inputTavilyKey:
 			m.pendingProvider, m.pendingCredential = "tavily", value
 			m.validating = true
 			return m, validateTavilyCmd(value)
-		case inputLMStudioURL:
-			u, err := url.Parse(value)
-			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-				m.inputMode = inputLMStudioURL
-				m.errMessage = "Enter an http or https URL with a host."
-				return m, nil
-			}
-			m.cfg.BaseURL = value
-			return m.nextStep()
-		case inputJudgeModel:
-			m.cfg.SafetyModel = config.NormalizeProviderModelID(m.cfg.Provider, value)
-			return m.nextStep()
-		case inputCustomModel:
-			setupflow.SetDefaultModel(m.cfg, value)
-			return m.nextStep()
 		case inputDaemonUser:
 			if value == "" {
 				m.errMessage = "System service user is required"
@@ -1055,6 +878,9 @@ func (m setupModel) nextStep() (setupModel, tea.Cmd) {
 			m.step = stepScan
 		}
 		m.cursor = m.preferredCursor()
+		if m.step == stepJudge {
+			return m.beginModelPicker(config.RoleSafetyJudge, "")
+		}
 		return m, nil
 	case m.step == stepSecurityControls && m.cfg.SafetyMode != "llm_judge":
 		m.step = stepScan
@@ -1076,9 +902,11 @@ func (m setupModel) nextStep() (setupModel, tea.Cmd) {
 	if m.step < stepReview {
 		m.step++
 		m.cursor = m.preferredCursor()
-		if m.step == stepModel && len(m.models.Items) == 0 {
-			m.modelsLoading = true
-			return m, fetchModelsCmd(m.cfg)
+		if m.step == stepModel {
+			return m.beginModelPicker(config.RolePrimary, m.connectionID)
+		}
+		if m.step == stepJudge {
+			return m.beginModelPicker(config.RoleSafetyJudge, "")
 		}
 	}
 	return m, nil
@@ -1104,6 +932,12 @@ func (m setupModel) prevStep() (setupModel, tea.Cmd) {
 			m.step--
 		}
 		m.cursor = m.preferredCursor()
+		if m.step == stepModel {
+			return m.beginModelPicker(config.RolePrimary, m.connectionID)
+		}
+		if m.step == stepJudge {
+			return m.beginModelPicker(config.RoleSafetyJudge, "")
+		}
 	}
 	return m, nil
 }
@@ -1111,18 +945,13 @@ func (m setupModel) prevStep() (setupModel, tea.Cmd) {
 func (m setupModel) preferredCursor() int {
 	switch m.step {
 	case stepProvider:
-		for i, option := range setupflow.ProviderOptions() {
-			if option.ID == m.cfg.Provider {
-				return i
-			}
+		binding := m.cfg.RoleBinding(config.RolePrimary)
+		selected := m.connectionID
+		if selected == "" {
+			selected = binding.Connection
 		}
-	case stepModel, stepJudge:
-		selected := m.cfg.PrimaryModel()
-		if m.step == stepJudge {
-			selected = m.cfg.SafetyModel
-		}
-		for i, option := range m.modelOptions() {
-			if option.ID == selected {
+		for i, id := range m.cfg.ConnectionIDs() {
+			if id == selected {
 				return i
 			}
 		}
@@ -1166,26 +995,9 @@ func (m setupModel) itemCount() int {
 	case stepWelcome:
 		return 1
 	case stepProvider:
-		return len(setupflow.ProviderOptions())
-	case stepCredentials:
-		switch m.cfg.Provider {
-		case "antigravity":
-			return 1
-		case "codex", "lmstudio":
-			return 2
-		case "openai":
-			if m.cfg.GetAPIKey("openai") != "" {
-				return 2
-			}
-			return 1
-		default:
-			if m.cfg.GetAPIKey("openrouter") != "" {
-				return 2
-			}
-			return 1
-		}
-	case stepModel, stepJudge:
-		return len(m.modelOptions())
+		return len(m.cfg.ConnectionIDs()) + 1
+	case stepCredentials, stepModel, stepJudge:
+		return 0
 	case stepSafety:
 		return len(setupflow.SafetyOptions())
 	case stepSecurityControls:
@@ -1299,38 +1111,6 @@ func listWindow(cursor, total, viewportHeight int) (start, end int) {
 	return start, end
 }
 
-func fetchModelsCmd(cfg *config.Config) tea.Cmd {
-	copyCfg := *cfg
-	if cfg.APIKeys != nil {
-		copyCfg.APIKeys = make(map[string]string, len(cfg.APIKeys))
-		for k, v := range cfg.APIKeys {
-			copyCfg.APIKeys[k] = v
-		}
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		defer cancel()
-		return modelResultMsg{result: setupflow.FetchModels(ctx, &copyCfg)}
-	}
-}
-
-func validateOpenRouterCmd(key string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		label, err := setupflow.ValidateOpenRouterKey(ctx, key)
-		return credentialMsg{label: label, err: err}
-	}
-}
-
-func validateOpenAICmd(key string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return credentialMsg{err: setupflow.ValidateOpenAIKey(ctx, key)}
-	}
-}
-
 func validateTavilyCmd(key string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1348,36 +1128,24 @@ func scanCmd(providerName string) tea.Cmd {
 }
 
 func recommendationsCmd(m setupModel) tea.Cmd {
-	cfg := *m.cfg
-	if m.cfg.APIKeys != nil {
-		cfg.APIKeys = make(map[string]string, len(m.cfg.APIKeys))
-		for k, v := range m.cfg.APIKeys {
-			cfg.APIKeys[k] = v
-		}
-	}
+	cfg := m.cfg.Clone()
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		items, err := setupflow.AgentRecommendations(ctx, &cfg, m.hostProfile, m.installPlan, m.daemonPlan)
+		items, err := setupflow.AgentRecommendations(ctx, cfg, m.hostProfile, m.installPlan, m.daemonPlan)
 		return recommendationsMsg{items: items, err: err}
 	}
 }
 
 func saveCmd(m setupModel) tea.Cmd {
-	cfg := *m.cfg
-	if m.cfg.APIKeys != nil {
-		cfg.APIKeys = make(map[string]string, len(m.cfg.APIKeys))
-		for k, v := range m.cfg.APIKeys {
-			cfg.APIKeys[k] = v
-		}
-	}
+	cfg := m.cfg.Clone()
 	hostNotes := splitNotes(m.hostNotes)
 	installPlans := []setupflow.InstallPlan{m.installPlan}
 	return func() tea.Msg {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		result, err := setupflow.Finalize(ctx, setupflow.FinalizeOptions{
-			Config:       &cfg,
+			Config:       cfg,
 			HostProfile:  m.hostProfile,
 			InstallPlans: installPlans,
 			DaemonPlan:   m.daemonPlan,
@@ -1398,13 +1166,4 @@ func splitNotes(raw string) []string {
 		}
 	}
 	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

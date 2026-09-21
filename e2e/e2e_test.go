@@ -554,6 +554,13 @@ func runSetupToProviderAndQuit(t *testing.T, home string, width uint16) string {
 	if err != nil {
 		t.Fatalf("start setup PTY: %v", err)
 	}
+	defer terminal.Close()
+	defer func() {
+		if command.ProcessState == nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	}()
 
 	buffer := &lockedBuffer{}
 	copyDone := make(chan struct{})
@@ -571,13 +578,25 @@ func runSetupToProviderAndQuit(t *testing.T, home string, width uint16) string {
 	if _, err := terminal.Write([]byte("\r")); err != nil {
 		t.Fatalf("advance setup: %v", err)
 	}
-	if !waitForOutput(buffer, "openrouter", 5*time.Second) {
+	if !waitForOutput(buffer, "Add connection", 5*time.Second) {
 		_ = command.Process.Kill()
 		_ = command.Wait()
 		_ = terminal.Close()
 		t.Fatalf("provider screen did not appear at %d columns:\n%s", width, stripANSI(buffer.String()))
 	}
-	if _, err := terminal.Write([]byte("q")); err != nil {
+	if _, err := terminal.Write([]byte("a")); err != nil {
+		t.Fatalf("open connection editor: %v", err)
+	}
+	if !waitForOutput(buffer, "New connection", 5*time.Second) {
+		t.Fatalf("connection editor did not appear:\n%s", stripANSI(buffer.String()))
+	}
+	if _, err := terminal.Write([]byte("\x1b[B\r")); err != nil {
+		t.Fatalf("open provider chooser: %v", err)
+	}
+	if !waitForOutput(buffer, "lmstudio", 5*time.Second) {
+		t.Fatalf("provider chooser did not appear:\n%s", stripANSI(buffer.String()))
+	}
+	if _, err := terminal.Write([]byte("\x03")); err != nil {
 		t.Fatalf("quit setup: %v", err)
 	}
 
@@ -590,7 +609,7 @@ func runSetupToProviderAndQuit(t *testing.T, home string, width uint16) string {
 		}
 	case <-ctx.Done():
 		_ = command.Process.Kill()
-		t.Fatalf("setup did not exit after q at %d columns:\n%s", width, stripANSI(buffer.String()))
+		t.Fatalf("setup did not exit after Ctrl+C at %d columns:\n%s", width, stripANSI(buffer.String()))
 	}
 	_ = terminal.Close()
 	select {
@@ -686,9 +705,13 @@ func runChatApprovalDecision(t *testing.T, home, prompt, finalOutput string, app
 }
 
 func waitForOutput(buffer *lockedBuffer, expected string, timeout time.Duration) bool {
+	return waitForOutputAfter(buffer, 0, expected, timeout)
+}
+
+func waitForOutputAfter(buffer *lockedBuffer, start int, expected string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if strings.Contains(stripANSI(buffer.String()), expected) {
+		if strings.Contains(stripANSI(buffer.String()[start:]), expected) {
 			return true
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -843,9 +866,10 @@ func lastMessage(request modelRequest) provider.Message {
 
 func userTestEnv(home string) []string {
 	return envWith(os.Environ(), map[string]string{
-		"HOME":     home,
-		"NO_COLOR": "1",
-		"TERM":     "dumb",
+		"HOME":       home,
+		"CODEX_HOME": filepath.Join(home, ".codex"),
+		"NO_COLOR":   "1",
+		"TERM":       "dumb",
 	})
 }
 

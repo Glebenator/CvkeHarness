@@ -56,12 +56,12 @@ var stageLabels = map[setupStage]string{
 
 var stepLabels = map[step]string{
 	stepWelcome:          "Welcome",
-	stepProvider:         "Provider",
-	stepCredentials:      "Credentials",
-	stepModel:            "Model",
+	stepProvider:         "Connections",
+	stepCredentials:      "Connection",
+	stepModel:            "Primary",
 	stepSafety:           "Safety",
 	stepSecurityControls: "Security Controls",
-	stepJudge:            "Judge Model",
+	stepJudge:            "Safety judge",
 	stepScan:             "System Scan",
 	stepDependencies:     "Dependencies",
 	stepDaemon:           "Scheduler Daemon",
@@ -143,7 +143,7 @@ func (m setupModel) progressRail() string {
 }
 
 func (m setupModel) footer() string {
-	if m.saving || m.validating || m.modelsLoading || m.scanning || m.recommending {
+	if m.saving || m.validating || m.scanning || m.recommending {
 		return "  " + keyHint("ctrl+c", "quit")
 	}
 	if m.step == stepDone {
@@ -156,6 +156,9 @@ func (m setupModel) footer() string {
 		keyHint("enter", "select"),
 		keyHint("esc", "back"),
 		keyHint("↑↓", "move"),
+	}
+	if m.step == stepProvider {
+		hints = append(hints, keyHint("e", "edit connection"), keyHint("a", "add connection"))
 	}
 	if m.step == stepSafety || m.step == stepScan {
 		hints = append(hints, keyHint("a", "advanced"))

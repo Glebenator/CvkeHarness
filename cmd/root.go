@@ -31,9 +31,13 @@ func requireSetup(cmd *cobra.Command) error {
 		top = top.Parent()
 	}
 	switch top.Name() {
-	case "setup", "help", "completion", "__complete", "__completeNoDesc", "antigravity", "recovery":
+	case "setup", "settings", "help", "completion", "__complete", "__completeNoDesc", "antigravity", "recovery":
 		// Bootstrap, help, and model-independent recovery must stay available.
 		return nil
+	case "console":
+		if view, _ := top.Flags().GetString("view"); view == "settings" {
+			return nil
+		}
 	case "daemon":
 		if cmd.Name() == "stop" || cmd.Name() == "status" || cmd.Name() == "uninstall" {
 			return nil

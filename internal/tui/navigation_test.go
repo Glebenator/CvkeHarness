@@ -18,7 +18,12 @@ func TestNavigationCancelPreservesEditorAndIgnoresOldInputEvents(t *testing.T) {
 	m := recoveryModel()
 	m.activeTab = tabConfig
 	cfg := m.tabs[tabConfig].(*configTab)
-	cfg.cursor = 1
+	for i, field := range cfg.fields {
+		if field.Label == "Memory Dir" {
+			cfg.cursor = i
+			break
+		}
+	}
 	cfg.beginEdit()
 	cfg.input.SetValue("pending-provider")
 	cfg.dirty = true

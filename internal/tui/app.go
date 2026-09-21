@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/coolcake/cvkeharness/internal/modelui"
 	"github.com/coolcake/cvkeharness/state"
 	"os"
 	"strings"
@@ -239,7 +240,13 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "d":
 				return m, tea.Quit
 			case "s":
-				cfg := cloneTUIConfig(m.tabs[tabConfig].(*configTab).cfg)
+				editor := m.tabs[tabConfig].(*configTab)
+				if editor.hasPendingEdit() {
+					m.confirmQuit = false
+					cmd := m.switchTab(tabConfig)
+					return m, cmd
+				}
+				cfg := cloneTUIConfig(editor.cfg)
 				m.quitSaving = true
 				return m, func() tea.Msg { return quitSavedMsg{err: m.svc.SaveConfig(cfg)} }
 			}
@@ -312,7 +319,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch {
 		case key.Matches(msg, keys.Quit):
-			if cfg, ok := m.tabs[tabConfig].(*configTab); ok && cfg.dirty {
+			if cfg, ok := m.tabs[tabConfig].(*configTab); ok && (cfg.dirty || cfg.hasPendingEdit()) {
 				m.confirmQuit = true
 				m.quitError = ""
 				return m, nil
@@ -352,11 +359,14 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		owner = tabJobs
 	case runsDataMsg, runExportMsg:
 		owner = tabRuns
-	case configSavedMsg, configModelsMsg:
+	case configSavedMsg, configInputMsg:
 		owner = tabConfig
 	case chatDataMsg, chatDetailMsg, chatSessionReadyMsg, chatTurnDoneMsg,
 		chatExportDoneMsg, chatApprovalDoneMsg, chatRuntimeEventMsg, chatRuntimeEventWaitStoppedMsg:
 		owner = tabChat
+	}
+	if modelui.IsMessage(msg) {
+		owner = tabConfig
 	}
 	if m.tabs[owner] == nil {
 		return m, nil
@@ -401,6 +411,9 @@ func (m model) View() string {
 	// Help overlay replaces content when active.
 	if m.confirmQuit {
 		content := "\n  Unsaved settings\n\n  Save settings before leaving?\n\n  s Save and quit    d Discard    Esc Continue editing"
+		if cfg, ok := m.tabs[tabConfig].(*configTab); ok && cfg.hasPendingEdit() {
+			content = "\n  Unfinished settings edit\n\n  Finish or cancel the open editor before saving.\n\n  s Return to editor    d Discard all    Esc Stay here"
+		}
 		if m.quitSaving {
 			content += "\n\n  Saving…"
 		}
@@ -631,9 +644,12 @@ func (m model) renderHelp() string {
 		{
 			"Settings Tab",
 			[][2]string{
+				{"[ / ]", "Models / Connections / Security / Runtime"},
 				{"enter", "Edit or toggle the selected setting"},
+				{"a", "Advanced roles / add a connection"},
+				{"ctrl+k / ctrl+r", "Picker connection / reload catalog"},
 				{"s", "Save configuration"},
-				{"r", "Reset unsaved edits"},
+				{"r", "Restore saved settings / reset security control"},
 			},
 		},
 		{

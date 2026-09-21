@@ -23,8 +23,9 @@ go test -tags=e2e ./e2e -v
 | --- | --- | --- |
 | Command discovery | Root help exposes setup, bounded run, Console, and approvals | None |
 | First-run failure | An unconfigured task tells the user to run setup | No config is created |
-| Guided setup | Keyboard navigation reaches provider selection at 80, 100, and 120 columns | Quitting early saves nothing |
-| Cached Codex onboarding | Setup saves both primary and judge models at 80, 100, and 120 columns using synthetic cached auth/model fixtures | Only the temporary config is changed; no provider request |
+| Guided setup | Keyboard navigation reaches the shared named connection editor and explicit provider chooser at 80, 100, and 120 columns | Quitting early saves nothing |
+| Cached Codex onboarding | Setup creates a named connection and saves Primary and Safety judge through the same searchable picker at 80, 100, and 120 columns | Synthetic cached auth/model fixtures only; saved bindings resolve the exact model IDs without provider requests |
+| Configuration-only Settings | Both `settings` and `console --view settings` open the same Models workspace before a provider is configured; Connections and Add remain reachable | Opening and quitting creates neither a config nor a runtime database |
 | Local Console chat commands | Help, memory, tools, unknown-command handling, and exit remain usable | Zero model requests; zero turns persisted |
 | Tool-backed Console chat | A model-requested allowlisted command shows output and a verified final response | Tool outcome and turn are persisted |
 | Activity inspection | At 80, 100, 120, and 144 columns, `Ctrl+T` opens Activity, `Enter` opens output, and two `Esc` presses return to composing | Inspection and local `/help` cause no additional model requests |
@@ -53,7 +54,10 @@ Console Activity journeys run through the real executable and PTY at 80, 100,
 120, and 144 columns, covering both the full-width Activity view and split panes.
 Package tests cover detailed focus, scrolling, mouse geometry, cancellation,
 approval, and output layout behavior. Setup coverage includes both early exit
-and review/save with synthetic cached Codex fixtures.
+and review/save with synthetic cached Codex fixtures. The separate
+[Settings frame validation](../output/settings-validation/README.md) exercises
+cross-connection role selection, staged changes, custom IDs, provider protection,
+catalog failure/reload, and setup review at 80×24 and 120×32.
 
 The model boundary is hermetic. These checks do not establish live-provider
 authentication, availability, or model behavior. A PTY also does not reproduce

@@ -17,13 +17,7 @@ func TestConfigSecurityEditorCreatesAndResetsIndividualOverride(t *testing.T) {
 	svc := NewService(config.DefaultConfig(), nil, nil, nil, nil)
 	tab := newConfigTab().(*configTab)
 	tab.Init(svc)
-	for index, field := range tab.fields {
-		if field.Kind == configFieldSecurity {
-			tab.cursor = index
-			break
-		}
-	}
-	tab.beginEdit()
+	tab.setSection(settingsSecurity)
 	if !tab.securityOpen {
 		t.Fatal("security editor did not open")
 	}

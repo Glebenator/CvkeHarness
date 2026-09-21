@@ -12,27 +12,9 @@ import (
 	"github.com/coolcake/cvkeharness/securitypolicy"
 )
 
-func TestSetupSurfacesOfflineModelsAndSaveFailure(t *testing.T) {
+func TestSetupSurfacesSaveFailure(t *testing.T) {
 	t.Parallel()
-
-	cfg := config.DefaultConfig()
-	cfg.Normalize()
-	m := setupModel{
-		cfg:   cfg,
-		step:  stepModel,
-		width: 80,
-		models: setupflow.ModelResult{
-			Items:  []setupflow.ModelOption{{ID: "offline/model", Description: "cached fallback"}},
-			Live:   false,
-			Source: "offline defaults",
-		},
-	}
-	if view := m.View(); !strings.Contains(view, "offline fallback") {
-		t.Fatalf("expected explicit offline model state, got:\n%s", view)
-	}
-
-	m.step = stepReview
-	m.saving = true
+	m := setupModel{cfg: config.DefaultConfig(), step: stepReview, saving: true}
 	next, _ := m.Update(saveMsg{err: errors.New("disk full")})
 	updated := next.(setupModel)
 	if updated.saving || !strings.Contains(updated.errMessage, "disk full") {
@@ -153,10 +135,6 @@ func TestSetupRendererDoesNotOverflowRepresentativeWidths(t *testing.T) {
 				width:       width,
 				height:      30,
 				soulProfile: setupflow.DefaultSoulProfile(),
-				models: setupflow.ModelResult{Items: []setupflow.ModelOption{{
-					ID:          "provider/model-with-a-long-but-realistic-identifier",
-					Description: "A representative model description that must wrap without clipping",
-				}}},
 			}
 			view := m.View()
 			for lineNo, line := range strings.Split(view, "\n") {
@@ -168,7 +146,7 @@ func TestSetupRendererDoesNotOverflowRepresentativeWidths(t *testing.T) {
 	}
 }
 
-func TestSetupModelNavigatesFromWelcomeToProvider(t *testing.T) {
+func TestSetupModelNavigatesFromWelcomeToConnections(t *testing.T) {
 	t.Parallel()
 
 	m := setupModel{
@@ -182,10 +160,10 @@ func TestSetupModelNavigatesFromWelcomeToProvider(t *testing.T) {
 	}
 	updated := next.(setupModel)
 	if updated.step != stepProvider {
-		t.Fatalf("expected provider step, got %v", updated.step)
+		t.Fatalf("expected connections step, got %v", updated.step)
 	}
-	if updated.cursor != 1 {
-		t.Fatalf("expected current default provider openrouter to be focused, got cursor %d", updated.cursor)
+	if updated.cursor != 0 {
+		t.Fatalf("expected current default connection openrouter to be focused, got cursor %d", updated.cursor)
 	}
 }
 

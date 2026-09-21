@@ -46,7 +46,7 @@ func (m model) navigationActions() []navigationAction {
 		{"Jobs", "Scheduled work and job drafts", "tab", tabJobs},
 		{"Runs", "Search and revisit task outcomes", "tab", tabRuns},
 		{"Chat", "Conversation, tools, and approvals", "tab", tabChat},
-		{"Settings", "Provider and runtime configuration", "tab", tabConfig},
+		{"Settings", "Models, connections, security, and runtime", "tab", tabConfig},
 		{"Create a job", "Define a schedule and task", "job", tabJobs},
 		{"Search run history", "Find a task, answer, error, or command", "search", tabRuns},
 		{"Keyboard help", "All navigation and workspace shortcuts", "help", 0},

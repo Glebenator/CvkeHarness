@@ -182,10 +182,8 @@ func (t *overviewTab) Update(msg tea.Msg, svc *Service, width, height int) (tabM
 			t.notice = "Configuration checks passed locally. Send a task in Chat to check the connection."
 			if t.cfg == nil {
 				t.notice = "Open Settings to configure a provider."
-			} else if err := t.cfg.Validate(); err != nil {
+			} else if err := t.cfg.ValidateConnection(); err != nil {
 				t.notice = err.Error()
-			} else if (t.cfg.Provider == "openai" || t.cfg.Provider == "openrouter") && t.cfg.GetAPIKey(t.cfg.Provider) == "" {
-				t.notice = "Provider API key missing. Press s to open Settings."
 			}
 		case "down", "j":
 			t.cursor = minInt(t.cursor+1, maxInt(len(t.items)-1, 0))

@@ -40,7 +40,11 @@ var redteamCmd = &cobra.Command{
 
 		report.GeneratedAt = time.Now().UTC()
 		report.Commit = gitCommit()
-		report.Provider = cfg.Provider
+		primary, resolveErr := cfg.ResolveRole(config.RolePrimary)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		report.Provider = primary.Connection.Provider
 		report.Model = cfg.PrimaryModel()
 
 		if err := safety.WriteRedTeamReport(redteamOutputDir, *report); err != nil {

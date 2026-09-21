@@ -32,60 +32,78 @@ var consoleCmd = &cobra.Command{
 			return err
 		}
 
-		cfg, err := config.LoadConfig()
-		if err != nil {
+		return runConsole(initialView)
+	},
+}
+
+func runConsole(initialView dashboard.InitialView) error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		path, pathErr := config.ConfigPath()
+		_, statErr := os.Stat(path)
+		if initialView != dashboard.InitialViewSettings || pathErr != nil || !os.IsNotExist(statErr) {
 			return err
 		}
-		if err := setupflow.ValidateReady(cfg); err != nil {
-			return fmt.Errorf("setup required: %w; run 'cvkeharness setup'", err)
+		cfg = config.DefaultConfig()
+	}
+	if readyErr := setupflow.ValidateReady(cfg); readyErr != nil {
+		if initialView != dashboard.InitialViewSettings {
+			return fmt.Errorf("setup required: %w; run 'cvkeharness setup'", readyErr)
 		}
-		log.Init(cfg.LogLevel, "text")
-
-		store := state.Open(cfg.StateDBPath)
-		if !store.Available() {
-			return fmt.Errorf("state database unavailable: %w", store.Err())
-		}
-		defer store.Close()
-
-		sched := scheduler.New(store)
-
-		runJobNow := func(ctx context.Context, id string) (state.ScheduledJobRun, error) {
-			runner, err := newScheduledAgentRunner(ctx, store)
-			if err != nil {
-				return state.ScheduledJobRun{}, err
-			}
-			return sched.RunNow(ctx, runner, id, true)
-		}
-
-		service := dashboard.NewService(cfg, store, systemcron.New(nil), sched, runJobNow)
-		service.SetChatStarter(func(ctx context.Context, cfg *config.Config, observer tools.EventObserver) (dashboard.LiveChatSession, error) {
-			switch cfg.Provider {
-			case "openrouter", "openai":
-				if cfg.GetAPIKey(cfg.Provider) == "" {
-					return nil, fmt.Errorf("missing %s API key; open Settings or run setup to add credentials", cfg.Provider)
-				}
-			}
-			a, err := newChatAgent(ctx, cfg, store, observer, true, func(context.Context, core.RoutingSelection) (bool, error) {
-				// The console never prompts on stdin behind Bubble Tea. Unapproved
-				// routing recommendations safely fall back to the configured model.
-				return false, nil
-			})
-			if err != nil {
-				return nil, err
-			}
-			conversation, sessionID, err := startChatSession(ctx, a, store, cfg)
-			if err != nil {
-				return nil, err
-			}
-			return &dashboardChatSession{
-				conversation: conversation,
-				cfg:          cfg,
-				store:        store,
-				sessionID:    sessionID,
-			}, nil
-		})
+		// Repair configuration without opening state or constructing runtime
+		// clients. Saving does not execute work or install dependencies.
+		service := dashboard.NewService(cfg, nil, nil, nil, nil)
+		service.MarkSetupMode()
 		return dashboard.Run(service, os.Args[0], initialView)
-	},
+	}
+	log.Init(cfg.LogLevel, "text")
+
+	store := state.Open(cfg.StateDBPath)
+	if !store.Available() {
+		if initialView == dashboard.InitialViewSettings {
+			service := dashboard.NewService(cfg, nil, nil, nil, nil)
+			service.MarkSetupMode()
+			return dashboard.Run(service, os.Args[0], initialView)
+		}
+		return fmt.Errorf("state database unavailable: %w", store.Err())
+	}
+	defer store.Close()
+
+	sched := scheduler.New(store)
+
+	runJobNow := func(ctx context.Context, id string) (state.ScheduledJobRun, error) {
+		runner, err := newScheduledAgentRunner(ctx, store)
+		if err != nil {
+			return state.ScheduledJobRun{}, err
+		}
+		return sched.RunNow(ctx, runner, id, true)
+	}
+
+	service := dashboard.NewService(cfg, store, systemcron.New(nil), sched, runJobNow)
+	service.SetChatStarter(func(ctx context.Context, cfg *config.Config, observer tools.EventObserver) (dashboard.LiveChatSession, error) {
+		if err := setupflow.ValidateReady(cfg); err != nil {
+			return nil, fmt.Errorf("open Settings to repair model access: %w", err)
+		}
+		a, err := newChatAgent(ctx, cfg, store, observer, true, func(context.Context, core.RoutingSelection) (bool, error) {
+			// The console never prompts on stdin behind Bubble Tea. Unapproved
+			// routing recommendations safely fall back to the configured model.
+			return false, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		conversation, sessionID, err := startChatSession(ctx, a, store, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return &dashboardChatSession{
+			conversation: conversation,
+			cfg:          cfg,
+			store:        store,
+			sessionID:    sessionID,
+		}, nil
+	})
+	return dashboard.Run(service, os.Args[0], initialView)
 }
 
 type dashboardChatSession struct {

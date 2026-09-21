@@ -245,7 +245,7 @@ Open directly on the Chat workspace:
 - `cvkeharness setup`
   Interactive configuration wizard
 - `cvkeharness settings`
-  Interactive settings editor for updating an existing configuration
+  Open the same Settings workspace used by the console, including configuration repair
 - `cvkeharness run [task]`
   Run one bounded task through the routed agent runtime, then exit
 - `cvkeharness console`
@@ -329,7 +329,11 @@ Config is stored in `~/.cvkeharness/config.yaml`.
 
 Important fields:
 
-- `provider`
+- `connections`
+  Named provider access: provider type, endpoint, credential or login-file reference. Multiple connections can use the same provider.
+- `models`
+  Primary, safety judge, classifier, verifier, planning, execution and curation assignments. Each selects a connection/model or explicitly inherits another role. See the [model and Settings guide](docs/models-settings.md).
+- `provider` (legacy model configuration)
   Use `codex` for ChatGPT subscription-backed Codex access, `openai` for usage-based OpenAI API access, `openrouter` for OpenRouter, or `lmstudio` for a local server.
 - `api_keys`
   Stores API keys for usage-based providers; subscription-backed `codex` reads the official Codex CLI auth cache instead.
@@ -364,11 +368,12 @@ Important fields:
 
 ### Routing behavior
 
-- If routing is disabled, the default model is used everywhere.
+- Every role uses its configured connection/model or explicit inheritance. With automatic routing disabled, configured role assignments are used directly.
 - If routing is enabled, the router scores approved candidates from local history.
 - If confidence is too low, the runtime falls back to the default.
 - If a strong unapproved candidate is found, the CLI asks for one-off approval.
 - A prompt-approved model is recorded as `approved_once`; only deliberately durable model approvals are reused later.
+- Named connections retain their configured assignments when historical statistics cannot distinguish their endpoint/account. Their results do not contaminate provider-only automatic routing statistics.
 
 ## Prompt Stack
 

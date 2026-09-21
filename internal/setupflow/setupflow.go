@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/internal/modelcatalog"
+	"github.com/coolcake/cvkeharness/internal/modelruntime"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/securitypolicy"
@@ -29,18 +31,9 @@ type ProviderOption struct {
 	Description string
 }
 
-type ModelOption struct {
-	ID          string
-	Description string
-}
+type ModelOption = modelcatalog.ModelOption
 
-type ModelResult struct {
-	Items     []ModelOption
-	Live      bool
-	Source    string
-	Message   string
-	Timestamp time.Time
-}
+type ModelResult = modelcatalog.ModelResult
 
 type ToolStatus struct {
 	Name    string `json:"name"`
@@ -213,14 +206,33 @@ func ValidateReady(cfg *config.Config) error {
 	if err := cfg.ValidateConnection(); err != nil {
 		return err
 	}
-	switch cfg.Provider {
-	case "codex":
-		if _, ok := CodexAuthSummary(); !ok {
-			return fmt.Errorf("Codex login is missing or unreadable; run 'codex login', then complete setup")
+	checked := map[string]bool{}
+	for _, role := range config.ModelRoleList() {
+		resolved, err := cfg.ResolveRole(role)
+		if err != nil {
+			return err
 		}
-	case "antigravity":
-		if _, err := provider.LoadAntigravityAuth(provider.AntigravityAuthPath()); err != nil {
-			return fmt.Errorf("Antigravity login is missing or unreadable; run 'cvkeharness antigravity login', then complete setup")
+		if checked[resolved.ConnectionID] {
+			continue
+		}
+		checked[resolved.ConnectionID] = true
+		connection := resolved.Connection
+		path := connection.AuthFile
+		switch connection.Provider {
+		case "codex":
+			if path == "" {
+				path = provider.CodexAuthPath()
+			}
+			if _, err := provider.LoadCodexCLIAuth(path); err != nil {
+				return fmt.Errorf("%s: Codex login is missing or unreadable for connection %s; run 'codex login' or edit its login file", role, resolved.ConnectionID)
+			}
+		case "antigravity":
+			if path == "" {
+				path = provider.AntigravityAuthPath()
+			}
+			if _, err := provider.LoadAntigravityAuth(path); err != nil {
+				return fmt.Errorf("%s: Antigravity login is missing or unreadable for connection %s", role, resolved.ConnectionID)
+			}
 		}
 	}
 	return nil
@@ -236,12 +248,11 @@ func SetDefaultModel(cfg *config.Config, model string) {
 }
 
 func EnsureDefaultApproved(cfg *config.Config) {
-	providerName := strings.TrimSpace(cfg.Provider)
-	model := strings.TrimSpace(cfg.PrimaryModel())
-	if providerName == "" || model == "" {
+	primary, err := cfg.ResolveRole(config.RolePrimary)
+	if err != nil {
 		return
 	}
-	entry := providerName + "/" + model
+	entry := modelruntime.Ref(primary).String()
 	for _, existing := range cfg.ApprovedModels {
 		if existing == entry {
 			return
@@ -394,18 +405,13 @@ func DetectLMStudio(ctx context.Context, baseURL string) bool {
 }
 
 func FetchModels(ctx context.Context, cfg *config.Config) ModelResult {
-	switch cfg.Provider {
-	case "antigravity":
-		return fallbackModels(nil, "antigravity", "Enter a Gemini model ID from your Antigravity account; catalog is not verified")
-	case "codex":
-		return fetchCodexModels(time.Now())
-	case "openai":
-		return fetchOpenAIModels(ctx, cfg.GetAPIKey("openai"))
-	case "lmstudio":
-		return fetchLMStudioModels(ctx, cfg.BaseURL)
-	default:
-		return fetchOpenRouterModels(ctx)
+	if cfg == nil {
+		return modelcatalog.Fetch(ctx, config.Connection{})
 	}
+	if connection, err := cfg.ConnectionByID(cfg.RoleBinding(config.RolePrimary).Connection); err == nil {
+		return modelcatalog.Fetch(ctx, connection)
+	}
+	return modelcatalog.Fetch(ctx, config.Connection{Provider: cfg.Provider, BaseURL: cfg.BaseURL, APIKey: cfg.GetAPIKey(cfg.Provider)})
 }
 
 func (s Scanner) Scan(ctx context.Context, providerName string) HostProfile {
@@ -534,7 +540,7 @@ func GenerateRecommendations(cfg *config.Config, profile HostProfile, installPla
 }
 
 func AgentRecommendations(ctx context.Context, cfg *config.Config, profile HostProfile, installPlan InstallPlan, daemonPlan DaemonPlan) ([]string, error) {
-	p, err := resolveProvider(cfg)
+	p, primary, err := modelruntime.ResolveRole(cfg, config.RolePrimary)
 	if err != nil {
 		return nil, err
 	}
@@ -546,8 +552,8 @@ func AgentRecommendations(ctx context.Context, cfg *config.Config, profile HostP
 		"You are helping configure CvkeHarness, a local-first DevOps and coding agent.",
 		"Return 3 to 6 concise setup recommendations as plain bullet lines. Do not ask to run commands.",
 		"",
-		"Provider: " + cfg.Provider,
-		"Model: " + cfg.PrimaryModel(),
+		"Provider: " + primary.Connection.Provider,
+		"Model: " + primary.Model,
 		"Safety mode: " + cfg.SafetyMode,
 		hostSummary,
 		"Python install plan: " + installPlan.Description + " selected=" + strconv.FormatBool(installPlan.Selected),
@@ -555,7 +561,7 @@ func AgentRecommendations(ctx context.Context, cfg *config.Config, profile HostP
 		"Capabilities: python_scripts=" + cfg.CapabilityPolicy.PythonScripts + ", diagnostics=" + cfg.CapabilityPolicy.AutonomousDiagnostics + ", network=" + cfg.CapabilityPolicy.NetworkProbes + ", installs=" + cfg.CapabilityPolicy.InstallMissingTools,
 	}, "\n")
 	resp, err := p.ChatCompletion(ctx, &provider.ChatRequest{
-		Model:       cfg.PrimaryModel(),
+		Model:       primary.Model,
 		Messages:    []provider.Message{{Role: "user", Content: prompt}},
 		Temperature: 0.2,
 		MaxTokens:   500,
@@ -633,23 +639,6 @@ func Finalize(ctx context.Context, opts FinalizeOptions) (FinalizeResult, error)
 		}
 	}
 	return result, nil
-}
-
-func resolveProvider(cfg *config.Config) (provider.Provider, error) {
-	switch cfg.Provider {
-	case "antigravity":
-		return provider.NewAntigravity(), nil
-	case "codex":
-		return provider.NewCodexFromCLIAuth(), nil
-	case "openrouter":
-		return provider.NewOpenRouter(cfg.GetAPIKey("openrouter")), nil
-	case "openai":
-		return provider.NewOpenAI(cfg.GetAPIKey("openai")), nil
-	case "lmstudio":
-		return provider.NewLMStudio(cfg.BaseURL), nil
-	default:
-		return nil, fmt.Errorf("unsupported provider %q", cfg.Provider)
-	}
 }
 
 func parseRecommendationLines(raw string) []string {

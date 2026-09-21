@@ -1,4 +1,4 @@
-package cmd
+package setupflow
 
 import (
 	"os"
@@ -17,9 +17,9 @@ func TestWriteSetupSoulCreatesGeneratedGuidanceFromStub(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	wrote, err := writeSetupSoul(dir, soulProfileByID("mentor"))
+	wrote, err := WriteSoul(dir, testSoulProfile("mentor"))
 	if err != nil {
-		t.Fatalf("writeSetupSoul returned error: %v", err)
+		t.Fatalf("WriteSoul returned error: %v", err)
 	}
 	if !wrote {
 		t.Fatal("expected setup to replace the empty guidance stub")
@@ -48,9 +48,9 @@ func TestWriteSetupSoulPreservesExistingUserGuidance(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	wrote, err := writeSetupSoul(dir, soulProfileByID("concise"))
+	wrote, err := WriteSoul(dir, testSoulProfile("concise"))
 	if err != nil {
-		t.Fatalf("writeSetupSoul returned error: %v", err)
+		t.Fatalf("WriteSoul returned error: %v", err)
 	}
 	if wrote {
 		t.Fatal("expected setup to preserve existing guidance")
@@ -73,8 +73,8 @@ func TestWriteSetupSoulEnsuresOtherMemoryFilesExist(t *testing.T) {
 		t.Fatalf("expected playbooks.md to start missing, stat err=%v", err)
 	}
 
-	if _, err := writeSetupSoul(dir, defaultSoulProfile()); err != nil {
-		t.Fatalf("writeSetupSoul returned error: %v", err)
+	if _, err := WriteSoul(dir, DefaultSoulProfile()); err != nil {
+		t.Fatalf("WriteSoul returned error: %v", err)
 	}
 
 	for _, name := range []string{
@@ -94,14 +94,14 @@ func TestWriteSetupHostNotesSeedsGuidanceNotes(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	status, err := writeSetupHostNotes(dir, []string{
+	status, err := WriteHostNotes(dir, []string{
 		"Docker requires sudo",
 		"Homebrew lives in /opt/homebrew",
 	})
 	if err != nil {
-		t.Fatalf("writeSetupHostNotes returned error: %v", err)
+		t.Fatalf("WriteHostNotes returned error: %v", err)
 	}
-	if status != setupHostNotesWritten {
+	if !status {
 		t.Fatalf("expected setupHostNotesWritten, got %v", status)
 	}
 
@@ -125,15 +125,15 @@ func TestWriteSetupHostNotesPreservesExistingGuidanceNotes(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	if _, err := writeSetupHostNotes(dir, []string{"Docker requires sudo"}); err != nil {
-		t.Fatalf("first writeSetupHostNotes returned error: %v", err)
+	if _, err := WriteHostNotes(dir, []string{"Docker requires sudo"}); err != nil {
+		t.Fatalf("first WriteHostNotes returned error: %v", err)
 	}
 
-	status, err := writeSetupHostNotes(dir, []string{"Corporate VPN rewrites DNS"})
+	status, err := WriteHostNotes(dir, []string{"Corporate VPN rewrites DNS"})
 	if err != nil {
-		t.Fatalf("second writeSetupHostNotes returned error: %v", err)
+		t.Fatalf("second WriteHostNotes returned error: %v", err)
 	}
-	if status != setupHostNotesPreserved {
+	if status {
 		t.Fatalf("expected setupHostNotesPreserved, got %v", status)
 	}
 
@@ -148,4 +148,13 @@ func TestWriteSetupHostNotesPreservesExistingGuidanceNotes(t *testing.T) {
 	if strings.Contains(content, "Corporate VPN rewrites DNS") {
 		t.Fatalf("expected existing host notes to be preserved without overwrite, got %q", content)
 	}
+}
+
+func testSoulProfile(id string) SoulProfile {
+	for _, profile := range SoulProfiles() {
+		if profile.ID == id {
+			return profile
+		}
+	}
+	return DefaultSoulProfile()
 }
