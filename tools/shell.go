@@ -601,6 +601,12 @@ func normalizeShellWhitespace(segment string) string {
 // newline lets ParseShellCommand reject it as a blocked line continuation.
 func trimShellBoundaryWhitespace(command string) string {
 	command = strings.TrimLeft(command, " \t\r\n")
+	// Trailing whitespace can be part of a heredoc body or an invalid
+	// delimiter. Trimming it could turn rejected input into a different valid
+	// program before policy assessment and execution.
+	if strings.Contains(command, "<<") {
+		return command
+	}
 	for len(command) > 0 {
 		last := len(command) - 1
 		if !strings.ContainsRune(" \t\r\n", rune(command[last])) {
@@ -626,7 +632,7 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		return "", fmt.Errorf("failed to parse arguments: %w", err)
 	}
 
-	cmdStr := strings.TrimSpace(parsedArgs.Command)
+	cmdStr := trimShellBoundaryWhitespace(parsedArgs.Command)
 
 	start := time.Now()
 	approvalMode := "allowlist"

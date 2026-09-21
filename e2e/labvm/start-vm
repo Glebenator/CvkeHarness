@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+[ "$(uname -m)" = aarch64 ] || { echo "This VM lab image currently requires an arm64 Docker host" >&2; exit 1; }
+[ -x /payload/cvkeharness ] || { echo "Copy the compiled Linux arm64 CvkeHarness binary to /payload/cvkeharness before starting" >&2; exit 1; }
+ssh-keygen -q -t ed25519 -N '' -f /keys/id_ed25519
+cp /keys/id_ed25519.pub /guest/etc/lab_authorized_keys
+chmod 0600 /guest/etc/lab_authorized_keys
+cp /payload/cvkeharness /guest/usr/local/bin/cvkeharness
+chmod 0755 /guest/usr/local/bin/cvkeharness
+cp /guest/boot/vmlinuz-virt /vm/vmlinuz
+rm /guest/boot/vmlinuz-virt
+cd /guest
+find . -print0 | cpio --null -o --format=newc | gzip -1 > /vm/initramfs.gz
+cd /vm
+qemu-img create -f raw /vm/state.raw 512M
+qemu-img create -f raw /vm/data.raw 512M
+exec qemu-system-aarch64 \
+  -machine virt -accel tcg -cpu cortex-a72 -smp 2 -m 1024 \
+  -display none -serial stdio -monitor none \
+  -kernel /vm/vmlinuz -initrd /vm/initramfs.gz \
+  -append 'console=ttyAMA0 rdinit=/init panic=1 cvke.lab=1' \
+  -drive file=/vm/state.raw,format=raw,if=none,id=state \
+  -device virtio-blk-pci,drive=state \
+  -drive file=/vm/data.raw,format=raw,if=none,id=data \
+  -device virtio-blk-pci,drive=data \
+  -object rng-random,filename=/dev/urandom,id=rng \
+  -device virtio-rng-pci,rng=rng \
+  -netdev user,id=net,restrict=on,hostfwd=tcp:127.0.0.1:2222-:22,hostfwd=tcp:127.0.0.1:2223-:2223 \
+  -device virtio-net-pci,netdev=net

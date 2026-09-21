@@ -24,6 +24,7 @@ const (
 	configFieldNumber
 	configFieldToggle
 	configFieldSecurity
+	configFieldModel
 )
 
 type configField struct {
@@ -36,6 +37,8 @@ type configField struct {
 }
 
 type configTab struct {
+	modelPicker     *configModelPicker
+	modelEpoch      uint64
 	cfg             *config.Config
 	cursor          int
 	scroll          int
@@ -61,7 +64,7 @@ func newConfigTab() tabModel {
 func (t *configTab) Init(svc *Service) tea.Cmd {
 	// Tick refreshes call Init on the active tab. Never replace an in-progress
 	// editor with the last saved config; that silently discards user changes.
-	if t.loaded && (t.dirty || t.editing || t.securityOpen || t.saving) {
+	if t.loaded && (t.dirty || t.editing || t.modelPicker != nil || t.securityOpen || t.saving) {
 		return nil
 	}
 	cfg := cloneTUIConfig(svc.Config())
@@ -79,9 +82,12 @@ func (t *configTab) Init(svc *Service) tea.Cmd {
 	return nil
 }
 
-func (t *configTab) Consuming() bool { return t.editing || t.securityOpen }
+func (t *configTab) Consuming() bool { return t.editing || t.modelPicker != nil || t.securityOpen }
 
 func (t *configTab) StatusHints() []string {
+	if t.modelPicker != nil {
+		return []string{renderKeyHint("↑↓", "browse"), renderKeyHint("enter", "choose"), renderKeyHint("ctrl+r", "reload"), renderKeyHint("esc", "cancel")}
+	}
 	if t.editing {
 		return []string{
 			renderKeyHint("enter", "keep edit"),
@@ -116,6 +122,11 @@ func (t *configTab) StatusHints() []string {
 
 func (t *configTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case configModelsMsg:
+		if t.modelPicker != nil && msg.epoch == t.modelEpoch {
+			t.acceptModels(msg.result)
+		}
+		return t, nil
 	case configSavedMsg:
 		t.saving = false
 		if msg.err != nil {
@@ -131,6 +142,9 @@ func (t *configTab) Update(msg tea.Msg, svc *Service, width, height int) (tabMod
 	case tea.KeyMsg:
 		if t.saving {
 			return t, nil
+		}
+		if t.modelPicker != nil {
+			return t.updateModelPicker(msg)
 		}
 		if t.editing {
 			return t.updateEditor(msg)
@@ -154,6 +168,9 @@ func (t *configTab) updateList(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd)
 			t.cursor--
 		}
 	case key.Matches(msg, keys.Enter):
+		if t.fields[t.cursor].Kind == configFieldModel {
+			return t, t.openModelPicker()
+		}
 		t.beginEdit()
 	case msg.String() == "s":
 		cfg := cloneTUIConfig(t.cfg)
@@ -372,6 +389,9 @@ func (t *configTab) View(width, height int) string {
 		return styleMuted.Render("  Loading...")
 	}
 
+	if t.modelPicker != nil {
+		return t.viewModelPicker(width, height)
+	}
 	if t.editing {
 		return t.viewEditor(width)
 	}
@@ -545,7 +565,7 @@ func (t *configTab) renderFieldRow(idx, col int, selected bool) string {
 			value = "Off"
 		}
 	}
-	if field.Kind == configFieldSecurity {
+	if field.Kind == configFieldSecurity || field.Kind == configFieldModel {
 		value += "  ›"
 	}
 	row := padRight(field.Label, 24) + truncate(value, maxInt(col-28, 1))
@@ -579,14 +599,14 @@ func configFields() []configField {
 			Label:       "Provider",
 			Description: "Runtime provider for new runs and chat sessions",
 			Kind:        configFieldSelect,
-			Options:     []string{"codex", "openrouter", "openai", "lmstudio"},
+			Options:     []string{"codex", "openrouter", "openai", "lmstudio", "antigravity"},
 			Get:         func(c *config.Config) string { return c.Provider },
 			Set:         func(c *config.Config, v string) { c.Provider = v },
 		},
 		{
 			Label:       "Default Model",
-			Description: "Primary model used when routing is disabled or undecided",
-			Kind:        configFieldText,
+			Description: "Browse provider models or enter a custom ID. Used when routing is disabled or undecided",
+			Kind:        configFieldModel,
 			Get:         func(c *config.Config) string { return c.PrimaryModel() },
 			Set:         func(c *config.Config, v string) { c.DefaultModel = v },
 		},

@@ -59,6 +59,20 @@ func NewService(
 // Config returns the loaded configuration.
 func (s *Service) Config() *config.Config { return s.cfg }
 
+func (s *Service) RecoveryOperations(ctx context.Context) ([]state.RecoveryOperation, error) {
+	if s.store == nil {
+		return nil, nil
+	}
+	return s.store.ListRecoveryOperations(ctx)
+}
+
+func (s *Service) RecoveryBatches(ctx context.Context) ([]state.RecoveryBatch, error) {
+	if s.store == nil {
+		return nil, nil
+	}
+	return s.store.ListRecoveryBatches(ctx)
+}
+
 // MarkSetupMode tells the TUI that it is editing default first-run settings.
 func (s *Service) MarkSetupMode() { s.setupMode = true }
 

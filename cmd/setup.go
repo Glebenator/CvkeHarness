@@ -832,6 +832,8 @@ var safetyModeOptions = [][2]string{
 
 func safetyModelsForProvider(cfg *config.Config) [][2]string {
 	switch cfg.Provider {
+	case "antigravity":
+		return [][2]string{{"[ custom model ]", "Enter a Gemini model ID from your Antigravity account"}}
 	case "codex":
 		return fetchCodexModels(time.Now()).items
 	case "openai":
@@ -861,6 +863,7 @@ func wizardProvider(cfg *config.Config) bool {
 		{"openrouter", "Cloud API  ·  many models  ·  requires API key"},
 		{"openai", "OpenAI API  ·  Codex models  ·  usage-based API key"},
 		{"lmstudio", "Local inference  ·  no key needed  ·  offline-capable"},
+		{"antigravity", "Google subscription (unofficial) · browser OAuth login"},
 	}
 	for i, item := range providers {
 		if item[0] == cfg.Provider {
@@ -878,6 +881,13 @@ func wizardProvider(cfg *config.Config) bool {
 
 // wizardAPIKey is step 2 — dispatches to the correct credential flow.
 func wizardAPIKey(cfg *config.Config) bool {
+	if cfg.Provider == "antigravity" {
+		if _, err := provider.LoadAntigravityAuth(provider.AntigravityAuthPath()); err == nil {
+			return true
+		}
+		fmt.Println("Run cvkeharness antigravity login in another terminal, then continue.")
+		return selectList([][2]string{{"Check login", "Use saved Google credentials"}}, 0, true) != goBack && antigravityLoginAvailable()
+	}
 	if cfg.Provider == "codex" {
 		return wizardCodexCLIAuth(cfg)
 	}
@@ -1142,7 +1152,9 @@ func wizardModel(cfg *config.Config, result modelsResult) bool {
 	renderStep(3, totalSteps, "Select a Model")
 
 	var items [][2]string
-	if cfg.Provider == "lmstudio" {
+	if cfg.Provider == "antigravity" {
+		items = safetyModelsForProvider(cfg)
+	} else if cfg.Provider == "lmstudio" {
 		res := fetchLMStudioModels(cfg.BaseURL)
 		items = res.items
 		if res.isLive {
@@ -1483,6 +1495,8 @@ type settingsMenuEntry struct {
 
 func providerSummary(cfg *config.Config) string {
 	switch cfg.Provider {
+	case "antigravity":
+		return "Antigravity (personal OAuth)"
 	case "codex":
 		return "Codex via ChatGPT"
 	case "lmstudio":
@@ -1495,6 +1509,9 @@ func providerSummary(cfg *config.Config) string {
 }
 
 func connectionLabel(cfg *config.Config) string {
+	if cfg.Provider == "antigravity" {
+		return "Google Login"
+	}
 	if cfg.Provider == "codex" {
 		return "Codex Login"
 	}
@@ -1508,6 +1525,12 @@ func connectionLabel(cfg *config.Config) string {
 }
 
 func connectionSummary(cfg *config.Config) string {
+	if cfg.Provider == "antigravity" {
+		if antigravityLoginAvailable() {
+			return "Found Google login"
+		}
+		return "Run cvkeharness antigravity login"
+	}
 	if cfg.Provider == "codex" {
 		if auth, err := provider.LoadCodexCLIAuth(provider.CodexAuthPath()); err == nil {
 			if auth.AccountID != "" {
@@ -2009,4 +2032,9 @@ var settingsCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(setupCmd)
 	rootCmd.AddCommand(settingsCmd)
+}
+
+func antigravityLoginAvailable() bool {
+	_, err := provider.LoadAntigravityAuth(provider.AntigravityAuthPath())
+	return err == nil
 }

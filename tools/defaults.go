@@ -1,11 +1,13 @@
 package tools
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/coolcake/cvkeharness/internal/promptdump"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/recovery"
 	"github.com/coolcake/cvkeharness/securitypolicy"
 	"github.com/coolcake/cvkeharness/state"
 )
@@ -23,6 +25,7 @@ type DefaultRegistryOptions struct {
 	WebSearch            WebSearchOptions
 	BlockManualApprovals bool
 	SecurityPolicy       *securitypolicy.EffectivePolicy
+	Recovery             recovery.Options
 }
 
 // NewDefaultRegistry creates the standard tool registry used by the CLI.
@@ -63,6 +66,7 @@ func NewDefaultRegistryWithStoreMemoryAndPromptDumper(allowedCommands []string, 
 // configuration errors for optional tools that require credentials.
 func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, error) {
 	registry := NewRegistry()
+	registry.Register(&CalculateTool{})
 
 	var approver ShellApprover
 	var humanApprover ShellApprover
@@ -90,6 +94,15 @@ func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, erro
 	if opts.Store != nil && opts.Store.Available() {
 		registry.Register(NewScheduleManageTool(opts.Store))
 		registry.Register(NewSystemCronManageTool(opts.Store))
+		if opts.SecurityPolicy != nil {
+			opts.Recovery.Policy = opts.SecurityPolicy.Hash
+			engine, err := recovery.New(opts.Store, opts.Recovery)
+			if err != nil {
+				return nil, fmt.Errorf("initialize recovery: %w", err)
+			}
+			registry.Register(NewRecoveryManageTool(engine))
+			registry.Register(NewRecoveryFleetTool(engine))
+		}
 	}
 	if webTools, err := NewWebSearchTools(opts.WebSearch); err != nil {
 		return nil, err

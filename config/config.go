@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/coolcake/cvkeharness/recovery"
 	"github.com/coolcake/cvkeharness/securitypolicy"
 	"gopkg.in/yaml.v3"
 )
@@ -43,6 +44,23 @@ type Config struct {
 	CapabilityPolicy        CapabilityPolicy          `yaml:"capability_policy,omitempty"`
 	WebSearch               WebSearchConfig           `yaml:"web_search,omitempty"`
 	Security                *securitypolicy.Selection `yaml:"security,omitempty"`
+	Recovery                RecoveryConfig            `yaml:"recovery,omitempty"`
+}
+
+// RecoveryConfig is operator-authored. Model tool arguments cannot widen roots
+// or raise impact budgets. An empty root list disables preparation/application.
+type RecoveryConfig struct {
+	MaxRepairAttempts int                       `yaml:"max_repair_attempts,omitempty"`
+	Fleet             recovery.FleetConfig      `yaml:"fleet,omitempty"`
+	SSHServices       []recovery.SSHService     `yaml:"ssh_services,omitempty"`
+	Snapshots         []recovery.SnapshotTarget `yaml:"snapshots,omitempty"`
+	Services          []recovery.NGINXService   `yaml:"services,omitempty"`
+	Roots             []string                  `yaml:"roots,omitempty"`
+	MaxFiles          int                       `yaml:"max_files,omitempty"`
+	MaxBytes          int64                     `yaml:"max_bytes,omitempty"`
+	MaxFileBytes      int64                     `yaml:"max_file_bytes,omitempty"`
+	MaxAgeSeconds     int64                     `yaml:"max_age_seconds,omitempty"`
+	MinFreeBytes      int64                     `yaml:"min_free_bytes,omitempty"`
 }
 
 // CapabilityPolicy captures durable user preferences collected during setup.
@@ -213,6 +231,11 @@ func (c *Config) Clone() *Config {
 		return nil
 	}
 	out := *c
+	out.Recovery.Roots = append([]string(nil), c.Recovery.Roots...)
+	out.Recovery.Services = append([]recovery.NGINXService(nil), c.Recovery.Services...)
+	out.Recovery.Snapshots = append([]recovery.SnapshotTarget(nil), c.Recovery.Snapshots...)
+	out.Recovery.SSHServices = append([]recovery.SSHService(nil), c.Recovery.SSHServices...)
+	out.Recovery.Fleet.Hosts = append([]recovery.FleetHost(nil), c.Recovery.Fleet.Hosts...)
 	out.Security = c.Security.Clone()
 	if c.APIKeys != nil {
 		out.APIKeys = make(map[string]string, len(c.APIKeys))

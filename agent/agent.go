@@ -513,6 +513,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				ToolCallID: call.ID,
 				TargetID:   targetResolution.TargetID,
 			}), call.ID, call.Function.Name)
+			toolCtx = tools.WithExecutionTarget(toolCtx, tools.ExecutionTarget{RuntimeID: targetResolution.RuntimeHostID, TargetID: targetResolution.TargetID, Kind: targetResolution.TargetKind, Ambiguous: targetResolution.Ambiguous})
 			tools.EmitEvent(toolCtx, tools.Event{
 				Type:    tools.EventToolCallStarted,
 				Success: true,

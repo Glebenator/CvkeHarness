@@ -125,6 +125,12 @@ func (r *Registry) ExecuteTool(ctx context.Context, call provider.ToolCall) (str
 	}
 
 	toolCtx := WithToolCallContext(ctx, call.ID, call.Function.Name)
+	if _, ok := t.(*RecoveryManageTool); ok && r.securityPolicy == nil {
+		return "", fmt.Errorf("recovery tools require an effective security policy")
+	}
+	if _, ok := t.(*RecoveryFleetTool); ok && r.securityPolicy == nil {
+		return "", fmt.Errorf("fleet recovery requires an effective security policy")
+	}
 	if err := r.authorizeToolCall(toolCtx, call); err != nil {
 		return "", err
 	}
@@ -136,6 +142,18 @@ func (r *Registry) authorizeToolCall(ctx context.Context, call provider.ToolCall
 		return nil
 	}
 	effects := policyToolEffects(call.Function.Name, call.Function.Arguments)
+	reviewSummary := ""
+	if t, ok := r.Get(call.Function.Name); ok {
+		if reviewer, ok := t.(interface {
+			Review(context.Context, json.RawMessage) (string, error)
+		}); ok {
+			var err error
+			reviewSummary, err = reviewer.Review(ctx, json.RawMessage(call.Function.Arguments))
+			if err != nil {
+				return err
+			}
+		}
+	}
 	decision := securitypolicy.DecisionAllow
 	var reasons []string
 	for _, effect := range effects {
@@ -147,6 +165,9 @@ func (r *Registry) authorizeToolCall(ctx context.Context, call provider.ToolCall
 		reasons = append(reasons, effect.Detail+" is "+string(effectDecision))
 	}
 	reason := strings.Join(uniqueStrings(reasons), "; ")
+	if reviewSummary != "" {
+		decision = strictestSecurityDecision(decision, securitypolicy.DecisionAsk)
+	}
 	if decision == securitypolicy.DecisionDeny {
 		return fmt.Errorf("security violation: %s", reason)
 	}
@@ -175,6 +196,9 @@ func (r *Registry) authorizeToolCall(ctx context.Context, call provider.ToolCall
 		ActionPayload:   call.Function.Arguments,
 		GrantDigest:     grant.Digest,
 		Grant:           grant,
+	}
+	if reviewSummary != "" {
+		request.Command = secrets.Mask(reviewSummary)
 	}
 	if decision == securitypolicy.DecisionLLMReview && r.llmApprover != nil {
 		if _, advisoryErr := r.llmApprover.Approve(ctx, request); advisoryErr != nil {
@@ -208,6 +232,32 @@ func classifyToolEffects(name string, raw json.RawMessage) []ShellEffect {
 	_ = json.Unmarshal(raw, &args)
 	action, _ := args["action"].(string)
 	switch name {
+	case "recovery_fleet":
+		switch action {
+		case "hosts", "list", "inspect":
+			return []ShellEffect{{Setting: securitypolicy.SettingReadCommands, Detail: "saved fleet manifest and operator transport inspection"}}
+		case "prepare", "reconcile":
+			return []ShellEffect{{Setting: securitypolicy.SettingReadCommands, Detail: "exact remote operation inspection"}, {Setting: securitypolicy.SettingNetworkAccess, Detail: "operator-pinned SSH executor connections"}, {Setting: securitypolicy.SettingCredentialAccess, Detail: "operator-configured SSH identity authentication"}, {Setting: securitypolicy.SettingFileCreate, Detail: "durable bounded batch evidence"}}
+		default:
+			return []ShellEffect{{Setting: securitypolicy.SettingRemoteMutation, Detail: "exact enrolled remote executor mutation"}, {Setting: securitypolicy.SettingFileCreate, Detail: "remote recovery staging"}, {Setting: securitypolicy.SettingFileOverwrite, Detail: "prepared remote file replacement/restoration"}, {Setting: securitypolicy.SettingFileDelete, Detail: "prepared remote quarantine/removal"}, {Setting: securitypolicy.SettingServiceChanges, Detail: "prepared remote service transaction/rollback"}, {Setting: securitypolicy.SettingNetworkAccess, Detail: "operator-pinned SSH dispatch and health checks"}, {Setting: securitypolicy.SettingCredentialAccess, Detail: "operator-configured SSH identity authentication"}}
+		}
+	case "safety_calculate":
+		return []ShellEffect{{Setting: securitypolicy.SettingReadCommands, Detail: "deterministic local arithmetic without system changes"}}
+	case "recovery_manage":
+		switch action {
+		case "list", "services", "snapshot_targets", "ssh_services", "inspect", "reconcile":
+			return []ShellEffect{{Setting: securitypolicy.SettingReadCommands, Detail: "recovery journal inspection/reconciliation"}}
+		case "prepare", "snapshot_prepare", "snapshot_restore_prepare":
+			return []ShellEffect{{Setting: securitypolicy.SettingFileCreate, Detail: "bounded private recovery backup and candidate preparation"}}
+		case "apply_service", "recover_service":
+			return []ShellEffect{{Setting: securitypolicy.SettingFileCreate, Detail: "service configuration staging"}, {Setting: securitypolicy.SettingFileOverwrite, Detail: "service configuration replacement or restoration"}, {Setting: securitypolicy.SettingServiceChanges, Detail: "prepared service validation, reload and bounded rollback"}, {Setting: securitypolicy.SettingNetworkAccess, Detail: "operator-defined loopback health verification"}}
+		case "apply_ssh", "recover_ssh", "confirm_ssh":
+			return []ShellEffect{{Setting: securitypolicy.SettingFileCreate, Detail: "SSH configuration and durable watchdog staging"}, {Setting: securitypolicy.SettingFileOverwrite, Detail: "SSH configuration application or restoration"}, {Setting: securitypolicy.SettingServiceChanges, Detail: "SSH reload, revert-unless-confirmed deadline or explicit commit"}, {Setting: securitypolicy.SettingNetworkAccess, Detail: "fixed SSH listener and new authenticated connection verification"}}
+		case "apply_snapshot", "recover_snapshot":
+			return []ShellEffect{{Setting: securitypolicy.SettingFileCreate, Detail: "native subvolume checkpoint/restore clone"}, {Setting: securitypolicy.SettingFileOverwrite, Detail: "whole reviewed subvolume namespace replacement"}, {Setting: securitypolicy.SettingFileDelete, Detail: "current tree displaced into retained private recovery store"}}
+		default:
+			return []ShellEffect{{Setting: securitypolicy.SettingFileCreate, Detail: "prepared recovery file creation"}, {Setting: securitypolicy.SettingFileOverwrite, Detail: "prepared recovery file replacement"}, {Setting: securitypolicy.SettingFileDelete, Detail: "prepared recovery file quarantine/removal"}}
+		}
 	case "schedule_manage":
 		switch action {
 		case "list", "runs":

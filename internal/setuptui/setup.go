@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/internal/setupflow"
+	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/securitypolicy"
 )
 
@@ -244,6 +245,9 @@ func (m setupModel) canAdvanceWithN() bool {
 	switch m.step {
 	case stepCredentials:
 		switch m.cfg.Provider {
+		case "antigravity":
+			_, err := provider.LoadAntigravityAuth(provider.AntigravityAuthPath())
+			return err == nil
 		case "codex":
 			_, ok := setupflow.CodexAuthSummary()
 			return ok
@@ -341,6 +345,12 @@ func (m setupModel) viewCredentials() string {
 		return m.viewInputPrompt("Base URL input active", "Enter the local OpenAI-compatible base URL; press enter to save or esc to cancel.", "LM Studio URL")
 	}
 	switch m.cfg.Provider {
+	case "antigravity":
+		status := "Run cvkeharness antigravity login in another terminal."
+		if _, err := provider.LoadAntigravityAuth(provider.AntigravityAuthPath()); err == nil {
+			status = "Found personal Google login (unofficial integration)."
+		}
+		return m.paragraph(status) + "\n" + m.renderList([]row{{"Use Google login", "Check saved credentials and continue"}})
 	case "codex":
 		summary, ok := setupflow.CodexAuthSummary()
 		status := summary
@@ -709,6 +719,12 @@ func (m setupModel) activate() (setupModel, tea.Cmd) {
 
 func (m setupModel) activateCredentials() (setupModel, tea.Cmd) {
 	switch m.cfg.Provider {
+	case "antigravity":
+		if _, err := provider.LoadAntigravityAuth(provider.AntigravityAuthPath()); err != nil {
+			m.message = err.Error()
+			return m, nil
+		}
+		return m.nextStep()
 	case "codex":
 		if m.cursor == 1 {
 			m.message = "Codex auth cache refreshed"
@@ -1047,6 +1063,8 @@ func (m setupModel) itemCount() int {
 		return len(setupflow.ProviderOptions())
 	case stepCredentials:
 		switch m.cfg.Provider {
+		case "antigravity":
+			return 1
 		case "codex", "lmstudio":
 			return 2
 		case "openai":
