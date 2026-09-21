@@ -529,7 +529,16 @@ func (m model) renderStatusBar() string {
 	// Prioritize navigation and local completion/recovery actions over quit.
 	candidates := []string{navigationHint}
 	tabHints := m.tabs[m.activeTab].StatusHints()
-	if consuming {
+	if m.activeTab == tabChat {
+		// Chat has two reading surfaces. Their focus/inspection controls must
+		// remain discoverable before generic navigation consumes the footer.
+		candidates = append(append([]string(nil), tabHints...), navigationHint)
+		helpKey := "?"
+		if consuming {
+			helpKey = "f1"
+		}
+		candidates = append(candidates, renderKeyHint("ctrl+o", "open"), renderKeyHint(helpKey, "help"))
+	} else if consuming {
 		candidates = append(candidates, tabHints...)
 	} else {
 		primary := minInt(len(tabHints), 2)
@@ -595,14 +604,18 @@ func (m model) renderHelp() string {
 		{
 			"Chat Tab",
 			[][2]string{
-				{"enter", "Focus the composer or send a message"},
+				{"enter", "Compose/send, or inspect a tool in Activity"},
 				{"/", "Open chat command suggestions"},
 				{"/new", "Start a fresh chat (/clear remains an alias)"},
 				{"ctrl+g", "Show full session context"},
-				{"esc", "Leave the composer or interrupt active work"},
+				{"esc", "Back from Activity, leave input, or interrupt work"},
 				{"ctrl+h", "Toggle live chat and saved conversations"},
-				{"↑/↓", "Select tool calls and scroll at list boundaries"},
-				{"space or ctrl+t", "Expand or collapse the selected tool"},
+				{"↑/↓ · PgUp/PgDn", "Scroll the focused pane without selecting tools"},
+				{"ctrl+t", "Open Activity for the visible turn; return to chat"},
+				{"n/p · [/]", "In Activity: select a tool / previous or next turn"},
+				{"ctrl+end", "Jump conversation to latest and follow new activity"},
+				{"f", "In Activity: follow the latest turn"},
+				{"click activity link", "Inspect that turn; wheel scrolls the pane under it"},
 			},
 		},
 		{

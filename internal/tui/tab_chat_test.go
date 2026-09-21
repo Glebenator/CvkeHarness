@@ -146,8 +146,11 @@ func TestLiveChatNewCommandReplacesSessionAndClearsConversationState(t *testing.
 			tab.session = oldSession
 			tab.messages = []liveChatMessage{{role: "assistant", content: "old transcript", turn: 4}}
 			tab.toolCalls = []liveToolCall{{id: "old-tool", status: "APPROVAL CHECK", turn: 4}}
-			tab.toolLineStarts = []int{7}
-			tab.toolLineEnds = []int{9}
+			tab.chatTurnLinks = map[int]int{7: 4}
+			tab.activity.selectedTurn = 4
+			tab.activity.selectedTool = 0
+			tab.activity.following = false
+			tab.activity.inspecting = true
 			tab.verifierActivity[4] = liveVerificationActivity{
 				turn: 4,
 				VerificationActivity: tools.VerificationActivity{
@@ -192,8 +195,11 @@ func TestLiveChatNewCommandReplacesSessionAndClearsConversationState(t *testing.
 			if tab.eventCh == oldEvents {
 				t.Fatal("expected a fresh event channel for the replacement runtime")
 			}
-			if len(tab.messages) != 0 || len(tab.toolCalls) != 0 || len(tab.toolLineStarts) != 0 || len(tab.toolLineEnds) != 0 || len(tab.verifierActivity) != 0 {
+			if len(tab.messages) != 0 || len(tab.toolCalls) != 0 || len(tab.chatTurnLinks) != 0 || len(tab.verifierActivity) != 0 {
 				t.Fatalf("expected visible transcript, tool, and verifier state to clear, got messages=%#v tools=%#v verifier=%#v", tab.messages, tab.toolCalls, tab.verifierActivity)
+			}
+			if tab.activity.selectedTurn != 0 || tab.activity.selectedTool != -1 || tab.activity.inspecting || !tab.activity.following {
+				t.Fatalf("expected activity inspection to reset with the conversation: %#v", tab.activity)
 			}
 			if tab.activeTurn != 0 || tab.target != "" || tab.verification != "NOT RUN" || tab.lastError != "" || len(tab.memorySources) != 0 {
 				t.Fatalf("expected conversation metadata to reset, got turn=%d target=%q verification=%q error=%q memory=%#v", tab.activeTurn, tab.target, tab.verification, tab.lastError, tab.memorySources)
@@ -401,6 +407,7 @@ func TestLiveChatRuntimeEventsExposeExplicitToolStatus(t *testing.T) {
 	t.Parallel()
 
 	tab := newChatTab().(*chatTab)
+	tab.activeTurn = 1
 	tab.applyRuntimeEvent(tools.Event{
 		Type:       tools.EventToolCallStarted,
 		ToolCallID: "call-1",
@@ -416,9 +423,7 @@ func TestLiveChatRuntimeEventsExposeExplicitToolStatus(t *testing.T) {
 	if len(tab.toolCalls) != 1 || tab.toolCalls[0].status != "SUCCEEDED" {
 		t.Fatalf("expected one successful explicit tool state, got %#v", tab.toolCalls)
 	}
-	tab.toolCalls[0].expanded = true
-	tab.refreshViewport()
-	if view := tab.viewport.View(); !strings.Contains(view, "SUCCEEDED") {
+	if view := chatActivityViewForTest(tab, 1); !strings.Contains(view, "SUCCEEDED") {
 		t.Fatalf("expected text status in tool rendering, got:\n%s", view)
 	}
 }
@@ -441,7 +446,6 @@ func TestLiveChatVerifierProgressIsExplicitCompactAndRedacted(t *testing.T) {
 			Verification: activity,
 		})
 		tab.refreshViewport()
-		tab.viewport.GotoBottom()
 	}
 
 	emit(tools.VerificationActivity{
@@ -450,7 +454,7 @@ func TestLiveChatVerifierProgressIsExplicitCompactAndRedacted(t *testing.T) {
 		RepairAttempt: 0,
 		RepairLimit:   2,
 	})
-	if view := tab.viewport.View(); !strings.Contains(view, "CHECKING") || !strings.Contains(view, "attempt 0 of 2") || tab.status != "VERIFYING" {
+	if view := chatActivityViewForTest(tab, 1); !strings.Contains(view, "CHECKING") || !strings.Contains(view, "attempt 0 of 2") || tab.status != "VERIFYING" {
 		t.Fatalf("expected explicit live checking state, status=%q view:\n%s", tab.status, view)
 	}
 
@@ -464,7 +468,7 @@ func TestLiveChatVerifierProgressIsExplicitCompactAndRedacted(t *testing.T) {
 		CapabilitiesEvaluated: true,
 		CapabilitiesChanged:   false,
 	})
-	view := tab.viewport.View()
+	view := chatActivityViewForTest(tab, 1)
 	for _, want := range []string{"REPAIRING", "attempt 1 of 2", "Capabilities: unchanged", "Reason:", "Missing:", "[REDACTED]"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected repair view to contain %q, got:\n%s", want, view)
@@ -488,7 +492,7 @@ func TestLiveChatVerifierProgressIsExplicitCompactAndRedacted(t *testing.T) {
 		StopReason:            tools.VerificationStopNoProgress,
 		Final:                 true,
 	})
-	view = tab.viewport.View()
+	view = chatActivityViewForTest(tab, 1)
 	for _, want := range []string{"STOPPED", "Stop: no progress detected", "Outcome: UNSATISFIED"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected stopped view to contain %q, got:\n%s", want, view)
@@ -527,11 +531,14 @@ func TestLiveChatTurnResultReconcilesDroppedVerifierFinalEvent(t *testing.T) {
 		},
 	}, nil)
 	tab.refreshViewport()
-	view := tab.viewport.View()
-	for _, want := range []string{"SATISFIED", "Outcome: SATISFIED", "attempt 1 of 2", "Capabilities: unchanged", "RESPONSE"} {
+	view := chatActivityViewForTest(tab, 1)
+	for _, want := range []string{"SATISFIED", "Outcome: SATISFIED", "attempt 1 of 2", "Capabilities: unchanged"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected reconciled final verifier view to contain %q, got:\n%s", want, view)
 		}
+	}
+	if transcript := tab.viewport.View(); !strings.Contains(transcript, "RESPONSE") || !strings.Contains(transcript, "done") {
+		t.Fatalf("expected the final assistant response to remain in chat, got:\n%s", transcript)
 	}
 }
 
@@ -547,6 +554,7 @@ func TestLiveChatVerifierProgressFollowsBottomWithoutStealingManualScroll(t *tes
 	for i := 0; i < 20; i++ {
 		tab.messages = append(tab.messages, liveChatMessage{role: "system", content: fmt.Sprintf("prior line %02d", i)})
 	}
+	tab.messages = append(tab.messages, liveChatMessage{role: "user", content: "verify current work", turn: 1})
 	tab.resize(80, 18)
 	tab.viewport.GotoBottom()
 
@@ -563,7 +571,7 @@ func TestLiveChatVerifierProgressFollowsBottomWithoutStealingManualScroll(t *tes
 	}}
 	updated, _ := tab.Update(checking, nil, 80, 18)
 	tab = updated.(*chatTab)
-	if !tab.viewport.AtBottom() || !strings.Contains(tab.viewport.View(), "CHECKING") {
+	if !tab.viewport.AtBottom() || !strings.Contains(tab.viewport.View(), "View activity") {
 		t.Fatalf("expected an operator at the bottom to follow live verifier progress, offset=%d view:\n%s", tab.viewport.YOffset, tab.viewport.View())
 	}
 
@@ -584,7 +592,7 @@ func TestLiveChatVerifierProgressFollowsBottomWithoutStealingManualScroll(t *tes
 	}
 }
 
-func TestLiveChatOrdersToolActivityBeforeHighlightedResponse(t *testing.T) {
+func TestLiveChatOrdersActivityLinkBeforeHighlightedResponse(t *testing.T) {
 	t.Parallel()
 
 	tab := newChatTab().(*chatTab)
@@ -609,15 +617,18 @@ func TestLiveChatOrdersToolActivityBeforeHighlightedResponse(t *testing.T) {
 	tab.refreshViewport()
 
 	view := tab.viewport.View()
-	toolAt := strings.Index(view, "shell_execute")
+	toolAt := strings.Index(view, "View 1 tool call")
 	warningAt := strings.Index(view, "Memory curation warning")
 	responseAt := strings.Index(view, "RESPONSE")
 	answerAt := strings.Index(view, "The web service is healthy.")
 	if toolAt < 0 || warningAt < 0 || responseAt < 0 || answerAt < 0 || !(toolAt < responseAt && warningAt < responseAt && responseAt < answerAt) {
 		t.Fatalf("expected all turn activity before a highlighted final response, got:\n%s", view)
 	}
-	if !strings.Contains(view, "systemctl status web") || !strings.Contains(view, "╭") {
-		t.Fatalf("expected collapsed command preview and bordered response, got:\n%s", view)
+	if strings.Contains(view, "systemctl status web") || !strings.Contains(view, "╭") {
+		t.Fatalf("expected tool details outside the transcript and a bordered response, got:\n%s", view)
+	}
+	if activity := chatActivityViewForTest(tab, 1); !strings.Contains(activity, "systemctl status web") {
+		t.Fatalf("expected the command preview in activity, got:\n%s", activity)
 	}
 }
 
@@ -640,14 +651,15 @@ func TestBlockedChatShowsPolicyReasonAndInlineApprovalAction(t *testing.T) {
 	if tab.pendingApproval == nil || tab.pendingApproval.workID != "blocked_123" {
 		t.Fatalf("inline approval action missing: %#v", tab.pendingApproval)
 	}
-	if tab.toolCalls[0].status != "APPROVAL REQUIRED" || tab.toolCalls[0].err != "" || !tab.toolCalls[0].expanded {
+	if tab.toolCalls[0].status != "APPROVAL REQUIRED" || tab.toolCalls[0].err != "" || tab.toolCalls[0].approvalReason != "untrusted executable docker is ask" {
 		t.Fatalf("blocked tool should be waiting rather than failed: %#v", tab.toolCalls[0])
 	}
 	tab.refreshViewport()
 	tab.viewport.GotoBottom()
-	if view := tab.viewport.View(); !strings.Contains(view, "Outcome: NOT RUN") || !strings.Contains(view, "waiting for explicit approval") {
+	if view := chatActivityViewForTest(tab, 1); !strings.Contains(view, "Outcome: NOT RUN") || !strings.Contains(view, "waiting for explicit approval") {
 		t.Fatalf("blocked turn should explain that verification has not run, got:\n%s", view)
 	}
+	tab.closeActivity()
 	if tab.lastError != "" {
 		t.Fatalf("approval wait should not be rendered as an execution error: %q", tab.lastError)
 	}
@@ -723,155 +735,7 @@ func TestLiveApprovalContinuesCurrentTurnWithoutClearingContext(t *testing.T) {
 	}
 }
 
-func TestLiveChatToolDisclosureTogglesOnlySelectedCall(t *testing.T) {
-	t.Parallel()
-
-	tab := newChatTab().(*chatTab)
-	tab.toolCalls = []liveToolCall{
-		{name: "shell_execute", command: "first", status: "SUCCEEDED"},
-		{name: "shell_execute", command: "second", status: "SUCCEEDED"},
-	}
-	tab.toolCursor = 1
-	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}, nil)
-
-	if tab.toolCalls[0].expanded || !tab.toolCalls[1].expanded {
-		t.Fatalf("expected only the selected tool disclosure to open, got %#v", tab.toolCalls)
-	}
-}
-
-func TestLiveChatAlwaysNamesOffscreenSelectedToolAndSpaceAction(t *testing.T) {
-	t.Parallel()
-
-	tab := newChatTab().(*chatTab)
-	tab.toolCalls = []liveToolCall{
-		{name: "first_tool", status: "SUCCEEDED"},
-		{name: "dangerous_tool", status: "SUCCEEDED"},
-	}
-	tab.toolCursor = 1
-	tab.resize(80, 16)
-	tab.viewport.SetYOffset(0)
-
-	view := tab.View(80, 16)
-	for _, want := range []string{"TOOL 2/2", "dangerous_tool", "Space: open"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("expected persistent selection strip to contain %q, got:\n%s", want, view)
-		}
-	}
-
-	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}, nil)
-	view = tab.View(80, 16)
-	for _, want := range []string{"Space: close"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("expected selection strip after disclosure to contain %q, got:\n%s", want, view)
-		}
-	}
-}
-
-func TestLiveChatSelectedToolRowUsesCompactPositionMarker(t *testing.T) {
-	t.Parallel()
-
-	tab := newChatTab().(*chatTab)
-	tab.toolCalls = []liveToolCall{
-		{name: "first", status: "SUCCEEDED"},
-		{name: "shell_execute", status: "RUNNING"},
-	}
-	tab.toolCursor = 1
-	tab.resize(80, 20)
-
-	view := tab.viewport.View()
-	if !strings.Contains(view, "▸ 2/2") {
-		t.Fatalf("expected selected row to have a compact position marker, got:\n%s", view)
-	}
-	if strings.Contains(view, "SELECTED") {
-		t.Fatalf("expected selected row not to spend width on a SELECTED label, got:\n%s", view)
-	}
-}
-
-func TestLiveChatSelectingOffscreenToolFocusesItsTranscriptArea(t *testing.T) {
-	t.Parallel()
-
-	tab := newChatTab().(*chatTab)
-	for i := 0; i < 12; i++ {
-		tab.toolCalls = append(tab.toolCalls, liveToolCall{
-			name:   fmt.Sprintf("tool_%02d", i+1),
-			status: "SUCCEEDED",
-		})
-	}
-	tab.toolCursor = 7
-	tab.resize(80, 16)
-	tab.viewport.SetYOffset(0)
-
-	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeyDown}, nil)
-	selectedLine := tab.toolLineStarts[tab.toolCursor]
-	if selectedLine < tab.viewport.YOffset || selectedLine >= tab.viewport.YOffset+tab.viewport.Height {
-		t.Fatalf("expected offscreen selection line %d in focused viewport [%d,%d)", selectedLine, tab.viewport.YOffset, tab.viewport.YOffset+tab.viewport.Height)
-	}
-	if tab.viewport.YOffset >= selectedLine {
-		t.Fatalf("expected context above selected line %d, got viewport offset %d", selectedLine, tab.viewport.YOffset)
-	}
-	if tab.viewport.YOffset+tab.viewport.Height <= selectedLine+1 {
-		t.Fatalf("expected context below selected line %d, got viewport [%d,%d)", selectedLine, tab.viewport.YOffset, tab.viewport.YOffset+tab.viewport.Height)
-	}
-	if view := tab.viewport.View(); !strings.Contains(view, "tool_09") || !strings.Contains(view, "▸ 9/12") {
-		t.Fatalf("expected focused viewport to draw attention to selected tool, got:\n%s", view)
-	}
-}
-
-func TestLiveChatDownRecoversFromVisibleAreaWithoutScrollingBackward(t *testing.T) {
-	t.Parallel()
-
-	tab := newChatTab().(*chatTab)
-	for i := 0; i < 12; i++ {
-		tab.toolCalls = append(tab.toolCalls, liveToolCall{
-			name:   fmt.Sprintf("tool_%02d", i+1),
-			status: "SUCCEEDED",
-		})
-	}
-	tab.toolCursor = 0
-	tab.resize(80, 16)
-	tab.viewport.SetYOffset(6)
-	oldOffset := tab.viewport.YOffset
-
-	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeyDown}, nil)
-	selectedLine := tab.toolLineStarts[tab.toolCursor]
-	if selectedLine < oldOffset {
-		t.Fatalf("expected Down to recover at or below viewport offset %d, selected line %d", oldOffset, selectedLine)
-	}
-	if tab.viewport.YOffset < oldOffset {
-		t.Fatalf("expected Down not to scroll backward from %d to %d", oldOffset, tab.viewport.YOffset)
-	}
-	if selectedLine < tab.viewport.YOffset || selectedLine >= tab.viewport.YOffset+tab.viewport.Height {
-		t.Fatalf("expected recovered selection line %d in viewport [%d,%d)", selectedLine, tab.viewport.YOffset, tab.viewport.YOffset+tab.viewport.Height)
-	}
-}
-
-func TestLiveChatUpRecoversFromVisibleAreaWithoutScrollingForward(t *testing.T) {
-	t.Parallel()
-
-	tab := newChatTab().(*chatTab)
-	for i := 0; i < 12; i++ {
-		tab.toolCalls = append(tab.toolCalls, liveToolCall{
-			name:   fmt.Sprintf("tool_%02d", i+1),
-			status: "SUCCEEDED",
-		})
-	}
-	tab.toolCursor = len(tab.toolCalls) - 1
-	tab.resize(80, 16)
-	tab.viewport.SetYOffset(2)
-	oldOffset := tab.viewport.YOffset
-
-	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeyUp}, nil)
-	selectedLine := tab.toolLineStarts[tab.toolCursor]
-	visibleBottom := oldOffset + tab.viewport.Height - 1
-	if selectedLine > visibleBottom {
-		t.Fatalf("expected Up to recover at or above visible line %d, selected line %d", visibleBottom, selectedLine)
-	}
-	if tab.viewport.YOffset > oldOffset {
-		t.Fatalf("expected Up not to scroll forward from %d to %d", oldOffset, tab.viewport.YOffset)
-	}
-}
-
-func TestLiveChatMouseWheelScrollsTranscriptWithoutMovingToolSelection(t *testing.T) {
+func TestLiveChatMouseWheelScrollsTranscriptWithoutChangingFocus(t *testing.T) {
 	t.Parallel()
 
 	tab := newChatTab().(*chatTab)
@@ -884,7 +748,6 @@ func TestLiveChatMouseWheelScrollsTranscriptWithoutMovingToolSelection(t *testin
 	for i := 0; i < 5; i++ {
 		tab.toolCalls = append(tab.toolCalls, liveToolCall{name: fmt.Sprintf("tool_%02d", i), status: "SUCCEEDED"})
 	}
-	tab.toolCursor = 4
 	tab.composerFocused = true
 	tab.composer.Focus()
 	tab.resize(80, 16)
@@ -895,6 +758,8 @@ func TestLiveChatMouseWheelScrollsTranscriptWithoutMovingToolSelection(t *testin
 	}
 
 	updated, _ := tab.Update(tea.MouseMsg{
+		X:      2,
+		Y:      2 + strings.Count(tab.liveHeader(80), "\n") + 1,
 		Button: tea.MouseButtonWheelUp,
 		Action: tea.MouseActionPress,
 		Type:   tea.MouseWheelUp,
@@ -903,15 +768,14 @@ func TestLiveChatMouseWheelScrollsTranscriptWithoutMovingToolSelection(t *testin
 	if tab.viewport.YOffset >= bottom {
 		t.Fatalf("expected wheel up to move above offset %d, got %d", bottom, tab.viewport.YOffset)
 	}
-	if tab.toolCursor != 4 {
-		t.Fatalf("expected wheel scrolling not to move tool selection, got %d", tab.toolCursor)
-	}
 	if !tab.composerFocused {
 		t.Fatal("expected wheel scrolling not to change composer focus")
 	}
 
 	upOffset := tab.viewport.YOffset
 	updated, _ = tab.Update(tea.MouseMsg{
+		X:      2,
+		Y:      2 + strings.Count(tab.liveHeader(80), "\n") + 1,
 		Button: tea.MouseButtonWheelDown,
 		Action: tea.MouseActionPress,
 		Type:   tea.MouseWheelDown,
@@ -951,76 +815,6 @@ func TestExpandedChatHistorySupportsMouseWheelScrolling(t *testing.T) {
 	}
 }
 
-func TestLiveChatFocusFramesExpandedToolBlockWithContextOnBothSides(t *testing.T) {
-	t.Parallel()
-
-	tab := newChatTab().(*chatTab)
-	for i := 0; i < 8; i++ {
-		tab.toolCalls = append(tab.toolCalls, liveToolCall{
-			name:     fmt.Sprintf("tool_%02d", i+1),
-			status:   "SUCCEEDED",
-			expanded: i == 3,
-			command:  "printf hello",
-			output:   "hello",
-		})
-	}
-	tab.toolCursor = 2
-	tab.resize(100, 24)
-	tab.viewport.SetYOffset(0)
-
-	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeyDown}, nil)
-	start := tab.toolLineStarts[tab.toolCursor]
-	end := tab.toolLineEnds[tab.toolCursor]
-	visibleEnd := tab.viewport.YOffset + tab.viewport.Height - 1
-	if tab.viewport.YOffset >= start {
-		t.Fatalf("expected transcript context above expanded block [%d,%d], got offset %d", start, end, tab.viewport.YOffset)
-	}
-	if visibleEnd <= end {
-		t.Fatalf("expected transcript context below expanded block [%d,%d], got visible end %d", start, end, visibleEnd)
-	}
-}
-
-func TestLiveChatArrowKeysSelectToolsAndScrollAtBoundaries(t *testing.T) {
-	t.Parallel()
-
-	tab := newChatTab().(*chatTab)
-	// Use real transcript context; a tool-only transcript no longer shows onboarding.
-	tab.messages = []liveChatMessage{{role: "user", content: "Inspect staging.\nCheck workers.\nReport health."}}
-	tab.toolCalls = []liveToolCall{
-		{name: "first", status: "SUCCEEDED"},
-		{name: "second", status: "SUCCEEDED"},
-		{name: "third", status: "SUCCEEDED"},
-	}
-	tab.toolCursor = 2
-	tab.resize(80, 16)
-	tab.viewport.GotoBottom()
-
-	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeyUp}, nil)
-	if tab.toolCursor != 1 {
-		t.Fatalf("expected Up to select the previous tool, got %d", tab.toolCursor)
-	}
-	selectedLine := tab.toolLineStarts[tab.toolCursor]
-	if selectedLine < tab.viewport.YOffset || selectedLine >= tab.viewport.YOffset+tab.viewport.Height {
-		t.Fatalf("expected selected tool line %d to remain visible in viewport [%d,%d)", selectedLine, tab.viewport.YOffset, tab.viewport.YOffset+tab.viewport.Height)
-	}
-
-	tab.toolCursor = 0
-	tab.refreshViewport()
-	tab.viewport.SetYOffset(2)
-	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeyUp}, nil)
-	if tab.toolCursor != 0 || tab.viewport.YOffset != 1 {
-		t.Fatalf("expected Up at first tool to scroll upward, cursor=%d offset=%d", tab.toolCursor, tab.viewport.YOffset)
-	}
-
-	tab.toolCursor = len(tab.toolCalls) - 1
-	tab.refreshViewport()
-	tab.viewport.SetYOffset(0)
-	_, _ = tab.updateLive(tea.KeyMsg{Type: tea.KeyDown}, nil)
-	if tab.toolCursor != len(tab.toolCalls)-1 || tab.viewport.YOffset != 1 {
-		t.Fatalf("expected Down at last tool to scroll downward, cursor=%d offset=%d", tab.toolCursor, tab.viewport.YOffset)
-	}
-}
-
 func TestLiveChatSpaceReachesFocusedComposer(t *testing.T) {
 	t.Parallel()
 
@@ -1038,8 +832,8 @@ func TestLiveChatSpaceReachesFocusedComposer(t *testing.T) {
 	if got := tab.composer.Value(); got != "hello " {
 		t.Fatalf("expected Space to remain normal composer input, got %q", got)
 	}
-	if tab.toolCalls[0].expanded {
-		t.Fatal("expected composer Space not to toggle tool disclosure")
+	if tab.activity.inspecting || tab.activity.focused {
+		t.Fatal("expected composer Space not to inspect or focus activity")
 	}
 }
 
@@ -1077,9 +871,9 @@ func TestLiveChatTurnCompletionDrainsAndRendersRawToolOutput(t *testing.T) {
 	if len(tab.toolCalls) != 1 {
 		t.Fatalf("expected queued events to reconcile into one tool call, got %#v", tab.toolCalls)
 	}
-	tab.toolCalls[0].expanded = true
-	tab.refreshViewport()
-	view := tab.viewport.View()
+	chatActivityViewForTest(tab, 1)
+	tab.handleActivityKey(tea.KeyMsg{Type: tea.KeyEnter})
+	view := tab.activityView()
 	for _, want := range []string{"RAW OUTPUT", "stdout + stderr", "hello from stdout", "hello from stderr"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected expanded tool output to contain %q, got:\n%s", want, view)
@@ -1173,6 +967,7 @@ func TestLiveChatSurfacesApprovalAndInterruptionStates(t *testing.T) {
 	t.Parallel()
 
 	tab := newChatTab().(*chatTab)
+	tab.activeTurn = 1
 	tab.applyTurnResult(agent.ChatTurnResult{
 		TaskState: state.TaskStateBlockedWaitingUser,
 	}, nil)
@@ -1194,7 +989,7 @@ func TestLiveChatSurfacesApprovalAndInterruptionStates(t *testing.T) {
 		t.Fatalf("interrupted turn still advertised a stale approval action: %q", hints)
 	}
 	tab.refreshViewport()
-	if view := tab.viewport.View(); !strings.Contains(view, "Outcome: NOT RUN") || !strings.Contains(view, "turn canceled before completion verification") {
+	if view := chatActivityViewForTest(tab, 1); !strings.Contains(view, "Outcome: NOT RUN") || !strings.Contains(view, "turn canceled before completion verification") {
 		t.Fatalf("expected cancellation-specific verification outcome, got:\n%s", view)
 	}
 }
@@ -1293,11 +1088,8 @@ func TestLiveChatReflowsTranscriptAcrossContextPaneBreakpoint(t *testing.T) {
 				t.Fatalf("width %d overflow on line %d: got %d\n%s", width, lineNo+1, got, line)
 			}
 		}
-		split, mainWidth, _ := liveChatColumns(width)
-		wantViewportWidth := maxInt(width-4, 20)
-		if split {
-			wantViewportWidth = maxInt(mainWidth-2, 20)
-		}
+		_, mainWidth, _ := liveChatColumns(width)
+		wantViewportWidth := maxInt(mainWidth-2, 20)
 		if tab.viewport.Width != wantViewportWidth {
 			t.Fatalf("width %d left viewport at %d, want %d", width, tab.viewport.Width, wantViewportWidth)
 		}

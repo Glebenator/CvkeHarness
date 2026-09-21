@@ -171,6 +171,10 @@ func TestToolBackedChatPersistsAndExportsVerifiedTurn(t *testing.T) {
 
 	output := runConsoleChatJourney(t, home, []consoleChatStep{
 		{input: "run the shell command echo E2E_TOOL_OK then confirm the result", waitFor: "Tool-backed response complete."},
+		{key: "\x14", waitFor: "ACTIVITY / TURN 1"},
+		{key: "\r", waitFor: "RAW OUTPUT"},
+		{key: "\x1b"},
+		{key: "\x1b"},
 		{input: "/export", waitFor: "Export complete:"},
 	})
 
@@ -448,10 +452,16 @@ func runCLI(t *testing.T, home, input string, args ...string) (string, error) {
 
 type consoleChatStep struct {
 	input   string
+	key     string
 	waitFor string
 }
 
 func runConsoleChatJourney(t *testing.T, home string, steps []consoleChatStep) string {
+	t.Helper()
+	return runConsoleChatJourneyAtWidth(t, home, 100, steps)
+}
+
+func runConsoleChatJourneyAtWidth(t *testing.T, home string, width uint16, steps []consoleChatStep) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -459,7 +469,7 @@ func runConsoleChatJourney(t *testing.T, home string, steps []consoleChatStep) s
 	command := exec.CommandContext(ctx, testBinaryPath, "console", "--view", "chat")
 	command.Dir = repositoryRoot
 	command.Env = userTestEnv(home)
-	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 36, Cols: 100})
+	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 36, Cols: width})
 	if err != nil {
 		t.Fatalf("start console PTY: %v", err)
 	}
@@ -481,6 +491,25 @@ func runConsoleChatJourney(t *testing.T, home string, steps []consoleChatStep) s
 		abort("console Chat view did not appear")
 	}
 	for _, step := range steps {
+		if step.key != "" {
+			before := len(buffer.String())
+			if _, err := terminal.Write([]byte(step.key)); err != nil {
+				abort("write console navigation key: " + err.Error())
+			}
+			// Wait for a fresh render before the next key, especially Escape:
+			// adjacent escape bytes can otherwise be parsed as a combined key.
+			deadline := time.Now().Add(5 * time.Second)
+			for len(buffer.String()) == before && time.Now().Before(deadline) {
+				time.Sleep(20 * time.Millisecond)
+			}
+			if len(buffer.String()) == before {
+				abort("console navigation key did not render a state change")
+			}
+			if step.waitFor != "" && !waitForOutput(buffer, step.waitFor, 5*time.Second) {
+				abort("console navigation did not render " + step.waitFor)
+			}
+			continue
+		}
 		// Enter focuses the composer when it is blurred and is a no-op when an
 		// already-focused empty composer is ready for the next step.
 		if _, err := terminal.Write([]byte("\r" + step.input + "\r")); err != nil {
@@ -620,8 +649,14 @@ func runChatApprovalDecision(t *testing.T, home, prompt, finalOutput string, app
 		if _, err := terminal.Write([]byte("\x1b")); err != nil {
 			abort("interrupt unapproved turn: " + err.Error())
 		}
-		if !waitForOutput(buffer, "turn canceled before completion verification", 5*time.Second) {
+		if !waitForOutput(buffer, "INTERRUPTED", 5*time.Second) {
 			abort("console did not interrupt the unapproved turn")
+		}
+		if _, err := terminal.Write([]byte("\x14")); err != nil {
+			abort("inspect interrupted turn activity: " + err.Error())
+		}
+		if !waitForOutput(buffer, "turn canceled before completion verification", 5*time.Second) {
+			abort("interrupted turn activity did not expose its verification reason")
 		}
 		if !waitForPersistedChatTurn(filepath.Join(home, ".cvkeharness", "state.db"), 5*time.Second) {
 			abort("console did not finish persisting the interrupted turn")

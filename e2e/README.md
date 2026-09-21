@@ -2,7 +2,7 @@
 
 This suite runs the compiled `cvkeharness` executable as a user would. It is
 kept behind the `e2e` build tag because it builds the binary, opens real
-pseudo-terminals, executes one allowlisted `echo` command, and writes isolated
+pseudo-terminals, executes harmless allowlisted `echo` commands, and writes isolated
 SQLite/config/export artifacts.
 
 Run it from the repository root:
@@ -24,18 +24,23 @@ go test -tags=e2e ./e2e -v
 | Command discovery | Root help exposes setup, bounded run, Console, and approvals | None |
 | First-run failure | An unconfigured task tells the user to run setup | No config is created |
 | Guided setup | Keyboard navigation reaches provider selection at 80, 100, and 120 columns | Quitting early saves nothing |
+| Cached Codex onboarding | Setup saves both primary and judge models at 80, 100, and 120 columns using synthetic cached auth/model fixtures | Only the temporary config is changed; no provider request |
 | Local Console chat commands | Help, memory, tools, unknown-command handling, and exit remain usable | Zero model requests; zero turns persisted |
 | Tool-backed Console chat | A model-requested allowlisted command shows output and a verified final response | Tool outcome and turn are persisted |
+| Activity inspection | At 80, 100, 120, and 144 columns, `Ctrl+T` opens Activity, `Enter` opens output, and two `Esc` presses return to composing | Inspection and local `/help` cause no additional model requests |
+| Tool-free follow-up | After a long tool-backed response and a short direct reply, `Ctrl+T` at Latest opens the newest turn with no tool calls at 80 and 100 columns | Earlier tool evidence remains separate from the new turn |
 | Manual approval continuation | The inline policy reason and exact action are shown; `a` creates one scoped grant and continues the same turn | The exact grant is atomically consumed; no legacy reusable approval is persisted |
-| Unapproved interruption | Leaving an approval ungranted and interrupting the turn never runs the proposed action | A filesystem marker is not created; blocked work and the interrupted outcome remain inspectable |
+| Unapproved interruption | Leaving an approval ungranted and interrupting the turn never runs the proposed action; Activity exposes the cancellation reason | A filesystem marker is not created; blocked work and the interrupted outcome remain inspectable |
 | Chat export | `/export` produces a readable transcript | Export file is mode `0600` |
 | Approval management | `commands approve` is visible in `commands list` | Approval survives a second process |
+| Recovery approval and offline restore | The Console applies a prepared recovery operation after explicit approval, then the CLI restores it with the model server stopped | Only a temporary fixture is changed and its original contents are restored |
 
 ## Isolation and safety
 
 - Every test gets a temporary `HOME`; the real `~/.cvkeharness` is never read or written.
 - Model calls go only to an in-process LM Studio-compatible HTTP stub.
-- The only shell action is the allowlisted command `echo E2E_TOOL_OK`.
+- Executed shell actions are `echo E2E_TOOL_OK` and `echo E2E_ACTIVITY_EVIDENCE`.
+- Approval management records `echo E2E_APPROVED` without executing it.
 - The rejection journey requests `touch` but rejects it and asserts that its
   marker file was never created.
 - The suite does not require provider credentials or public network access.
@@ -44,9 +49,14 @@ go test -tags=e2e ./e2e -v
 
 ## Deliberate baseline limits
 
-The setup PTY coverage stops at provider selection; it does not yet exercise
-credential validation or review/save. The executable suite drives the Bubble
-Tea Console Chat at a representative 100-column viewport; broader focus,
-scrolling, cancellation, approval, and tool-row layout cases remain covered by
-package tests at 80, 100, and 120 columns. The model boundary is hermetic, so
-these tests are not evidence of live-provider authentication or availability.
+Console Activity journeys run through the real executable and PTY at 80, 100,
+120, and 144 columns, covering both the full-width Activity view and split panes.
+Package tests cover detailed focus, scrolling, mouse geometry, cancellation,
+approval, and output layout behavior. Setup coverage includes both early exit
+and review/save with synthetic cached Codex fixtures.
+
+The model boundary is hermetic. These checks do not establish live-provider
+authentication, availability, or model behavior. A PTY also does not reproduce
+every native terminal emulator's scrollback, trackpad gestures, font rendering,
+or key interception. Docker and VM recovery suites require their separate
+explicit build tags and are not part of this local `e2e` run.

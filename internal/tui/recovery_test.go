@@ -76,7 +76,7 @@ func TestApprovalReceiptSurvivesFastCompletion(t *testing.T) {
 	tab.toolCalls = []liveToolCall{{name: "recovery_manage", status: "SUCCEEDED"}}
 	updated, _ := tab.Update(chatApprovalDoneMsg{workID: "work-current", grant: state.SecurityActionGrant{ActionKind: "recovery_manage"}}, nil, 100, 30)
 	tab = updated.(*chatTab)
-	if tab.status != "READY" || !strings.Contains(tab.renderToolSelection(96), "APPROVED ONCE") {
+	if tab.status != "READY" || !strings.Contains(tab.View(100, 30), "APPROVED ONCE") {
 		t.Fatal("fast tool completion hid or regressed approval receipt")
 	}
 	tab.approvalNotice = ""

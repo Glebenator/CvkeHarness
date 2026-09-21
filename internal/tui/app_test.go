@@ -132,6 +132,8 @@ func TestModelForwardsMouseWheelToFocusedChatTranscript(t *testing.T) {
 	bottom := chat.viewport.YOffset
 
 	updated, _ := m.Update(tea.MouseMsg{
+		X:      2,
+		Y:      2 + strings.Count(chat.liveHeader(m.contentWidth()), "\n") + 1,
 		Button: tea.MouseButtonWheelUp,
 		Action: tea.MouseActionPress,
 		Type:   tea.MouseWheelUp,

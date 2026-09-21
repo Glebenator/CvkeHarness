@@ -73,7 +73,6 @@ type liveToolCall struct {
 	err            string
 	approvalReason string
 	duration       time.Duration
-	expanded       bool
 	turn           int
 }
 
@@ -124,49 +123,51 @@ type chatTab struct {
 	scroll   int
 	message  string
 
-	composer         textarea.Model
-	viewport         viewport.Model
-	composerFocused  bool
-	session          LiveChatSession
-	starting         bool
-	running          bool
-	stopping         bool
-	pendingPrompt    string
-	pendingCommand   chatcmd.Action
-	cancelTurn       context.CancelFunc
-	eventCh          chan tools.Event
-	eventWaitStop    chan struct{}
-	messages         []liveChatMessage
-	toolCalls        []liveToolCall
-	toolCursor       int
-	toolLineStarts   []int
-	toolLineEnds     []int
-	verifierActivity map[int]liveVerificationActivity
-	activeTurn       int
-	sessionID        string
-	activeTurnID     string
-	status           string
-	activityMarker   string
-	statusDetail     string
-	target           string
-	environment      string
-	contextExpanded  bool
-	verification     string
-	lastError        string
-	controlsReady    bool
-	configuredModel  string
-	safety           string
-	markdownWidth    int
-	markdownCache    map[string]string
-	memorySources    []tools.MemorySource
-	commandOpen      bool
-	commandMatches   []chatcmd.Command
-	commandCursor    int
-	commandRows      int
-	pendingApproval  *pendingChatApproval
-	approvalInFlight bool
-	approvalWorkID   string
-	approvalNotice   string
+	composer            textarea.Model
+	viewport            viewport.Model
+	composerFocused     bool
+	session             LiveChatSession
+	starting            bool
+	running             bool
+	stopping            bool
+	pendingPrompt       string
+	pendingCommand      chatcmd.Action
+	cancelTurn          context.CancelFunc
+	eventCh             chan tools.Event
+	eventWaitStop       chan struct{}
+	messages            []liveChatMessage
+	toolCalls           []liveToolCall
+	activity            chatActivityState
+	chatTurnLinks       map[int]int
+	viewWidth           int
+	viewHeight          int
+	swallowMouseRelease bool
+	verifierActivity    map[int]liveVerificationActivity
+	activeTurn          int
+	sessionID           string
+	activeTurnID        string
+	status              string
+	activityMarker      string
+	statusDetail        string
+	target              string
+	environment         string
+	contextExpanded     bool
+	verification        string
+	lastError           string
+	controlsReady       bool
+	configuredModel     string
+	safety              string
+	markdownWidth       int
+	markdownCache       map[string]string
+	memorySources       []tools.MemorySource
+	commandOpen         bool
+	commandMatches      []chatcmd.Command
+	commandCursor       int
+	commandRows         int
+	pendingApproval     *pendingChatApproval
+	approvalInFlight    bool
+	approvalWorkID      string
+	approvalNotice      string
 }
 
 func newChatTab() tabModel {
@@ -199,12 +200,13 @@ func newChatTab() tabModel {
 // right never drops the operator into an input trap. Enter focuses the composer.
 func (t *chatTab) Activate() {
 	t.composerFocused = false
+	t.activity.focused = false
 	t.composer.Blur()
 	t.closeCommandMenu()
 }
 
 func (t *chatTab) HorizontalTabNavigation() bool {
-	return !t.history && !t.composerFocused
+	return !t.history && !t.composerFocused && !t.activity.focused
 }
 
 func (t *chatTab) Init(svc *Service) tea.Cmd {
@@ -221,7 +223,7 @@ func (t *chatTab) Init(svc *Service) tea.Cmd {
 }
 
 func (t *chatTab) Consuming() bool {
-	return !t.history && (t.composerFocused || t.running || t.starting || t.approvalInFlight)
+	return !t.history && (t.composerFocused || t.activity.focused || t.running || t.starting || t.approvalInFlight)
 }
 
 func (t *chatTab) StatusHints() []string {
@@ -239,64 +241,36 @@ func (t *chatTab) StatusHints() []string {
 			renderKeyHint("enter", "open"),
 		}
 	}
-	if t.approvalInFlight {
-		return []string{
-			renderKeyHint("…", "recording scoped approval"),
-			renderKeyHint("esc", "interrupt"),
+	if t.activity.focused {
+		if t.activity.inspecting {
+			return []string{renderKeyHint("↑↓ / PgUp PgDn", "scroll output"), renderKeyHint("esc", "tool list"), renderKeyHint("ctrl+t", "conversation")}
 		}
+		return []string{renderKeyHint("↑↓", "scroll"), renderKeyHint("n/p", "tool"), renderKeyHint("enter", "output"), renderKeyHint("[/]", "turn"), renderKeyHint("esc", "chat")}
+	}
+	if t.approvalInFlight {
+		return []string{renderKeyHint("…", "recording scoped approval"), renderKeyHint("esc", "interrupt")}
 	}
 	if t.pendingApproval != nil && !t.composerFocused {
-		return []string{
-			renderKeyHint("a", "approve once + continue"),
-			renderKeyHint("esc", "interrupt"),
-			renderKeyHint("↑↓", "tools + scroll"),
-		}
+		return []string{renderKeyHint("a", "approve once + continue"), renderKeyHint("esc", "interrupt"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("↑↓", "scroll")}
 	}
 	if t.running {
-		hints := []string{
-			renderKeyHint("esc", "interrupt"),
-		}
-		if len(t.toolCalls) > 0 {
-			hints = append(hints,
-				renderKeyHint("space", "tool detail"),
-				renderKeyHint("↑↓", "tools + scroll"),
-			)
-		} else {
-			hints = append(hints, renderKeyHint("↑↓", "scroll"))
-		}
-		return hints
+		return []string{renderKeyHint("esc", "interrupt"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("↑↓", "scroll"), renderKeyHint("ctrl+end", "latest")}
 	}
 	if !t.composerFocused && t.lastError != "" {
 		return []string{renderKeyHint("enter", "edit / retry"), renderKeyHint("s", "settings"), renderKeyHint("esc", "dismiss error")}
 	}
 	if !t.composerFocused {
-		hints := []string{
-			renderKeyHint("enter", "compose"),
-			renderKeyHint("↑↓", "scroll"),
-		}
-		if len(t.toolCalls) > 0 {
-			hints[1] = renderKeyHint("↑↓", "tools + scroll")
-			hints = append(hints, renderKeyHint("space", "tool detail"))
-		}
-		return append(hints, renderKeyHint("ctrl+h", "history"))
+		return []string{renderKeyHint("enter", "compose"), renderKeyHint("↑↓", "scroll"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("ctrl+end", "latest")}
 	}
 	if t.commandOpen {
-		return []string{
-			renderKeyHint("↑↓", "commands"),
-			renderKeyHint("enter", "complete or run"),
-			renderKeyHint("esc", "close"),
-		}
+		return []string{renderKeyHint("↑↓", "commands"), renderKeyHint("enter", "complete or run"), renderKeyHint("esc", "close")}
 	}
-	return []string{
-		renderKeyHint("enter", "send"),
-		renderKeyHint("ctrl+j", "newline"),
-		renderKeyHint("ctrl+h", "history"),
-		renderKeyHint("esc", "leave composer"),
-	}
+	return []string{renderKeyHint("enter", "send"), renderKeyHint("ctrl+j", "newline"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("esc", "back")}
 }
 
 func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel, tea.Cmd) {
 	t.resize(width, height)
+	followConversation := t.viewport.AtBottom()
 	switch msg := msg.(type) {
 	case chatDataMsg:
 		t.sessions = msg.sessions
@@ -349,7 +323,9 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 			t.appendConsoleMessage("Export complete: " + msg.path + "\nPrivate file (0600). Review operational context before sharing.")
 		}
 		t.refreshViewport()
-		t.viewport.GotoBottom()
+		if followConversation {
+			t.viewport.GotoBottom()
+		}
 		return t, nil
 
 	case chatApprovalDoneMsg:
@@ -363,7 +339,9 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 			t.statusDetail = "Approval was not recorded: " + msg.err.Error()
 			t.lastError = msg.err.Error()
 			t.refreshViewport()
-			t.viewport.GotoBottom()
+			if followConversation {
+				t.viewport.GotoBottom()
+			}
 			return t, nil
 		}
 		t.pendingApproval = nil
@@ -374,14 +352,15 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		}
 		t.appendConsoleMessage("APPROVED ONCE  Exact action, host, user, directory, effects, and policy. Expires in 15 minutes.\nContinuing the current turn: " + msg.grant.MaskedSummary)
 		t.refreshViewport()
-		t.viewport.GotoBottom()
+		if followConversation {
+			t.viewport.GotoBottom()
+		}
 		return t, nil
 
 	case chatRuntimeEventMsg:
-		followBottom := t.viewport.AtBottom()
 		t.applyRuntimeEvent(msg.event)
 		t.refreshViewport()
-		if followBottom {
+		if followConversation {
 			t.viewport.GotoBottom()
 		}
 		if t.running {
@@ -399,7 +378,9 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		t.applyTurnResult(msg.result, msg.err)
 		t.stopping = false
 		t.refreshViewport()
-		t.viewport.GotoBottom()
+		if followConversation {
+			t.viewport.GotoBottom()
+		}
 		return t, func() tea.Msg { return loadChatData(svc) }
 
 	case chatRuntimeEventWaitStoppedMsg:
@@ -407,6 +388,7 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+h" {
+			t.closeActivity()
 			t.history = !t.history
 			t.expanded = false
 			if !t.history {
@@ -429,28 +411,6 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 	return t, nil
 }
 
-func (t *chatTab) updateMouse(msg tea.MouseMsg) (tabModel, tea.Cmd) {
-	direction := verticalMouseWheelDirection(msg)
-	if direction == 0 {
-		return t, nil
-	}
-	delta := maxInt(t.viewport.MouseWheelDelta, 1)
-	if t.history {
-		if t.expanded {
-			t.scroll = maxInt(t.scroll+direction*delta, 0)
-			return t, nil
-		}
-		if len(t.sessions) > 0 {
-			t.cursor = clamp(t.cursor+direction*delta, 0, len(t.sessions)-1)
-		}
-		return t, nil
-	}
-
-	var cmd tea.Cmd
-	t.viewport, cmd = t.viewport.Update(msg)
-	return t, cmd
-}
-
 func verticalMouseWheelDirection(msg tea.MouseMsg) int {
 	if msg.Action != tea.MouseActionPress {
 		return 0
@@ -466,6 +426,22 @@ func verticalMouseWheelDirection(msg tea.MouseMsg) int {
 }
 
 func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
+	if msg.String() == "ctrl+t" {
+		if t.activity.focused {
+			t.closeActivity()
+		} else {
+			t.openActivity(t.visibleChatTurn())
+		}
+		return t, nil
+	}
+	if msg.String() == "ctrl+end" {
+		t.followLatestActivity()
+		t.viewport.GotoBottom()
+		return t, nil
+	}
+	if t.handleActivityKey(msg) {
+		return t, nil
+	}
 	if msg.String() == "ctrl+g" {
 		t.contextExpanded = !t.contextExpanded
 		t.refreshViewport()
@@ -481,7 +457,7 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 			return t, nil
 		}
 	}
-	if msg.String() == "a" && !t.composerFocused && t.pendingApproval != nil && !t.approvalInFlight {
+	if msg.String() == "a" && !t.composerFocused && !t.activity.focused && t.pendingApproval != nil && !t.approvalInFlight {
 		t.approvalInFlight = true
 		t.approvalWorkID = t.pendingApproval.workID
 		t.status = "APPROVING"
@@ -505,25 +481,10 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		t.composerFocused = false
 		t.composer.Blur()
 		return t, nil
-	case "ctrl+t":
-		if len(t.toolCalls) > 0 {
-			t.toolCursor = minInt(maxInt(t.toolCursor, 0), len(t.toolCalls)-1)
-			t.toolCalls[t.toolCursor].expanded = !t.toolCalls[t.toolCursor].expanded
-		}
-		t.refreshViewport()
-		t.ensureSelectedToolVisible(true)
-		return t, nil
 	case " ":
-		if t.composerFocused {
-			break
+		if !t.composerFocused {
+			return t, nil
 		}
-		if len(t.toolCalls) > 0 {
-			t.toolCursor = minInt(maxInt(t.toolCursor, 0), len(t.toolCalls)-1)
-			t.toolCalls[t.toolCursor].expanded = !t.toolCalls[t.toolCursor].expanded
-		}
-		t.refreshViewport()
-		t.ensureSelectedToolVisible(true)
-		return t, nil
 	case "pgup":
 		t.viewport.HalfViewUp()
 		return t, nil
@@ -536,12 +497,7 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 			return t, nil
 		}
 		if !t.composerFocused {
-			if t.moveToolSelection(-1) {
-				t.refreshViewport()
-				t.focusSelectedTool(-1)
-			} else {
-				t.viewport.LineUp(1)
-			}
+			t.viewport.LineUp(1)
 			return t, nil
 		}
 	case "down":
@@ -550,12 +506,17 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 			return t, nil
 		}
 		if !t.composerFocused {
-			if t.moveToolSelection(1) {
-				t.refreshViewport()
-				t.focusSelectedTool(1)
-			} else {
-				t.viewport.LineDown(1)
-			}
+			t.viewport.LineDown(1)
+			return t, nil
+		}
+	case "home":
+		if !t.composerFocused {
+			t.viewport.GotoTop()
+			return t, nil
+		}
+	case "end":
+		if !t.composerFocused {
+			t.viewport.GotoBottom()
 			return t, nil
 		}
 	case "ctrl+j":
@@ -644,7 +605,7 @@ func (t *chatTab) runLocalCommand(action chatcmd.Action, svc *Service) (tabModel
 }
 
 func (t *chatTab) appendConsoleMessage(content string) {
-	t.messages = append(t.messages, liveChatMessage{role: "system", content: strings.TrimSpace(content), at: time.Now()})
+	t.messages = append(t.messages, liveChatMessage{role: "system", content: strings.TrimSpace(content), at: time.Now(), turn: t.activeTurn})
 }
 
 func (t *chatTab) updateCommandMenu() {
@@ -678,9 +639,8 @@ func (t *chatTab) startFreshSession(svc *Service) (tabModel, tea.Cmd) {
 	t.eventCh = make(chan tools.Event, 128)
 	t.messages = nil
 	t.toolCalls = nil
-	t.toolCursor = 0
-	t.toolLineStarts = nil
-	t.toolLineEnds = nil
+	t.activity = chatActivityState{}
+	t.chatTurnLinks = nil
 	t.verifierActivity = make(map[int]liveVerificationActivity)
 	t.activeTurn = 0
 	t.sessionID = fmt.Sprintf("tui_session_%d", time.Now().UnixNano())
@@ -804,33 +764,31 @@ func (t *chatTab) View(width, height int) string {
 
 func (t *chatTab) viewLive(width, height int) string {
 	header := t.liveHeader(width)
-
-	conversation := t.viewport.View()
-	composerWidth := maxInt(width-6, 20)
-	if split, mainWidth, paneWidth := liveChatColumns(width); split {
-		conversation = lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			lipgloss.NewStyle().Width(mainWidth).Render(t.viewport.View()),
-			" ",
-			clampLines(t.contextPane(paneWidth), t.viewport.Height),
-		)
-		composerWidth = mainWidth - 2
+	split, mainWidth, paneWidth := liveChatColumns(width)
+	if !split && t.activity.focused {
+		return header + t.activityView()
 	}
-
-	var b strings.Builder
-	b.WriteString(header)
-	b.WriteString(conversation)
-	b.WriteString("\n")
-	if selection := t.renderToolSelection(composerWidth); selection != "" {
-		b.WriteString(selection)
-		b.WriteString("\n")
-	}
+	composerWidth := maxInt(mainWidth-2, 20)
+	var left strings.Builder
+	left.WriteString(t.conversationBar(mainWidth))
+	left.WriteString("\n")
+	left.WriteString(t.viewport.View())
+	left.WriteString("\n")
 	if commands := t.renderCommandMenu(composerWidth); commands != "" {
-		b.WriteString(commands)
-		b.WriteString("\n")
+		left.WriteString(commands)
+		left.WriteString("\n")
 	}
-	b.WriteString(t.renderComposer(composerWidth))
-	return b.String()
+	left.WriteString(t.renderComposer(composerWidth))
+	if !split {
+		return header + left.String()
+	}
+	bodyHeight := maxInt(height-strings.Count(header, "\n"), 1)
+	divider := strings.TrimSuffix(strings.Repeat(styleMuted.Render("│")+"\n", bodyHeight), "\n")
+	return header + lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(mainWidth).Render(clampLines(left.String(), bodyHeight)),
+		divider,
+		lipgloss.NewStyle().Width(paneWidth).Render(t.activityView()),
+	)
 }
 
 const commandMenuLimit = 4
@@ -926,29 +884,6 @@ func (t *chatTab) renderComposer(width int) string {
 	return "  " + label + "\n  " + strings.ReplaceAll(box, "\n", "\n  ")
 }
 
-func (t *chatTab) renderToolSelection(width int) string {
-	if len(t.toolCalls) == 0 {
-		return ""
-	}
-	index := minInt(maxInt(t.toolCursor, 0), len(t.toolCalls)-1)
-	tool := t.toolCalls[index]
-	action := "Space: open"
-	if tool.expanded {
-		action = "Space: close"
-	}
-	text := fmt.Sprintf(
-		"TOOL %d/%d  %s  |  %s  |  ↑↓ select",
-		index+1,
-		len(t.toolCalls),
-		firstNonEmptyText(tool.name, "tool"),
-		action,
-	)
-	if t.approvalNotice != "" {
-		text = t.approvalNotice + " | " + text
-	}
-	return "  " + styleSelectedRow.Render(truncate(text, maxInt(width-4, 16)))
-}
-
 func (t *chatTab) contextLine(width int) string {
 	cfgModel := firstNonEmptyText(t.configuredModel, "not configured")
 	safety := firstNonEmptyText(t.safety, "unknown")
@@ -964,126 +899,6 @@ func (t *chatTab) contextLine(width int) string {
 	}
 	line := strings.Join(parts, "  |  ")
 	return truncate(line, maxInt(width-12, 20))
-}
-
-func (t *chatTab) contextPane(width int) string {
-	var lines []string
-	lines = append(lines, styleMuted.Render("CONTEXT"))
-	lines = append(lines, styleBright.Render(statusIconText(t.status)))
-	if t.statusDetail != "" {
-		lines = append(lines, styleMuted.Render(strings.Join(wrapText(t.statusDetail, width-2), "\n")))
-	}
-	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("TARGET"))
-	lines = append(lines, styleBase.Render(firstNonEmptyText(t.target, "not resolved yet")))
-	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("VERIFICATION"))
-	if activity, ok := t.verifierActivity[t.activeTurn]; ok {
-		lines = append(lines, renderNamedStatus(verificationActivityLabel(activity.VerificationActivity)))
-		for _, line := range wrapText(verificationActivityDetail(activity.VerificationActivity), width-2) {
-			lines = append(lines, styleMuted.Render(line))
-		}
-	} else {
-		lines = append(lines, renderNamedStatus(t.verification))
-	}
-	lines = append(lines, "")
-	lines = append(lines, styleMuted.Render("TOOLS"))
-	if len(t.toolCalls) == 0 {
-		lines = append(lines, styleMuted.Render("No calls this session"))
-	} else {
-		for _, tool := range t.toolCalls[maxInt(0, len(t.toolCalls)-5):] {
-			lines = append(lines, truncate(tool.name+"  "+tool.status, width-2))
-		}
-	}
-	return lipgloss.NewStyle().
-		Width(width).
-		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(colorSubtle).
-		PaddingLeft(2).
-		Render(strings.Join(lines, "\n"))
-}
-
-func (t *chatTab) refreshViewport() {
-	var lines []string
-	t.toolLineStarts = make([]int, len(t.toolCalls))
-	t.toolLineEnds = make([]int, len(t.toolCalls))
-	for i := range t.toolLineStarts {
-		t.toolLineStarts[i] = -1
-		t.toolLineEnds[i] = -1
-	}
-	if t.contextExpanded {
-		lines = append(lines, "  "+styleSectionTitle.Render("Session context"))
-		appendWrappedBlock(&lines, "  ", "Model:", t.configuredModel, t.viewport.Width-4, styleMuted, styleBase)
-		appendWrappedBlock(&lines, "  ", "Activity:", t.statusDetail, t.viewport.Width-4, styleMuted, styleBase)
-		lines = append(lines, "  Ctrl+G returns to the conversation.", "")
-	}
-	if t.lastError != "" {
-		appendWrappedBlock(&lines, "  ", "Unable to continue:", t.lastError, t.viewport.Width-4, styleError, styleBase)
-		lines = append(lines, "  Your draft is preserved. Enter edits it; Enter again retries.", "  Leave the composer, then press s to open Settings.", "")
-	}
-	if len(t.messages) == 0 && len(t.toolCalls) == 0 && t.lastError == "" {
-		title := "What would you like to investigate?"
-		if t.starting {
-			title = "Connecting. Your message is waiting."
-		}
-		if t.running {
-			title = "Working on your task"
-		}
-		lines = append(lines,
-			styleBright.Render("  "+title),
-			styleMuted.Render("  Name the target, the outcome, and any constraints."),
-			"",
-			styleMuted.Render("  For example"),
-			styleBase.Render("  Inspect staging API health. Report issues without changing it."),
-			"",
-			"  "+renderKeyHint("/", "Commands")+"    "+renderKeyHint("ctrl+h", "Past conversations"),
-		)
-	}
-	renderedTools := make([]bool, len(t.toolCalls))
-	renderedVerification := make(map[int]bool, len(t.verifierActivity))
-	for _, message := range t.messages {
-		if message.role == "assistant" {
-			t.appendToolsForTurn(&lines, message.turn, renderedTools)
-			t.appendVerificationForTurn(&lines, message.turn, renderedVerification)
-			t.appendAssistantResponse(&lines, message.content)
-			continue
-		}
-		label := "CVKEHARNESS"
-		labelStyle := styleSectionTitle
-		switch message.role {
-		case "user":
-			label = "YOU"
-			labelStyle = styleBright
-		case "system":
-			label = "CONSOLE"
-			labelStyle = styleMuted
-		case "error":
-			label = "ERROR"
-			labelStyle = styleError
-		}
-		lines = append(lines, "  "+labelStyle.Render(label))
-		for _, raw := range strings.Split(message.content, "\n") {
-			for _, line := range wrapText(raw, maxInt(t.viewport.Width-4, 18)) {
-				lines = append(lines, "  "+styleBase.Render(line))
-			}
-		}
-		lines = append(lines, "")
-	}
-	for i := range t.toolCalls {
-		if !renderedTools[i] {
-			t.appendToolRow(&lines, i)
-		}
-	}
-	for turn := 0; turn <= t.activeTurn; turn++ {
-		t.appendVerificationForTurn(&lines, turn, renderedVerification)
-	}
-	if t.pendingApproval != nil {
-		t.appendApprovalPrompt(&lines, t.pendingApproval, maxInt(t.viewport.Width-4, 18))
-	}
-	if t.running {
-		lines = append(lines, "", "  "+renderNamedStatus(t.status)+"  "+styleMuted.Render(t.statusDetail))
-	}
-	t.viewport.SetContent(strings.Join(lines, "\n"))
 }
 
 func (t *chatTab) appendVerificationForTurn(lines *[]string, turn int, rendered map[int]bool) {
@@ -1183,136 +998,6 @@ func (t *chatTab) appendApprovalPrompt(lines *[]string, approval *pendingChatApp
 	*lines = append(*lines, "  "+renderKeyHint("a", "approve once + continue"))
 }
 
-func (t *chatTab) appendToolsForTurn(lines *[]string, turn int, rendered []bool) {
-	for i, tool := range t.toolCalls {
-		if !rendered[i] && tool.turn == turn {
-			t.appendToolRow(lines, i)
-			rendered[i] = true
-		}
-	}
-}
-
-func (t *chatTab) appendToolRow(lines *[]string, index int) {
-	tool := t.toolCalls[index]
-	if index >= 0 && index < len(t.toolLineStarts) {
-		t.toolLineStarts[index] = len(*lines)
-	}
-	selector := "  "
-	if index == t.toolCursor {
-		selector = styleAccent.Render(fmt.Sprintf("▸ %d/%d", index+1, len(t.toolCalls))) + " "
-	}
-	disclosure := "▸"
-	if tool.expanded {
-		disclosure = "▾"
-	}
-	lead := "  " + selector + disclosure + " " + renderNamedStatus(tool.status) + "  " + styleBright.Render(firstNonEmptyText(tool.name, "tool"))
-	if tool.command != "" {
-		remaining := maxInt(t.viewport.Width-lipgloss.Width(lead)-3, 8)
-		lead += styleMuted.Render("  " + truncate(firstLine(tool.command), remaining))
-	}
-	*lines = append(*lines, lead)
-	if tool.expanded {
-		appendLiveToolDetail(lines, tool, maxInt(t.viewport.Width-8, 18))
-	}
-	if index >= 0 && index < len(t.toolLineEnds) {
-		t.toolLineEnds[index] = maxInt(len(*lines)-1, t.toolLineStarts[index])
-	}
-}
-
-func (t *chatTab) ensureSelectedToolVisible(revealDetails bool) {
-	if t.toolCursor < 0 || t.toolCursor >= len(t.toolLineStarts) {
-		return
-	}
-	start := t.toolLineStarts[t.toolCursor]
-	end := start
-	if revealDetails && t.toolCursor < len(t.toolLineEnds) {
-		end = minInt(t.toolLineEnds[t.toolCursor], start+4)
-	}
-	if start < 0 {
-		return
-	}
-	if start < t.viewport.YOffset {
-		t.viewport.SetYOffset(start)
-		return
-	}
-	visibleBottom := t.viewport.YOffset + maxInt(t.viewport.Height-1, 0)
-	if end > visibleBottom {
-		t.viewport.SetYOffset(end - maxInt(t.viewport.Height-1, 0))
-	}
-}
-
-func (t *chatTab) moveToolSelection(direction int) bool {
-	if len(t.toolCalls) == 0 || direction == 0 {
-		return false
-	}
-	t.toolCursor = minInt(maxInt(t.toolCursor, 0), len(t.toolCalls)-1)
-	selectedLine := -1
-	if t.toolCursor < len(t.toolLineStarts) {
-		selectedLine = t.toolLineStarts[t.toolCursor]
-	}
-	top := t.viewport.YOffset
-	bottom := top + maxInt(t.viewport.Height-1, 0)
-
-	// Manual transcript scrolling can leave the cursor far outside the current
-	// view. Recover from the visible region in the requested direction instead
-	// of advancing the stale cursor and jumping the viewport backwards.
-	if direction > 0 && selectedLine < top {
-		for i, line := range t.toolLineStarts {
-			if line >= top {
-				t.toolCursor = i
-				return true
-			}
-		}
-		return false
-	}
-	if direction < 0 && selectedLine > bottom {
-		for i := len(t.toolLineStarts) - 1; i >= 0; i-- {
-			if t.toolLineStarts[i] <= bottom {
-				t.toolCursor = i
-				return true
-			}
-		}
-		return false
-	}
-
-	next := t.toolCursor + direction
-	if next < 0 || next >= len(t.toolCalls) {
-		return false
-	}
-	t.toolCursor = next
-	return true
-}
-
-// focusSelectedTool frames the selected row and its disclosure with balanced
-// transcript context whenever possible, without moving opposite to the key the
-// operator pressed.
-func (t *chatTab) focusSelectedTool(direction int) {
-	if t.toolCursor < 0 || t.toolCursor >= len(t.toolLineStarts) {
-		return
-	}
-	start := t.toolLineStarts[t.toolCursor]
-	if start < 0 {
-		return
-	}
-	end := start
-	if t.toolCursor < len(t.toolLineEnds) {
-		end = maxInt(t.toolLineEnds[t.toolCursor], start)
-	}
-	height := maxInt(t.viewport.Height, 1)
-	blockHeight := end - start + 1
-	contextAbove := 1
-	if blockHeight < height {
-		contextAbove = (height - blockHeight) / 2
-	}
-	target := maxInt(start-contextAbove, 0)
-	if direction > 0 {
-		target = maxInt(target, t.viewport.YOffset)
-	} else if direction < 0 {
-		target = minInt(target, t.viewport.YOffset)
-	}
-	t.viewport.SetYOffset(target)
-}
-
 func (t *chatTab) appendAssistantResponse(lines *[]string, content string) {
 	width := maxInt(t.viewport.Width-8, 18)
 	body := t.renderedMarkdown(content, width)
@@ -1395,7 +1080,6 @@ func (t *chatTab) applyRuntimeEvent(event tools.Event) {
 	if idx < 0 {
 		t.toolCalls = append(t.toolCalls, liveToolCall{id: id, name: event.ToolName, status: "RUNNING", turn: t.activeTurn})
 		idx = len(t.toolCalls) - 1
-		t.toolCursor = idx
 	}
 	item := &t.toolCalls[idx]
 	item.name = firstNonEmptyText(event.ToolName, item.name)
@@ -1413,7 +1097,6 @@ func (t *chatTab) applyRuntimeEvent(event tools.Event) {
 		item.status = "APPROVAL REQUIRED"
 		item.approvalReason = strings.TrimSpace(event.ApprovalReason)
 		item.err = ""
-		item.expanded = true
 		t.pendingApproval = &pendingChatApproval{
 			workID:  event.BlockedWorkID,
 			summary: secrets.Mask(event.Command),
@@ -1434,7 +1117,6 @@ func (t *chatTab) applyRuntimeEvent(event tools.Event) {
 			item.status = "SUCCEEDED"
 		} else {
 			item.status = "FAILED"
-			item.expanded = true
 		}
 		t.status = "THINKING"
 		t.statusDetail = "tool finished; waiting for the assistant"
@@ -1573,7 +1255,6 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 			t.toolCalls[i].status = "APPROVAL REQUIRED"
 			t.toolCalls[i].approvalReason = strings.TrimSpace(result.ApprovalReason)
 			t.toolCalls[i].err = ""
-			t.toolCalls[i].expanded = true
 			break
 		}
 	case state.TaskStateCompleted:
@@ -1724,7 +1405,6 @@ func (t *chatTab) reconcileToolOutcomes(outcomes []state.ToolOutcome) {
 				turn:    t.activeTurn,
 			})
 			idx = len(t.toolCalls) - 1
-			t.toolCursor = idx
 		}
 
 		item := &t.toolCalls[idx]
@@ -1734,7 +1414,6 @@ func (t *chatTab) reconcileToolOutcomes(outcomes []state.ToolOutcome) {
 		item.status = status
 		item.err = outcome.ErrorMessage
 		item.duration = time.Duration(outcome.DurationMs) * time.Millisecond
-		item.expanded = status != "SUCCEEDED"
 		claimed[idx] = true
 	}
 }
@@ -1851,35 +1530,36 @@ func (t *chatTab) resize(width, height int) {
 		t.eventCh = fresh.eventCh
 		t.controlsReady = true
 	}
-	contentWidth := maxInt(width-4, 20)
-	if split, mainWidth, _ := liveChatColumns(width); split {
-		contentWidth = maxInt(mainWidth-2, 20)
-	}
-	t.viewport.Width = contentWidth
-	composerLines := 7
+	wasBottom := t.viewport.AtBottom()
+	changed := width != t.viewWidth || height != t.viewHeight
+	t.viewWidth, t.viewHeight = width, height
+	split, mainWidth, paneWidth := liveChatColumns(width)
+	t.viewport.Width = maxInt(mainWidth-2, 20)
 	headerLines := strings.Count(t.liveHeader(width), "\n")
-	selectionLines := 0
-	if len(t.toolCalls) > 0 {
-		selectionLines = 1
-	}
-	minimumViewport := 2
+	// Composer occupies six rows plus a separating newline; the conversation
+	// focus/following line occupies one. Activity gets its own full-height pane.
 	t.commandRows = commandMenuLimit
 	if t.commandOpen {
-		minimumViewport = 2
-		availableRows := height - composerLines - headerLines - selectionLines - minimumViewport - 1
-		t.commandRows = clamp(availableRows, 0, commandMenuLimit)
+		t.commandRows = clamp(height-8-headerLines-2-1, 0, commandMenuLimit)
 	}
-	t.viewport.Height = maxInt(height-composerLines-headerLines-selectionLines-t.commandMenuLines(), minimumViewport)
-	t.composer.SetWidth(maxInt(contentWidth-4, 16))
+	t.viewport.Height = maxInt(height-8-headerLines-t.commandMenuLines(), 2)
+	t.composer.SetWidth(maxInt(t.viewport.Width-4, 16))
+	if !split {
+		paneWidth = width
+	}
+	t.resizeActivity(paneWidth, maxInt(height-headerLines, 2))
 	t.refreshViewport()
+	if changed && wasBottom {
+		t.viewport.GotoBottom()
+	}
 }
 
 func liveChatColumns(width int) (split bool, mainWidth, paneWidth int) {
 	if width < 120 {
 		return false, width, 0
 	}
-	paneWidth = 29
-	mainWidth = maxInt(width-paneWidth-3, 50)
+	paneWidth = maxInt(width*2/5, 40)
+	mainWidth = width - paneWidth - 1
 	return true, mainWidth, paneWidth
 }
 
@@ -1967,64 +1647,6 @@ func classifyChatStartError(err error) string {
 	default:
 		return text
 	}
-}
-
-func appendLiveToolDetail(lines *[]string, tool liveToolCall, width int) {
-	width = maxInt(width, 18)
-	contentWidth := maxInt(width-2, 14)
-	var body []string
-	if tool.command != "" {
-		body = append(body, styleMuted.Render("COMMAND"))
-		for _, raw := range strings.Split(sanitizeToolOutput(tool.command), "\n") {
-			for _, line := range wrapRawLine(raw, contentWidth) {
-				body = append(body, styleBright.Render(line))
-			}
-		}
-	}
-	if len(body) > 0 {
-		body = append(body, "")
-	}
-	if tool.approvalReason != "" {
-		body = append(body, styleWarning.Render("POLICY REASON"))
-		for _, line := range wrapText(tool.approvalReason, contentWidth) {
-			body = append(body, styleBase.Render(line))
-		}
-		body = append(body, "")
-	}
-	body = append(body, styleMuted.Render("RAW OUTPUT  stdout + stderr"))
-	output := strings.TrimSuffix(sanitizeToolOutput(tool.output), "\n")
-	if output == "" {
-		placeholder := "No output emitted."
-		if tool.status == "RUNNING" || tool.status == "APPROVAL CHECK" {
-			placeholder = "Waiting for output…"
-		} else if tool.status == "APPROVAL REQUIRED" {
-			placeholder = "Not run. Waiting for operator approval."
-		}
-		body = append(body, styleMuted.Render(placeholder))
-	} else {
-		for _, raw := range strings.Split(output, "\n") {
-			for _, line := range wrapRawLine(raw, contentWidth) {
-				body = append(body, styleBase.Render(line))
-			}
-		}
-	}
-	if tool.err != "" {
-		body = append(body, "", styleError.Render("ERROR"))
-		for _, line := range wrapRawLine(sanitizeToolOutput(tool.err), contentWidth) {
-			body = append(body, styleError.Render(line))
-		}
-	}
-	if tool.duration > 0 {
-		body = append(body, "", styleMuted.Render("DURATION  "+tool.duration.Round(time.Millisecond).String()))
-	}
-	box := lipgloss.NewStyle().
-		Width(width).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorSubtle).
-		Background(colorSurface).
-		Padding(0, 1).
-		Render(strings.Join(body, "\n"))
-	*lines = append(*lines, "    "+strings.ReplaceAll(box, "\n", "\n    "))
 }
 
 const (
@@ -2286,6 +1908,9 @@ func (t *chatTab) liveHeader(width int) string {
 		styleTitle.Render("Chat") + "  " + styleAccent.Render(strings.TrimSpace(t.activityMarker+" "+t.status)) + "  " + styleMuted.Render("Verification: "+firstNonEmptyText(verification, "not run")),
 		styleMuted.Render("Target: ") + styleBright.Render(firstNonEmptyText(t.target, "not resolved yet")) + styleMuted.Render(" · Environment: "+firstNonEmptyText(t.environment, "unknown")),
 		styleMuted.Render("Security: ") + styleBase.Render(firstNonEmptyText(t.safety, "unknown")) + " · " + renderKeyHint("Ctrl+G", "context"),
+	}
+	if t.approvalNotice != "" {
+		lines = append(lines, styleSuccess.Render(t.approvalNotice))
 	}
 	var b strings.Builder
 	for _, line := range lines {
