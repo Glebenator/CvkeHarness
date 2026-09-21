@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+lab_port="${CVKE_LAB_SSH_PORT:-2222}"
+case "$lab_port" in 2222|2223) ;; *) echo "Unsupported lab SSH port" >&2; exit 2;; esac
+# Only generated lab credentials and a lab-local known-hosts file are used.
+# The first probe trusts this newly created, isolated VM; later connections
+# reject a changed guest key, including across guest reboot.
+exec ssh -F /dev/null -i /keys/id_ed25519 \
+  -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+  -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/keys/known_hosts \
+  -o GlobalKnownHostsFile=/dev/null -o ConnectTimeout=3 \
+  -o ServerAliveInterval=2 -o ServerAliveCountMax=2 \
+  -o ControlMaster=no -o ControlPath=none \
+  -p "$lab_port" root@127.0.0.1 "$@"

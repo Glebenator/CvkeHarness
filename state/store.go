@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,8 +19,9 @@ import (
 // Store persists run/routing/memory metadata. It gracefully degrades to no-op
 // behavior when SQLite is unavailable or corrupted.
 type Store struct {
-	db  *sql.DB
-	err error
+	db   *sql.DB
+	err  error
+	path string
 }
 
 // Open creates or opens the SQLite state database.
@@ -47,7 +49,17 @@ func Open(path string) *Store {
 		return &Store{err: err}
 	}
 
-	db, err := sql.Open("sqlite", path)
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return &Store{err: err}
+	}
+	// These options must apply to every pooled connection, not merely the first
+	// connection used during migration. Transactions in this store write: take
+	// the writer reservation at BEGIN so a watchdog heartbeat cannot invalidate
+	// a read snapshot just before its evidence/CAS write (SQLITE_BUSY_SNAPSHOT).
+	query := url.Values{"_pragma": {"busy_timeout(5000)"}, "_txlock": {"immediate"}}
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolutePath), RawQuery: query.Encode()}).String()
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return &Store{err: err}
 	}
@@ -77,6 +89,10 @@ func Open(path string) *Store {
 		_ = db.Close()
 		return &Store{err: err}
 	}
+	if err := migrateRecovery(ctx, db); err != nil {
+		_ = db.Close()
+		return &Store{err: err}
+	}
 	if err := os.Chmod(path, 0600); err != nil {
 		_ = db.Close()
 		return &Store{err: err}
@@ -88,7 +104,7 @@ func Open(path string) *Store {
 		}
 	}
 
-	return &Store{db: db}
+	return &Store{db: db, path: path}
 }
 
 // Available reports whether the backing database is usable.

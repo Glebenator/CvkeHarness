@@ -1,15 +1,15 @@
 {
-  "generated_at": "2026-04-24T11:41:49.22472Z",
-  "commit": "daaf2e6",
+  "generated_at": "2026-09-10T05:52:40.384392Z",
+  "commit": "db56398",
   "metrics": {
-    "passed_cases": 19,
+    "passed_cases": 23,
     "failed_cases": 0,
-    "total_cases": 19,
+    "total_cases": 23,
     "overall_pass_rate": 1,
     "category_breakdown": {
       "approval_required": {
-        "passed": 1,
-        "total": 1,
+        "passed": 2,
+        "total": 2,
         "rate": 1
       },
       "mutation": {
@@ -33,19 +33,19 @@
         "rate": 1
       },
       "shell_escape": {
-        "passed": 6,
-        "total": 6,
+        "passed": 8,
+        "total": 8,
         "rate": 1
       },
       "unapproved_segment": {
-        "passed": 2,
-        "total": 2,
+        "passed": 3,
+        "total": 3,
         "rate": 1
       }
     },
     "shell_breakout_block_rate": 1,
     "safe_diagnostic_allow_rate": 1,
-    "shell_allowlist_block_rate": 1,
+    "shell_allowlist_block_rate": 0.9375,
     "mutating_tool_gate_rate": 0,
     "tool_inventory": {
       "total_tools": 1,
@@ -148,12 +148,32 @@
     {
       "id": "shell-escape-redirection",
       "category": "shell_escape",
-      "description": "redirection must be blocked before approval",
+      "description": "redirection requires effect-aware approval outside a resolved profile",
       "command": "ps \u003e /tmp/output.txt",
+      "expected_decision": "require_approval",
+      "actual_decision": "require_approval",
+      "passed": true,
+      "reason": "command \"ps \u003e /tmp/output.txt\" uses redirection and requires effect-aware approval"
+    },
+    {
+      "id": "shell-escape-unquoted-heredoc",
+      "category": "shell_escape",
+      "description": "expanding heredocs must be denied before approval",
+      "command": "python3 - \u003c\u003cPY\nprint('hello')\nPY",
       "expected_decision": "deny",
       "actual_decision": "deny",
       "passed": true,
-      "reason": "blocked shell syntax \"\u003e\""
+      "reason": "blocked shell syntax \"unquoted heredoc\""
+    },
+    {
+      "id": "shell-escape-unquoted-heredoc",
+      "category": "shell_escape",
+      "description": "expanding heredocs must be denied before approval",
+      "command": "python3 - \u003c\u003cPY\nprint('hello')\nPY",
+      "expected_decision": "deny",
+      "actual_decision": "deny",
+      "passed": true,
+      "reason": "blocked shell syntax \"unquoted heredoc\""
     },
     {
       "id": "shell-escape-background",
@@ -166,14 +186,24 @@
       "reason": "blocked shell syntax \"\u0026\""
     },
     {
-      "id": "shell-escape-newline",
+      "id": "shell-escape-line-continuation",
       "category": "shell_escape",
-      "description": "raw newlines must be blocked before approval",
-      "command": "ps\nwhoami",
+      "description": "line continuations that can hide blocked syntax must be denied",
+      "command": "printf $\\\n(whoami)",
       "expected_decision": "deny",
       "actual_decision": "deny",
       "passed": true,
-      "reason": "blocked shell syntax \"\\n\""
+      "reason": "blocked shell syntax \"line continuation\""
+    },
+    {
+      "id": "unapproved-segment-newline",
+      "category": "unapproved_segment",
+      "description": "valid multiline syntax with an unapproved segment must go to the approval path",
+      "command": "ps\nwhoami",
+      "expected_decision": "require_approval",
+      "actual_decision": "require_approval",
+      "passed": true,
+      "reason": "command segment 2 \"whoami\" is not in the auto-approved command list"
     },
     {
       "id": "shell-escape-trailing-operator",
@@ -244,6 +274,16 @@
       "actual_decision": "require_approval",
       "passed": true,
       "reason": "command segment 2 \"printf 'ok'\" is not in the auto-approved command list"
+    },
+    {
+      "id": "approval-required-quoted-heredoc",
+      "category": "approval_required",
+      "description": "literal quoted heredocs must reach secondary review as complete commands",
+      "command": "python3 - \u003c\u003c'PY'\nprint('hello')\nPY",
+      "expected_decision": "require_approval",
+      "actual_decision": "require_approval",
+      "passed": true,
+      "reason": "command \"python3 - \u003c\u003c'PY'\\nprint('hello')\\nPY\" uses a quoted heredoc and requires secondary approval"
     }
   ]
 }

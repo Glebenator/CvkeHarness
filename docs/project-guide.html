@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Source-grounded project documentation for CvkeHarness: operator workflows, architecture, agent loop, authorization, memory, routing, scheduling, persistence, and verification.">
+  <title>CvkeHarness — Project guide</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: oklch(0.18 0.009 70);
+      --surface: oklch(0.215 0.01 70);
+      --surface-raised: oklch(0.255 0.012 70);
+      --surface-soft: oklch(0.235 0.018 72);
+      --text: oklch(0.91 0.012 78);
+      --text-strong: oklch(0.96 0.01 78);
+      --muted: oklch(0.72 0.018 72);
+      --faint: oklch(0.57 0.014 72);
+      --line: oklch(0.36 0.014 70);
+      --line-strong: oklch(0.47 0.022 70);
+      --focus: oklch(0.79 0.13 78);
+      --focus-soft: oklch(0.31 0.055 74);
+      --success: oklch(0.78 0.09 145);
+      --success-soft: oklch(0.28 0.035 145);
+      --warning: oklch(0.76 0.12 48);
+      --warning-soft: oklch(0.29 0.045 48);
+      --danger: oklch(0.71 0.13 30);
+      --danger-soft: oklch(0.285 0.052 30);
+      --info: oklch(0.76 0.08 228);
+      --info-soft: oklch(0.285 0.035 228);
+      --code: oklch(0.16 0.009 70);
+      --page: 1220px;
+      --radius: 10px;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--text);
+      font: 16px/1.65 var(--sans);
+      text-rendering: optimizeLegibility;
+    }
+    a { color: var(--info); text-underline-offset: 3px; }
+    a:hover { color: var(--text-strong); }
+    :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    code, pre, kbd { font-family: var(--mono); }
+    h1, h2, h3, p, li, figcaption, .eyebrow, .meta-strip span { overflow-wrap: anywhere; }
+    code {
+      padding: 0.08em 0.35em;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--code);
+      color: var(--text-strong);
+      font-size: 0.88em;
+      overflow-wrap: anywhere;
+    }
+    .skip-link {
+      position: fixed;
+      z-index: 100;
+      top: 12px;
+      left: 12px;
+      padding: 10px 14px;
+      border-radius: 6px;
+      background: var(--focus);
+      color: var(--canvas);
+      font-weight: 800;
+      transform: translateY(-160%);
+    }
+    .skip-link:focus { transform: translateY(0); }
+    .shell { width: min(calc(100% - 40px), var(--page)); margin: 0 auto; }
+    .masthead {
+      padding: 62px 0 38px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .eyebrow, .section-kicker, .sidebar-title, .category-row th {
+      color: var(--focus);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 920px;
+      margin: 12px 0 14px;
+      color: var(--text-strong);
+      font-size: clamp(2.35rem, 5vw, 3.5rem);
+      line-height: 1.02;
+      letter-spacing: -0.048em;
+    }
+    .lede {
+      max-width: 800px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 1.12rem;
+      line-height: 1.6;
+    }
+    .meta-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 28px;
+      margin-top: 28px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 0.84rem;
+    }
+    .meta-strip strong { color: var(--text-strong); }
+    .document-layout {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      gap: 60px;
+      align-items: start;
+      padding: 46px 0 90px;
+    }
+    .sidebar {
+      position: sticky;
+      top: 28px;
+      max-height: calc(100vh - 56px);
+      overflow: auto;
+    }
+    .sidebar-title { margin: 0 0 16px; color: var(--faint); }
+    .sidebar ol { margin: 0; padding: 0; list-style: none; counter-reset: section; }
+    .sidebar li { counter-increment: section; }
+    .sidebar a {
+      display: block;
+      padding: 7px 10px;
+      border-left: 2px solid transparent;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .sidebar a::before { content: counter(section) ". "; color: var(--faint); }
+    .sidebar a:hover, .sidebar a[aria-current="location"] {
+      border-left-color: var(--focus);
+      background: var(--surface-soft);
+      color: var(--text-strong);
+    }
+    .mobile-nav {
+      display: none;
+      margin: 24px 0 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .mobile-nav summary {
+      min-height: 48px;
+      padding: 12px 14px;
+      color: var(--text-strong);
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .mobile-nav ol { columns: 2; margin: 0; padding: 0 32px 16px; }
+    .mobile-nav li { margin: 6px 0; break-inside: avoid; }
+    .mobile-nav a { color: var(--muted); }
+    main { min-width: 0; }
+    section { scroll-margin-top: 24px; margin-bottom: 88px; }
+    section:last-child { margin-bottom: 0; }
+    .section-kicker { margin: 0 0 8px; }
+    h2 {
+      max-width: 780px;
+      margin: 0 0 14px;
+      color: var(--text-strong);
+      font-size: clamp(1.75rem, 3vw, 2.15rem);
+      line-height: 1.12;
+      letter-spacing: -0.032em;
+    }
+    h3 { margin: 30px 0 8px; color: var(--text-strong); font-size: 1.08rem; }
+    p { max-width: 76ch; margin: 0 0 16px; }
+    ul, ol { padding-left: 1.3rem; }
+    li { margin: 6px 0; }
+    .principles {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin: 28px 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .principle { padding: 20px; background: var(--surface); }
+    .principle:nth-child(odd) { border-right: 1px solid var(--line); }
+    .principle:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
+    .principle strong { display: block; margin-bottom: 6px; color: var(--text-strong); }
+    .principle p { margin: 0; color: var(--muted); font-size: 0.94rem; }
+    .callout {
+      margin: 24px 0;
+      padding: 17px 18px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+    }
+    .callout strong { display: block; margin-bottom: 4px; color: var(--text-strong); }
+    .callout.info { border-color: var(--info); background: var(--info-soft); }
+    .callout.warning { border-color: var(--warning); background: var(--warning-soft); }
+    .callout.danger { border-color: var(--danger); background: var(--danger-soft); }
+    .callout.success { border-color: var(--success); background: var(--success-soft); }
+    .diagram-shell {
+      margin: 28px 0;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow-x: auto;
+    }
+    .diagram-shell svg { display: block; width: 100%; min-width: 760px; height: auto; }
+    .diagram-shell figcaption { margin-top: 12px; color: var(--muted); font-size: 0.9rem; }
+    .diagram-node { color: var(--line-strong); fill: var(--surface-raised); stroke: var(--line-strong); stroke-width: 1.5; }
+    .diagram-node.accent { color: var(--focus); fill: var(--focus-soft); stroke: var(--focus); }
+    .diagram-node.success { color: var(--success); fill: var(--success-soft); stroke: var(--success); }
+    .diagram-line { color: var(--line-strong); fill: none; stroke: var(--line-strong); stroke-width: 2; }
+    .diagram-title { color: var(--text-strong); fill: var(--text-strong); font: 700 14px var(--sans); }
+    .diagram-copy { color: var(--muted); fill: var(--muted); font: 11.5px var(--sans); }
+    .print-flow { display: none; }
+    .table-wrap {
+      max-width: 100%;
+      margin: 24px 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow-x: auto;
+    }
+    table { width: 100%; min-width: 720px; border-collapse: collapse; background: var(--surface); }
+    caption { padding: 13px 15px; color: var(--muted); text-align: left; }
+    th, td { padding: 12px 14px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
+    thead th {
+      background: var(--surface-raised);
+      color: var(--text-strong);
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    tbody th { color: var(--text-strong); }
+    .category-row th { background: var(--code); }
+    .status { white-space: nowrap; font-family: var(--mono); font-size: 0.78rem; font-weight: 800; text-transform: uppercase; }
+    .status::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: currentColor; }
+    .status.success { color: var(--success); }
+    .status.warning { color: var(--warning); }
+    .status.danger { color: var(--danger); }
+    .status.info { color: var(--info); }
+    pre {
+      max-width: 100%;
+      margin: 20px 0;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--code);
+      color: var(--text);
+      overflow: auto;
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    pre code { padding: 0; border: 0; background: transparent; font-size: inherit; }
+    .source-label {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px 18px;
+      margin: 26px 0 -10px;
+      color: var(--faint);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+    }
+    .source-label strong { color: var(--muted); font-weight: 700; }
+    .screenshot-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      margin: 28px 0;
+    }
+    .screenshot-grid figure {
+      min-width: 0;
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .screenshot-grid figure.wide { grid-column: 1 / -1; }
+    .screenshot-grid img { display: block; width: 100%; height: auto; background: #171512; }
+    .screenshot-grid figcaption { padding: 13px 15px 15px; color: var(--muted); font-size: 0.88rem; }
+    .step-list {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px;
+      margin: 26px 0;
+      padding: 1px;
+      border-radius: var(--radius);
+      background: var(--line);
+      overflow: hidden;
+      list-style: none;
+    }
+    .step-list li { min-height: 132px; margin: 0; padding: 18px; background: var(--surface); }
+    .step-list .num { display: block; margin-bottom: 18px; color: var(--focus); font: 800 0.78rem var(--mono); }
+    .step-list strong { display: block; margin-bottom: 5px; color: var(--text-strong); }
+    .step-list span { color: var(--muted); font-size: 0.92rem; }
+    .term { color: var(--success); }
+    .term::before { content: "$ "; color: var(--faint); }
+    .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 0; color: var(--muted); font-size: 0.84rem; }
+    .legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 7px; border-radius: 2px; background: var(--line-strong); }
+    .legend .accent::before { background: var(--focus); }
+    .legend .good::before { background: var(--success); }
+    .legend .warn::before { background: var(--warning); }
+    dl.glossary { display: grid; grid-template-columns: minmax(130px, .34fr) 1fr; margin: 24px 0; border-top: 1px solid var(--line); }
+    dl.glossary dt, dl.glossary dd { margin: 0; padding: 13px 0; border-bottom: 1px solid var(--line); }
+    dl.glossary dt { padding-right: 20px; color: var(--text-strong); font-family: var(--mono); font-weight: 800; }
+    dl.glossary dd { color: var(--muted); }
+    footer { padding: 28px 0 42px; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.88rem; }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media (max-width: 900px) {
+      .masthead { padding-top: 46px; }
+      .document-layout { display: block; padding-top: 28px; }
+      .sidebar { display: none; }
+      .mobile-nav { display: block; }
+      main { padding-top: 52px; }
+      section { margin-bottom: 68px; }
+    }
+    @media (max-width: 580px) {
+      .shell { width: min(calc(100% - 28px), var(--page)); }
+      .masthead { padding: 38px 0 28px; }
+      h1 { font-size: clamp(2rem, 11vw, 2.65rem); }
+      .lede { font-size: 1rem; }
+      .meta-strip { display: grid; gap: 7px; }
+      .mobile-nav ol { columns: 1; }
+      .principles { grid-template-columns: 1fr; }
+      .principle:nth-child(odd) { border-right: 0; }
+      .principle:not(:last-child) { border-bottom: 1px solid var(--line); }
+      .diagram-shell { padding: 12px; }
+      .screenshot-grid, .step-list { grid-template-columns: 1fr; }
+      .screenshot-grid figure.wide { grid-column: auto; }
+      dl.glossary { grid-template-columns: 1fr; }
+      dl.glossary dt { padding-bottom: 0; border-bottom: 0; }
+      dl.glossary dd { padding-top: 4px; }
+    }
+    @media print {
+      :root {
+        color-scheme: light;
+        --canvas: #ffffff;
+        --surface: #f7f4ef;
+        --surface-raised: #eeeae3;
+        --surface-soft: #f2eee7;
+        --text: #26231f;
+        --text-strong: #12100e;
+        --muted: #58524b;
+        --faint: #756e65;
+        --line: #c8c0b6;
+        --line-strong: #9f9589;
+        --focus: #b46a00;
+        --focus-soft: #f7e6c7;
+        --success: #307847;
+        --success-soft: #e7f1e8;
+        --warning: #b85d26;
+        --warning-soft: #f7e6d8;
+        --danger: #b44736;
+        --danger-soft: #f6e4e0;
+        --info: #2f6680;
+        --info-soft: #e3eef2;
+        --code: #f1ede6;
+      }
+      @page { margin: 0.52in; }
+      body { font-size: 10.5pt; }
+      .shell { width: 100%; max-width: none; }
+      .masthead { padding: 18px 0 22px; }
+      .sidebar, .mobile-nav, .skip-link { display: none !important; }
+      .document-layout { display: block; padding: 26px 0 0; }
+      main { padding: 0; }
+      section { margin-bottom: 36px; break-inside: auto; }
+      h1 { font-size: 30pt; }
+      h2 { font-size: 20pt; break-after: avoid; }
+      h3, .callout, .principle, tr, pre, figure { break-inside: avoid; }
+      .source-label { break-after: avoid; }
+      tbody th code { white-space: nowrap; }
+      .screenshot-grid { display: block; }
+      .screenshot-grid figure { margin-bottom: 16px; break-inside: avoid; }
+      .step-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .diagram-shell { overflow: visible; }
+      .diagram-shell svg { display: none; }
+      .print-flow { display: block; margin: 0; padding-left: 1.2rem; columns: 2; column-gap: 28px; }
+      .print-flow li { margin: 0 0 8px; break-inside: avoid; }
+      .table-wrap { overflow: visible; }
+      table { min-width: 0; font-size: 8.5pt; }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="masthead">
+    <div class="shell">
+      <div class="eyebrow">CvkeHarness · project documentation</div>
+      <h1>From operator intent to verified action</h1>
+      <p class="lede">A cohesive, source-grounded guide to operating and extending CvkeHarness, with deep references for the agent loop, action authorization, target-scoped memory, and durable state.</p>
+      <div class="meta-strip" aria-label="Document metadata">
+        <span><strong>Audience</strong> operators and contributors</span>
+        <span><strong>Evidence</strong> source + executable tests</span>
+        <span><strong>Commit</strong> f5b4c8f</span>
+        <span><strong>Status</strong> implementation reference</span>
+        <span><strong>Updated</strong> 2026-08-16</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="shell document-layout">
+    <aside class="sidebar" aria-label="Documentation sections">
+      <p class="sidebar-title">On this page</p>
+      <nav aria-label="Section navigation">
+        <ol>
+          <li><a href="#product-shape" aria-current="location">System overview</a></li>
+          <li><a href="#quick-start">Quick start</a></li>
+          <li><a href="#surfaces">Operator surfaces</a></li>
+          <li><a href="#runtime">Architecture</a></li>
+          <li><a href="#agent-loop">Agent loop</a></li>
+          <li><a href="#tools-safety">Authorization</a></li>
+          <li><a href="#memory">Operational memory</a></li>
+          <li><a href="#providers">Providers and routing</a></li>
+          <li><a href="#scheduling">Scheduling</a></li>
+          <li><a href="#persistence">Persistence and telemetry</a></li>
+          <li><a href="#code-map">Code map</a></li>
+          <li><a href="#verification">Verification</a></li>
+          <li><a href="#boundaries">Scope boundaries</a></li>
+          <li><a href="#glossary">Glossary</a></li>
+        </ol>
+      </nav>
+    </aside>
+
+    <div>
+      <details class="mobile-nav">
+        <summary>Jump to a section</summary>
+        <nav aria-label="Mobile section navigation">
+          <ol>
+            <li><a href="#product-shape">System overview</a></li>
+            <li><a href="#quick-start">Quick start</a></li>
+            <li><a href="#surfaces">Operator surfaces</a></li>
+            <li><a href="#runtime">Architecture</a></li>
+            <li><a href="#agent-loop">Agent loop</a></li>
+            <li><a href="#tools-safety">Authorization</a></li>
+            <li><a href="#memory">Operational memory</a></li>
+            <li><a href="#providers">Providers and routing</a></li>
+            <li><a href="#scheduling">Scheduling</a></li>
+            <li><a href="#persistence">Persistence and telemetry</a></li>
+            <li><a href="#code-map">Code map</a></li>
+            <li><a href="#verification">Verification</a></li>
+            <li><a href="#boundaries">Scope boundaries</a></li>
+            <li><a href="#glossary">Glossary</a></li>
+          </ol>
+        </nav>
+      </details>
+
+      <main id="main-content">
+        <section id="product-shape" aria-labelledby="product-shape-title">
+          <p class="section-kicker">01 / System overview</p>
+          <h2 id="product-shape-title">A local control plane for model-assisted operations</h2>
+          <p>CvkeHarness is a provider-agnostic Go operations agent. It surrounds each model call with an explicit operating context: interaction mode, task class, target identity, bounded memory, approved model selection, tool authorization, outcome verification, and durable local history.</p>
+
+          <div class="principles">
+            <div class="principle">
+              <strong>Two deliberate modes</strong>
+              <p><code>run [task]</code> performs bounded work and exits. <code>console</code> keeps an operator workspace and conversation alive.</p>
+            </div>
+            <div class="principle">
+              <strong>Target before recall</strong>
+              <p>The runtime distinguishes the harness host from the system being operated on and retrieves memory only for an exact active target.</p>
+            </div>
+            <div class="principle">
+              <strong>Authority at dispatch</strong>
+              <p>Tool schemas define available capabilities. The registry evaluates every requested call against the effective policy before dispatch.</p>
+            </div>
+            <div class="principle">
+              <strong>SQLite is canonical</strong>
+              <p>Runs, chat, approvals, routing evidence, schedules, telemetry projections, and operational knowledge share one local state authority.</p>
+            </div>
+          </div>
+
+          <div class="callout info">
+            <strong>Interaction contract</strong>
+            Use <code>run</code> for one bounded task that returns to the shell. Use <code>console</code> for a persistent, keyboard-first workspace. <code>tui</code> remains a compatibility alias for Console.
+          </div>
+        </section>
+
+        <section id="quick-start" aria-labelledby="quick-start-title">
+          <p class="section-kicker">02 / Quick start</p>
+          <h2 id="quick-start-title">Build once, configure a provider, then choose an operating mode</h2>
+          <p>The project targets Go 1.26.2 or newer. Setup can connect the official Codex CLI ChatGPT session, OpenAI, OpenRouter, or a local OpenAI-compatible LM Studio endpoint.</p>
+
+          <ol class="step-list">
+            <li><span class="num">01</span><strong>Build</strong><span>Compile the current tree into a local binary.</span></li>
+            <li><span class="num">02</span><strong>Configure</strong><span>Select a provider, model, safety profile, capabilities, routing, and memory location.</span></li>
+            <li><span class="num">03</span><strong>Operate</strong><span>Start one bounded run or enter the persistent Console.</span></li>
+          </ol>
+
+          <pre aria-label="Quick start commands"><code><span class="term">go build -o cvkeharness .</span>
+<span class="term">./cvkeharness setup</span>
+<span class="term">./cvkeharness run "inspect the current process list"</span>
+<span class="term">./cvkeharness console --view chat</span></code></pre>
+
+          <div class="callout warning">
+            <strong>First operational check</strong>
+            Review the selected target, effective security profile, provider/model, and available tools before authorizing a mutating task. The Console keeps those items visible beside the conversation.
+          </div>
+        </section>
+
+        <section id="surfaces" aria-labelledby="surfaces-title">
+          <p class="section-kicker">03 / Operator surfaces</p>
+          <h2 id="surfaces-title">The CLI covers setup, bounded work, ongoing operations, and administration</h2>
+          <p>The root command exposes thirteen product and engineering command groups. Cobra also supplies shell completion. The table separates everyday operator paths from administrative and evaluation paths.</p>
+
+          <div class="screenshot-grid" aria-label="CvkeHarness Console screenshots">
+            <figure class="wide">
+              <img src="assets/console-overview.png" width="1248" height="730" alt="CvkeHarness Overview workspace showing provider, model, security, routing, run metrics, recent runs, and scheduled jobs in an empty isolated demo state.">
+              <figcaption><strong>Overview.</strong> Configuration and activity share one scan path. This capture came from the current binary with a fresh temporary home and local stub provider.</figcaption>
+            </figure>
+            <figure>
+              <img src="assets/console-chat.png" width="1248" height="730" alt="CvkeHarness Chat workspace showing target, model, safety, verification status, tool timeline, and message composer.">
+              <figcaption><strong>Chat.</strong> Target, verification, and tool state remain visible beside the working conversation.</figcaption>
+            </figure>
+            <figure>
+              <img src="assets/console-settings.png" width="1248" height="730" alt="CvkeHarness Settings workspace listing provider, model, security, routing, limits, prompt dump, memory, and state database settings.">
+              <figcaption><strong>Settings.</strong> Runtime choices and their operational meaning are editable in one keyboard-driven table.</figcaption>
+            </figure>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <caption>Current top-level command surface from the built binary.</caption>
+              <thead>
+                <tr><th scope="col">Command</th><th scope="col">State</th><th scope="col">Implemented purpose</th></tr>
+              </thead>
+              <tbody>
+                <tr class="category-row"><th colspan="3">Primary interaction</th></tr>
+                <tr><th scope="row"><code>setup</code> / <code>settings</code></th><td><span class="status success">Implemented</span></td><td>Four-stage onboarding and an editor for provider, model, safety, capabilities, routing, limits, web search, guidance, and local machine notes.</td></tr>
+                <tr><th scope="row"><code>run [task]</code></th><td><span class="status success">Implemented</span></td><td>One bounded routed task, optional routing explanation, and plain/rich shell transcript modes; then exit.</td></tr>
+                <tr><th scope="row"><code>console [--view]</code></th><td><span class="status success">Implemented</span></td><td>Five workspaces: Overview, Jobs, Runs, Chat, and Settings. <code>tui</code> is an alias. The initial view is selectable.</td></tr>
+                <tr class="category-row"><th colspan="3">Control-plane administration</th></tr>
+                <tr><th scope="row"><code>memory</code></th><td><span class="status success">Implemented</span></td><td>Show, review, promote, reject, revoke, delete, export, validated import, rollback, and target-environment binding.</td></tr>
+                <tr><th scope="row"><code>models</code></th><td><span class="status success">Implemented</span></td><td>Favorites, recent requested/actual models, aliases, shortlist, durable approval, and normalized performance stats.</td></tr>
+                <tr><th scope="row"><code>commands</code></th><td><span class="status success">Implemented</span></td><td>Inspect grants and legacy approvals, approve one exact command, or resume one exact captured blocked action.</td></tr>
+                <tr><th scope="row"><code>jobs</code></th><td><span class="status success">Implemented</span></td><td>Create, update, pause, resume, remove, run, loop over, inspect history for, and check health of internal agent jobs.</td></tr>
+                <tr><th scope="row"><code>cron</code></th><td><span class="status success">Implemented</span></td><td>List, show, preview, add, update, remove, enable, and disable current-user crontab entries.</td></tr>
+                <tr><th scope="row"><code>daemon</code></th><td><span class="status success">Linux path</span></td><td>Run the scheduler loop or install/manage a user or system systemd unit.</td></tr>
+                <tr class="category-row"><th colspan="3">Evaluation and engineering</th></tr>
+                <tr><th scope="row"><code>scorecard</code></th><td><span class="status success">Implemented</span></td><td>Deterministic shell-policy scorecard with Markdown and JSON output.</td></tr>
+                <tr><th scope="row"><code>redteam</code></th><td><span class="status success">Implemented</span></td><td>Live model evaluation against shadow tools; writes Markdown and JSON reports.</td></tr>
+                <tr><th scope="row"><code>fuzztool</code></th><td><span class="status success">Implemented</span></td><td>Runs the two shell-policy fuzz targets for a configured duration and writes a report.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Chat is local-command aware</h3>
+          <p>The Console Chat composer handles <code>/new</code>, <code>/clear</code>, <code>/memory</code>, <code>/export</code>, <code>/tools</code>, <code>/history</code>, and <code>/help</code> within the local interface. Prefixing with <code>//</code> sends a literal leading slash to the provider.</p>
+        </section>
+
+        <section id="runtime" aria-labelledby="runtime-title">
+          <p class="section-kicker">04 / Architecture</p>
+          <h2 id="runtime-title">The control plane composes policy, state, providers, tools, and memory around each task</h2>
+          <p>The bounded runtime uses planning, execution, and memory-curation phases. Chat reuses the same provider, tool, target, retrieval, verification, telemetry, and persistence stack with a pinned chat selection and retained message history.</p>
+
+          <figure class="diagram-shell">
+            <svg viewBox="0 0 980 260" role="img" aria-labelledby="runtime-diagram-title runtime-diagram-desc">
+              <title id="runtime-diagram-title">CvkeHarness task pipeline</title>
+              <desc id="runtime-diagram-desc">A task moves from bootstrap and classification to target resolution and bounded memory retrieval, then model routing and tool execution, then verification and deterministic curation, and finally local persistence and operator output.</desc>
+              <defs>
+                <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#756e65"></path></marker>
+              </defs>
+              <path class="diagram-line" d="M184 126 H216" fill="none" stroke="currentColor" marker-end="url(#arrow)"></path>
+              <path class="diagram-line" d="M374 126 H406" fill="none" stroke="currentColor" marker-end="url(#arrow)"></path>
+              <path class="diagram-line" d="M564 126 H596" fill="none" stroke="currentColor" marker-end="url(#arrow)"></path>
+              <path class="diagram-line" d="M754 126 H786" fill="none" stroke="currentColor" marker-end="url(#arrow)"></path>
+              <rect class="diagram-node" x="16" y="70" width="168" height="112" rx="10" fill="none" stroke="currentColor"></rect>
+              <text class="diagram-title" x="32" y="99" fill="currentColor">1 · Bootstrap</text>
+              <text class="diagram-copy" x="32" y="124" fill="currentColor">Config + immutable policy</text>
+              <text class="diagram-copy" x="32" y="145" fill="currentColor">SQLite + provider + tools</text>
+              <rect class="diagram-node" x="216" y="70" width="158" height="112" rx="10" fill="none" stroke="currentColor"></rect>
+              <text class="diagram-title" x="232" y="99" fill="currentColor">2 · Scope</text>
+              <text class="diagram-copy" x="232" y="124" fill="currentColor">Classify task + target</text>
+              <text class="diagram-copy" x="232" y="145" fill="currentColor">Retrieve exact memory</text>
+              <rect class="diagram-node accent" x="406" y="70" width="158" height="112" rx="10" fill="none" stroke="currentColor"></rect>
+              <text class="diagram-title" x="422" y="99" fill="currentColor">3 · Act</text>
+              <text class="diagram-copy" x="422" y="124" fill="currentColor">Route model by phase</text>
+              <text class="diagram-copy" x="422" y="145" fill="currentColor">Authorize each tool call</text>
+              <rect class="diagram-node" x="596" y="70" width="158" height="112" rx="10" fill="none" stroke="currentColor"></rect>
+              <text class="diagram-title" x="612" y="99" fill="currentColor">4 · Verify</text>
+              <text class="diagram-copy" x="612" y="124" fill="currentColor">Check claimed outcome</text>
+              <text class="diagram-copy" x="612" y="145" fill="currentColor">Bounded repair when needed</text>
+              <rect class="diagram-node success" x="786" y="70" width="178" height="112" rx="10" fill="none" stroke="currentColor"></rect>
+              <text class="diagram-title" x="802" y="99" fill="currentColor">5 · Record</text>
+              <text class="diagram-copy" x="802" y="124" fill="currentColor">Persist outcome + telemetry</text>
+              <text class="diagram-copy" x="802" y="145" fill="currentColor">Curate bounded candidates</text>
+            </svg>
+            <ol class="print-flow" aria-label="Runtime flow printable summary">
+              <li><strong>Bootstrap:</strong> load configuration, immutable policy, SQLite, provider, and tools.</li>
+              <li><strong>Scope:</strong> classify the task, resolve the target, and retrieve exact bounded memory.</li>
+              <li><strong>Act:</strong> route the model by phase and authorize every requested tool call.</li>
+              <li><strong>Verify:</strong> check the claimed result and make a bounded repair attempt when needed.</li>
+              <li><strong>Record:</strong> persist the outcome and telemetry, then curate bounded memory candidates.</li>
+            </ol>
+            <figcaption>Failures and policy blocks are first-class outcomes. A manual approval resumes the stored call in the same active session and consumes its exact grant once.</figcaption>
+          </figure>
+
+          <h3>Prompt context is compiled in stable layers</h3>
+          <p>The runtime layers built-in rules, compiled <code>guidance.md</code>, a compact runtime-host summary, exact target context, a narrowly selected playbook/caution/finding set, task and phase instructions, and current tool definitions. Debug prompt dumps are optional, redacted, private, retention-limited artifacts.</p>
+        </section>
+
+        <section id="agent-loop" aria-labelledby="agent-loop-title">
+          <p class="section-kicker">05 / Agent loop</p>
+          <h2 id="agent-loop-title">A bounded model–tool loop closes on evidence</h2>
+          <p><code>Agent.Run</code> establishes the run record, classifies the task, derives the relevant tool set, optionally requests a planning note, selects the execution model, and enters <code>runExecutionPhase</code>. The execution phase resolves the target and retrieves memory before the first provider request.</p>
+
+          <figure class="diagram-shell">
+            <svg viewBox="0 0 980 430" role="img" aria-labelledby="agent-diagram-title agent-diagram-desc">
+              <title id="agent-diagram-title">Bounded CvkeHarness agent loop</title>
+              <desc id="agent-diagram-desc">The agent compiles context and calls a provider. Tool calls pass through authorization and return structured results to the chat. A final answer is verified. Satisfied work completes; incomplete work enters bounded repair or stops with a reason.</desc>
+              <defs><marker id="agent-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#756e65"></path></marker></defs>
+              <rect class="diagram-node" x="30" y="35" width="205" height="82" rx="10"></rect>
+              <text class="diagram-title" x="48" y="66">Compile iteration request</text>
+              <text class="diagram-copy" x="48" y="90">messages · tool schemas · hashes</text>
+              <rect class="diagram-node accent" x="300" y="35" width="170" height="82" rx="10"></rect>
+              <text class="diagram-title" x="318" y="66">Provider call</text>
+              <text class="diagram-copy" x="318" y="90">temperature 0.2 · token cap</text>
+              <path class="diagram-line" d="M235 76 H300" marker-end="url(#agent-arrow)"></path>
+
+              <rect class="diagram-node" x="535" y="35" width="190" height="82" rx="10"></rect>
+              <text class="diagram-title" x="553" y="66">Response branch</text>
+              <text class="diagram-copy" x="553" y="88">tool calls or final answer</text>
+              <path class="diagram-line" d="M470 76 H535" marker-end="url(#agent-arrow)"></path>
+
+              <rect class="diagram-node" x="30" y="188" width="205" height="92" rx="10"></rect>
+              <text class="diagram-title" x="48" y="218">Authorize + execute</text>
+              <text class="diagram-copy" x="48" y="242">effect policy · exact grants</text>
+              <text class="diagram-copy" x="48" y="262">structured outcome + target hint</text>
+              <path class="diagram-line" d="M630 117 V152 H132 V188" marker-end="url(#agent-arrow)"></path>
+              <path class="diagram-line" d="M132 188 V152 H385 V117" marker-end="url(#agent-arrow)"></path>
+
+              <rect class="diagram-node" x="535" y="188" width="190" height="92" rx="10"></rect>
+              <text class="diagram-title" x="553" y="218">Verify completion</text>
+              <text class="diagram-copy" x="553" y="242">claimed result · observed calls</text>
+              <text class="diagram-copy" x="553" y="262">missing actions · evidence</text>
+              <path class="diagram-line" d="M630 117 V188" marker-end="url(#agent-arrow)"></path>
+
+              <rect class="diagram-node success" x="780" y="188" width="170" height="92" rx="10"></rect>
+              <text class="diagram-title" x="798" y="218">Complete</text>
+              <text class="diagram-copy" x="798" y="242">record phases + output</text>
+              <text class="diagram-copy" x="798" y="262">curate verified outcome</text>
+              <path class="diagram-line" d="M725 234 H780" marker-end="url(#agent-arrow)"></path>
+
+              <rect class="diagram-node" x="535" y="340" width="190" height="64" rx="10"></rect>
+              <text class="diagram-title" x="553" y="369">Repair or stop</text>
+              <text class="diagram-copy" x="553" y="390">reclassify · refresh tools · reason</text>
+              <path class="diagram-line" d="M630 280 V340" marker-end="url(#agent-arrow)"></path>
+              <path class="diagram-line" d="M535 372 H385 V117" marker-end="url(#agent-arrow)"></path>
+            </svg>
+            <ol class="print-flow" aria-label="Agent loop printable summary">
+              <li>Compile the current messages, tool schemas, and prompt hashes.</li>
+              <li>Call the selected provider with temperature 0.2 and the configured token cap.</li>
+              <li>Authorize and execute requested tools, then append structured results.</li>
+              <li>Verify a final answer against observed actions and required evidence.</li>
+              <li>Complete, make a bounded repair, or stop with a machine-readable reason.</li>
+            </ol>
+            <figcaption>The loop runs at most <code>max_iterations</code> times. Completion repair defaults to two attempts and is also bounded by the remaining iteration budget.</figcaption>
+          </figure>
+
+          <h3>Stop conditions are explicit</h3>
+          <div class="table-wrap">
+            <table>
+              <caption>Important exits from <code>runExecutionPhase</code>.</caption>
+              <thead><tr><th scope="col">Condition</th><th scope="col">Recorded outcome</th><th scope="col">Operator meaning</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Verifier satisfied</th><td><span class="status success">Completed</span></td><td>The final answer and observed calls satisfy the completion check.</td></tr>
+                <tr><th scope="row">Approval required</th><td><span class="status warning">Blocked</span></td><td>Non-interactive work returns a work ID. Console Chat can preserve the active session while an exact action is reviewed.</td></tr>
+                <tr><th scope="row">Capability unavailable</th><td><span class="status danger">Incomplete</span></td><td>Repair identified a required capability outside the refreshed tool set.</td></tr>
+                <tr><th scope="row">No progress / repair limit</th><td><span class="status danger">Incomplete</span></td><td>The loop records a stop reason instead of repeating the same unsuccessful completion.</td></tr>
+                <tr><th scope="row">Iteration limit / provider error</th><td><span class="status danger">Failed</span></td><td>The bounded loop or provider call ended before a verified completion.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="source-label"><strong>Source-derived pseudocode</strong><a href="../agent/agent.go">agent/agent.go</a></div>
+          <pre><code>// Helper names below summarize the corresponding inline source blocks.
+for iter := 1; iter &lt;= a.opts.MaxIterations; iter++ {
+    resp := provider.ChatCompletion(messages, toolDefs)
+    if len(resp.Message.ToolCalls) &gt; 0 {
+        authorizeExecuteAndAppendResults(resp.Message.ToolCalls)
+        continue
+    }
+    verification := verifyCompletion(prompt, resp.Message, observedCalls)
+    if verification.satisfied() { return completed }
+    if repairBudgetAvailable(verification) { reclassifyAndRepair(); continue }
+    return incompleteWithStopReason
+}</code></pre>
+
+          <h3>Prompt plan and capability refresh</h3>
+          <p>The prompt planner emits separate system messages for durable guidance, the authoritative tool policy, bounded host/target memory, and optional planning notes. It hashes the stable prefix and full request for telemetry and diagnostics. A failed completion can trigger task reclassification; when that changes the tool set, the system-message prefix is rebuilt while the conversation’s volatile messages remain intact.</p>
+        </section>
+
+        <section id="tools-safety" aria-labelledby="tools-safety-title">
+          <p class="section-kicker">06 / Action authorization</p>
+          <h2 id="tools-safety-title">Every effect resolves through one immutable policy snapshot</h2>
+          <p>The standard registry always includes shell execution and conditionally adds memory, scheduling, system cron, and public web research. Relevant tools are advertised per task, but registry and shell policy still authorize each call at execution time.</p>
+
+          <div class="table-wrap">
+            <table>
+              <caption>Runtime tools registered by the current composition root.</caption>
+              <thead><tr><th scope="col">Tool</th><th scope="col">Availability</th><th scope="col">Boundary</th></tr></thead>
+              <tbody>
+                <tr><th scope="row"><code>shell_execute</code></th><td><span class="status success">Always</span></td><td>Parses compound shell input, classifies effects, applies the strictest decision, rechecks scoped grants, runs through <code>sh -c</code> with time/output limits, and records redacted outcomes.</td></tr>
+                <tr><th scope="row"><code>memory_record_finding</code></th><td><span class="status info">With memory</span></td><td>Submits an untrusted, target-scoped finding candidate for later operator review and promotion.</td></tr>
+                <tr><th scope="row"><code>schedule_manage</code></th><td><span class="status info">With SQLite</span></td><td>Internal job mutation passes through scheduled-change policy before reaching the scheduler.</td></tr>
+                <tr><th scope="row"><code>system_cron_manage</code></th><td><span class="status info">With SQLite</span></td><td>Current-user crontab mutation is policy-gated and audit recorded.</td></tr>
+                <tr><th scope="row"><code>web_search</code> / <code>web_fetch</code></th><td><span class="status warning">Opt-in</span></td><td>Tavily-backed, bounded, public research only; domain rules and internal/private/metadata target rejection apply.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Decision pipeline</h3>
+          <p>Five profiles—<code>extra_strict</code>, <code>reasonable</code>, <code>less_strict</code>, <code>minimal</code>, and <code>yolo</code>—resolve with per-setting overrides into one hashed effective policy. <code>reasonable</code> is the fresh-install default.</p>
+
+          <figure class="diagram-shell">
+            <svg viewBox="0 0 980 270" role="img" aria-labelledby="security-diagram-title security-diagram-desc">
+              <title id="security-diagram-title">Action authorization pipeline</title>
+              <desc id="security-diagram-desc">A tool call is parsed into effects. Each effect maps to a policy decision. The strictest decision controls the outcome. Allowed calls dispatch, denied calls stop, and review paths require an exact one-use grant before dispatch.</desc>
+              <defs><marker id="security-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#756e65"></path></marker></defs>
+              <path class="diagram-line" d="M180 92 H230" marker-end="url(#security-arrow)"></path>
+              <path class="diagram-line" d="M405 92 H455" marker-end="url(#security-arrow)"></path>
+              <path class="diagram-line" d="M630 92 H680" marker-end="url(#security-arrow)"></path>
+              <rect class="diagram-node" x="20" y="42" width="160" height="100" rx="10"></rect>
+              <text class="diagram-title" x="38" y="73">Tool request</text><text class="diagram-copy" x="38" y="98">name + exact arguments</text><text class="diagram-copy" x="38" y="119">executor scope</text>
+              <rect class="diagram-node" x="230" y="42" width="175" height="100" rx="10"></rect>
+              <text class="diagram-title" x="248" y="73">Classify effects</text><text class="diagram-copy" x="248" y="98">segments · redirects · targets</text><text class="diagram-copy" x="248" y="119">limits + protected paths</text>
+              <rect class="diagram-node accent" x="455" y="42" width="175" height="100" rx="10"></rect>
+              <text class="diagram-title" x="473" y="73">Resolve policy</text><text class="diagram-copy" x="473" y="98">deny &gt; ask &gt; review &gt; allow</text><text class="diagram-copy" x="473" y="119">strictest effect wins</text>
+              <rect class="diagram-node success" x="680" y="42" width="280" height="100" rx="10"></rect>
+              <text class="diagram-title" x="698" y="73">Dispatch boundary</text><text class="diagram-copy" x="698" y="98">allow → execute</text><text class="diagram-copy" x="698" y="119">ask/review → exact grant → execute</text>
+              <path class="diagram-line" d="M542 142 V212 H820 V142" marker-end="url(#security-arrow)"></path>
+              <text class="diagram-title" x="574" y="194">deny → recorded stop</text>
+            </svg>
+            <ol class="print-flow" aria-label="Authorization printable summary">
+              <li>Bind the exact action, arguments, and executor scope.</li>
+              <li>Parse shell segments, redirects, nested syntax, targets, and effects.</li>
+              <li>Resolve each effect through the immutable policy snapshot.</li>
+              <li>Apply the strictest decision: deny, ask, LLM review, or allow.</li>
+              <li>Dispatch allowed work; review paths consume an exact grant once.</li>
+            </ol>
+            <figcaption>LLM review is advisory. A person supplies the authority for review paths, and the executor revalidates the bound action before consumption.</figcaption>
+          </figure>
+
+          <div class="table-wrap">
+            <table>
+              <caption>Profile posture from <code>securitypolicy/bundles.go</code>. Per-control overrides can refine each bundle.</caption>
+              <thead><tr><th scope="col">Profile</th><th scope="col">Read commands</th><th scope="col">Unknown commands</th><th scope="col">File overwrite</th><th scope="col">Credential access</th><th scope="col">Command limits</th></tr></thead>
+              <tbody>
+                <tr><th scope="row"><code>extra_strict</code></th><td>allow</td><td>deny</td><td>deny</td><td>deny</td><td>4 KiB · 4 segments · 15 s</td></tr>
+                <tr><th scope="row"><code>reasonable</code></th><td>allow</td><td>ask</td><td>ask</td><td>deny</td><td>8 KiB · 16 segments · 30 s</td></tr>
+                <tr><th scope="row"><code>less_strict</code></th><td>allow</td><td>llm_review</td><td>allow</td><td>ask</td><td>16 KiB · 24 segments · 60 s</td></tr>
+                <tr><th scope="row"><code>minimal</code></th><td>allow</td><td>allow</td><td>allow</td><td>ask</td><td>32 KiB · 32 segments · 120 s</td></tr>
+                <tr><th scope="row"><code>yolo</code></th><td>allow</td><td>allow</td><td>allow</td><td>allow</td><td>64 KiB · 64 segments · 3,600 s</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Exact one-use approval</h3>
+          <p>A grant binds the action digest, effect digest, effective-policy hash, host, principal, working directory, and executor scope. Approval-created grants expire after 15 minutes and carry one remaining use. Resuming blocked work reconstructs the action under its captured scope and rejects any digest or policy mismatch.</p>
+
+          <div class="source-label"><strong>Strictest-decision reducer</strong><a href="../tools/shell_policy.go">tools/shell_policy.go</a></div>
+          <pre><code>switch value {
+case securitypolicy.DecisionDeny:      return 4
+case securitypolicy.DecisionAsk:       return 3
+case securitypolicy.DecisionLLMReview: return 2
+default:                               return 1
+}</code></pre>
+
+          <div class="callout warning">
+            <strong>Enforcement boundary</strong>
+            CvkeHarness policy governs decisions inside the harness process. Host operating-system permissions, container isolation, network controls, and external platform authorization remain the final enforcement layers. Filesystem staging, provider-native dry runs, and tamper-evident audit are future hardening areas.
+          </div>
+        </section>
+
+        <section id="memory" aria-labelledby="memory-title">
+          <p class="section-kicker">07 / Operational memory</p>
+          <h2 id="memory-title">Operational knowledge is target-scoped, reviewable, and bounded at retrieval</h2>
+          <p>The memory subsystem distinguishes the runtime host from <code>ssh</code>, <code>local_container</code>, and unknown targets. A newly observed remote target starts as a provisional record with <code>environment=unknown</code> and confidence <code>0.5</code>. Operator binding establishes the environment and remote identity required for active target-scoped retrieval.</p>
+
+          <figure class="diagram-shell">
+            <svg viewBox="0 0 980 300" role="img" aria-labelledby="memory-diagram-title memory-diagram-desc">
+              <title id="memory-diagram-title">Operational memory lifecycle</title>
+              <desc id="memory-diagram-desc">Observed tool outcomes create target-scoped candidates. Operators review candidates and may promote, reject, or revoke them. Retrieval gates check scope, environment, status, trust, expiry, and integrity before selecting a compact prompt brief.</desc>
+              <defs><marker id="memory-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#756e65"></path></marker></defs>
+              <path class="diagram-line" d="M205 98 H255" marker-end="url(#memory-arrow)"></path>
+              <path class="diagram-line" d="M430 98 H480" marker-end="url(#memory-arrow)"></path>
+              <path class="diagram-line" d="M655 98 H705" marker-end="url(#memory-arrow)"></path>
+              <rect class="diagram-node" x="25" y="45" width="180" height="106" rx="10"></rect>
+              <text class="diagram-title" x="43" y="76">Observe</text><text class="diagram-copy" x="43" y="101">typed facts · tool outcomes</text><text class="diagram-copy" x="43" y="122">verification · concrete failure</text>
+              <rect class="diagram-node" x="255" y="45" width="175" height="106" rx="10"></rect>
+              <text class="diagram-title" x="273" y="76">Candidate</text><text class="diagram-copy" x="273" y="101">target + environment scope</text><text class="diagram-copy" x="273" y="122">source · TTL · integrity hash</text>
+              <rect class="diagram-node accent" x="480" y="45" width="175" height="106" rx="10"></rect>
+              <text class="diagram-title" x="498" y="76">Review</text><text class="diagram-copy" x="498" y="101">promote · reject · revoke</text><text class="diagram-copy" x="498" y="122">bind target environment</text>
+              <rect class="diagram-node success" x="705" y="45" width="250" height="106" rx="10"></rect>
+              <text class="diagram-title" x="723" y="76">Retrieve</text><text class="diagram-copy" x="723" y="101">live scope + trust + freshness</text><text class="diagram-copy" x="723" y="122">compact verify-first brief</text>
+              <path class="diagram-line" d="M830 151 V225 H568 V151" marker-end="url(#memory-arrow)"></path>
+              <text class="diagram-copy" x="604" y="214">failure feedback adjusts confidence</text>
+            </svg>
+            <ol class="print-flow" aria-label="Memory lifecycle printable summary">
+              <li>Observe typed facts, structured tool outcomes, verification evidence, and concrete failures.</li>
+              <li>Create a target-scoped candidate with source, TTL, confidence, and integrity hash.</li>
+              <li>Review the candidate and bind the target environment where required.</li>
+              <li>Promote, reject, revoke, or delete through explicit operator commands.</li>
+              <li>Retrieve a compact brief after all scope and evidence gates pass.</li>
+            </ol>
+            <figcaption>Memory contributes historical, verify-first context. Authorization remains governed by the active security policy.</figcaption>
+          </figure>
+
+          <div class="table-wrap">
+            <table>
+              <caption>Memory types and their use in the active prompt.</caption>
+              <thead><tr><th scope="col">Record</th><th scope="col">Lifecycle</th><th scope="col">Retrieval role</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Host facts</th><td>Typed low-risk observations begin as candidates and require trust, scope, integrity, freshness, and active status.</td><td>A tiny host/target summary.</td></tr>
+                <tr><th scope="row">Playbooks</th><td>Verifier-backed procedures require evidence, exact target/environment scope, and a meaningful success check.</td><td>One primary verify-first procedure.</td></tr>
+                <tr><th scope="row">Findings</th><td>Narrow reusable observations, including model-submitted candidates, enter the review lifecycle.</td><td>One fallback when a strong playbook is unavailable.</td></tr>
+                <tr><th scope="row">Cautions</th><td>Short-lived negative memory from concrete failures or policy denials.</td><td>At most one relevant warning.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Retrieval is a selection pipeline</h3>
+          <p><code>RetrievePlan</code> loads user-authored guidance, resolves the runtime host and active target, reads canonical SQLite state, classifies intent, and independently scores playbook, caution, and finding candidates. A live target binding, exact target/environment match, active status, operator or verified trust, current evidence, and a valid integrity hash are required. Playbooks also require a meaningful success check.</p>
+
+          <div class="table-wrap">
+            <table>
+              <caption>Maximum operational-memory payload added to one execution prompt.</caption>
+              <thead><tr><th scope="col">Layer</th><th scope="col">Cardinality</th><th scope="col">Selection rule</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Runtime host summary</th><td>one small summary</td><td>Current canonical runtime-host record.</td></tr>
+                <tr><th scope="row">Active target summary</th><td>up to one</td><td>Resolved, unambiguous target with live binding.</td></tr>
+                <tr><th scope="row">Playbook</th><td>up to one</td><td>Highest score across intent/tool strength, confidence, outcomes, and freshness.</td></tr>
+                <tr><th scope="row">Caution</th><td>up to one</td><td>Relevant live caution for the same target and intent/tool context.</td></tr>
+                <tr><th scope="row">Finding</th><td>up to one fallback</td><td>Included when playbook match strength is below the strong threshold.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="source-label"><strong>Playbook retrieval gate</strong><a href="../memory/manager_retrieval.go">memory/manager_retrieval.go</a></div>
+          <pre><code>if playbook.TargetID != targetID ||
+    !liveOperationalItem(playbook.Status, playbook.Trust,
+        playbook.Environment, env, playbook.ExpiresAt, now) ||
+    playbook.EvidenceHash != playbookIntegrity(playbook) ||
+    len(playbook.SuccessChecks) == 0 {
+    continue
+}</code></pre>
+
+          <h3>Deterministic curation</h3>
+          <p>Successful <code>shell_execute</code> calls are grouped by resolved target. A verifier-backed outcome can produce a playbook candidate with verification, action, and success-check steps. Failed calls can reduce matching playbook confidence and create short-lived cautions. Public web research calls are skipped during operational-memory curation.</p>
+
+          <div class="callout info">
+            <strong>Managed files</strong>
+            <code>guidance.md</code> is user-authored prompt context. <code>targets.md</code>, <code>playbooks.md</code>, <code>findings.md</code>, and <code>cautions.md</code> are generated operator views and explicit validated-import surfaces. SQLite remains canonical, and memory retrieval stops when canonical state is unavailable.
+          </div>
+        </section>
+
+        <section id="providers" aria-labelledby="providers-title">
+          <p class="section-kicker">08 / Providers and routing</p>
+          <h2 id="providers-title">Four provider paths share one structured model-and-tool contract</h2>
+          <p>The provider interface is intentionally small: a structured chat request goes in and a structured response with messages, tool calls, usage, and actual model identity comes back.</p>
+
+          <div class="table-wrap">
+            <table>
+              <caption>Current provider adapters.</caption>
+              <thead><tr><th scope="col">Provider</th><th scope="col">Authentication / transport</th><th scope="col">Notes</th></tr></thead>
+              <tbody>
+                <tr><th scope="row"><code>codex</code></th><td>Official Codex CLI ChatGPT OAuth cache.</td><td>Reads <code>~/.codex/auth.json</code> without refreshing it and uses the ChatGPT Codex Responses backend.</td></tr>
+                <tr><th scope="row"><code>openai</code></th><td>OpenAI API key and Responses API.</td><td>Maps harness messages and tool-call state to Responses input/output items.</td></tr>
+                <tr><th scope="row"><code>openrouter</code></th><td>OpenRouter API key and OpenAI-compatible chat.</td><td>Default fresh configuration path; preserves provider-native model names.</td></tr>
+                <tr><th scope="row"><code>lmstudio</code></th><td>Local OpenAI-compatible endpoint.</td><td>Defaults to <code>http://localhost:1234/v1</code>; used by hermetic E2E stubs as well as LM Studio.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Routing learns within approval policy</h3>
+          <p>When enabled, routing scores approved candidates using local phase, task-class, toolset, success, policy-denial, and latency history. Low-confidence results fall back to the configured default. A strong unapproved candidate requires one-off approval in an interactive CLI context; durable reuse requires explicit model approval.</p>
+
+          <h3>Fresh configuration defaults</h3>
+          <p>The code defaults to OpenRouter, <code>anthropic/claude-sonnet-4.6</code>, <code>reasonable</code> security, automatic routing within policy, 4,096 output tokens, 25 iterations, 0.55 routing confidence, logs off, and web search off. Web research uses Tavily with five basic-depth results and a 12,000-character fetch budget when enabled.</p>
+        </section>
+
+        <section id="scheduling" aria-labelledby="scheduling-title">
+          <p class="section-kicker">09 / Scheduling</p>
+          <h2 id="scheduling-title">Internal agent jobs and system cron are separate systems</h2>
+          <p>Internal jobs store an agent prompt and an <code>at</code>, <code>every</code>, or five-field <code>cron</code> schedule in SQLite. The scheduler uses claims, leases, heartbeats, overdue events, run history, and blocked-work state to reduce duplicate execution and keep deferred approvals inspectable.</p>
+          <p>System cron management operates on the current user’s crontab. Managed entries receive stable CvkeHarness identifiers; dry-run previews changes, and every write is policy-gated and audit recorded. The Linux daemon path can install and manage a systemd user or system service. Installation and startup remain explicit lifecycle commands after configuration is saved.</p>
+
+          <div class="callout warning">
+            <strong>Scheduled approval boundary</strong>
+            When policy requires a person during scheduled work, the scheduler persists a blocked-work record. An operator can later approve the exact action, and the scoped retry consumes that grant once.
+          </div>
+        </section>
+
+        <section id="persistence" aria-labelledby="persistence-title">
+          <p class="section-kicker">10 / Persistence and telemetry</p>
+          <h2 id="persistence-title">Local state is private, structured, and split by purpose</h2>
+          <p>Configuration and user-authored guidance live beside the SQLite state database under <code>~/.cvkeharness/</code>. Files and database sidecars are created with private permissions. Model/tool outcome fields, telemetry events, chat exports, and prompt dumps pass through secret masking before persistence.</p>
+
+          <div class="table-wrap">
+            <table>
+              <caption>Durable state planes implemented today.</caption>
+              <thead><tr><th scope="col">Plane</th><th scope="col">Primary artifacts</th><th scope="col">Purpose</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Configuration</th><td><code>config.yaml</code>, <code>guidance.md</code></td><td>Provider, models, immutable security selection, capabilities, routing, limits, web search, and user-authored operating guidance.</td></tr>
+                <tr><th scope="row">Canonical SQLite</th><td><code>state.db</code> plus WAL/SHM</td><td>Runs, phases, tools, routing stats/candidates/approvals, chat, exact grants, blocked work, schedules, cron audit, operational memory, snapshots, and telemetry projections.</td></tr>
+                <tr><th scope="row">Readable memory</th><td><code>targets.md</code>, <code>playbooks.md</code>, <code>findings.md</code>, <code>cautions.md</code></td><td>Generated operator views, explicit validated import/export, and rollback snapshots.</td></tr>
+                <tr><th scope="row">Canonical telemetry</th><td><code>telemetry/live/events.jsonl</code></td><td>Append-only redacted events for planning, classification, model calls, tools, approvals, verification, task state, and scheduler lifecycle; projected into SQLite for queries.</td></tr>
+                <tr><th scope="row">Optional diagnostics</th><td><code>prompt_dumps/</code>, <code>exports/</code></td><td>Redacted prompt debugging and private conversation export; prompt dumps are default-off and retention-limited.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="code-map" aria-labelledby="code-map-title">
+          <p class="section-kicker">11 / Code map</p>
+          <h2 id="code-map-title">Twenty-seven Go packages keep the control-plane boundaries visible</h2>
+          <p>The repository is large enough to be substantial but still organized around explicit composition points. Start with <code>cmd/run.go</code> for bounded work and <code>cmd/tui.go</code> for the Console.</p>
+
+          <div class="table-wrap">
+            <table>
+              <caption>High-value package entry points.</caption>
+              <thead><tr><th scope="col">Area</th><th scope="col">Responsibility</th><th scope="col">Deep reference</th></tr></thead>
+              <tbody>
+                <tr><th scope="row"><code>cmd/</code></th><td>Cobra surface, setup/settings, runtime composition, Console startup, jobs, daemon, cron, models, memory, and safety commands.</td><td><a href="architecture.md">Architecture</a></td></tr>
+                <tr><th scope="row"><code>agent/</code>, <code>core/</code>, <code>router/</code></th><td>Classification, phase orchestration, chat state, prompt planning, verification/repair, task lifecycle, and approved routing.</td><td><a href="project-visual-guide.md">Visual guide</a></td></tr>
+                <tr><th scope="row"><code>tools/</code>, <code>securitypolicy/</code></th><td>Capability registry, effect classification, shell parsing/execution, one-time grants, scheduling, cron, memory, and web tools.</td><td><a href="security-controls.html">Security controls</a></td></tr>
+                <tr><th scope="row"><code>memory/</code>, <code>state/</code></th><td>Target resolution, candidate lifecycle, retrieval gates, import/export/snapshots, SQLite schema, audit records, and projections.</td><td><a href="memory-guide.html">Memory guide</a></td></tr>
+                <tr><th scope="row"><code>internal/tui/</code>, <code>internal/setuptui/</code></th><td>Keyboard-first Console and setup UI, chat timeline, approval continuation, responsive terminal rendering, and settings.</td><td><a href="../DESIGN.md">Console design system</a></td></tr>
+                <tr><th scope="row"><code>scheduler/</code>, <code>systemcron/</code></th><td>Schedule parsing, durable job claims/leases/heartbeats, manual/due runs, and current-user crontab parsing/writes.</td><td><a href="scheduled-jobs-and-cron.md">Scheduling guide</a></td></tr>
+                <tr><th scope="row"><code>provider/</code>, <code>internal/httputil/</code></th><td>Provider-neutral messages/tools plus Codex, OpenAI, OpenRouter, LM Studio, retries, timeouts, and backoff.</td><td><a href="architecture.md#8-provider-abstraction-and-http-behavior">Provider architecture</a></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="verification" aria-labelledby="verification-title">
+          <p class="section-kicker">12 / Verification</p>
+          <h2 id="verification-title">Current source and hermetic executable journeys pass locally</h2>
+          <p>This inventory was checked against the working tree at commit <code>f5b4c8f</code>. The repository contains 418 Go test functions and two fuzz targets across 27 packages.</p>
+
+          <div class="table-wrap">
+            <table>
+              <caption>Validation performed while producing this reference.</caption>
+              <thead><tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Evidence boundary</th></tr></thead>
+              <tbody>
+                <tr><th scope="row"><code>go build -o /private/tmp/cvkeharness-current .</code></th><td><span class="status success">Passed</span></td><td>Current local source builds with Go 1.26.2.</td></tr>
+                <tr><th scope="row"><code>go test ./...</code></th><td><span class="status success">Passed</span></td><td>All package suites passed after allowing loopback listeners used by local HTTP test servers.</td></tr>
+                <tr><th scope="row"><code>go vet ./...</code></th><td><span class="status success">Passed</span></td><td>Static analysis passed locally.</td></tr>
+                <tr><th scope="row"><code>./scripts/test-e2e.sh</code></th><td><span class="status success">Passed</span></td><td>Seven top-level executable tests passed, including setup widths 80/100/120, local commands, verified tool use/export, exact approval continuation, and unapproved-action rejection.</td></tr>
+                <tr><th scope="row">HTML structural validation</th><td><span class="status success">Passed</span></td><td>Standalone markup, headings, anchors, tables, diagram accessibility, and placeholder checks.</td></tr>
+                <tr><th scope="row">Browser render QA</th><td><span class="status success">Passed</span></td><td>Desktop 1440×1000, mobile 390×844, and print rendering inspected locally.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout success">
+            <strong>Evidence scope</strong>
+            These results establish local source health and hermetic executable behavior. Live provider authentication, remote hosts, systemd installation, public-network web search, cloud authorization, and deployed production environments require environment-specific verification.
+          </div>
+        </section>
+
+        <section id="boundaries" aria-labelledby="boundaries-title">
+          <p class="section-kicker">13 / Scope boundaries</p>
+          <h2 id="boundaries-title">Read current capabilities together with their enforcement boundary</h2>
+          <p>The current system is shell-centric and local-first. Target discovery primarily uses prompt hints and observed tool calls. Retrieval uses structured scoring and bounded cardinality. Routing becomes more informative as local outcome history grows. Daemon installation targets Linux/systemd. The next hardening frontier includes remote endpoint fingerprinting, typed cloud/Kubernetes/database change plans, operating-system sandboxing, filesystem staging, tamper-evident audit, and provider-native recovery.</p>
+
+          <div class="table-wrap">
+            <table>
+              <caption>Existing references and how to use them.</caption>
+              <thead><tr><th scope="col">Document</th><th scope="col">Use it for</th><th scope="col">Freshness note</th></tr></thead>
+              <tbody>
+                <tr><th scope="row"><a href="../README.md">README</a></th><td>Setup, command reference, configuration, prompt stack, tools, layout, and contributor workflow.</td><td>Primary narrative entry point.</td></tr>
+                <tr><th scope="row"><a href="architecture.md">Architecture</a></th><td>Detailed component and sequence diagrams plus package responsibilities.</td><td>Mapped to source on 2026-08-15.</td></tr>
+                <tr><th scope="row"><a href="security-controls.html">Security controls</a></th><td>Profiles, all enforced controls, approval scopes, invariants, and non-claims.</td><td>Current effect-policy model.</td></tr>
+                <tr><th scope="row"><a href="memory-guide.html">Operational memory guide</a></th><td>Target identity, candidate lifecycle, retrieval gates, and operator review.</td><td>SQLite-canonical model.</td></tr>
+                <tr><th scope="row"><a href="scheduled-jobs-and-cron.md">Scheduling guide</a></th><td>Internal jobs, cron, daemon, persistence, agent tools, and V2 ideas.</td><td>Contains both implemented and explicitly future sections.</td></tr>
+                <tr><th scope="row"><a href="../PRODUCT.md">Product context</a> / <a href="../DESIGN.md">design system</a></th><td>Interaction contracts, user posture, terminal layout, keyboard behavior, and visual language.</td><td>Normative product/design intent.</td></tr>
+                <tr><th scope="row"><a href="safety-scorecard.md">Scorecard</a>, <a href="redteam-report.md">red-team</a>, <a href="fuzz-report.md">fuzz report</a></th><td>Generated point-in-time evaluation artifacts.</td><td>Historical commits and dates; regenerate before treating as current evidence.</td></tr>
+                <tr><th scope="row"><a href="safety-hardening-plan.md">Hardening plan</a></th><td>Historical risks and roadmap ideas.</td><td>Use as dated planning context; several items now have implementations elsewhere in this guide.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout warning">
+            <strong>Operator rule</strong>
+            The active target, effective policy hash, approval scope, verifier result, and current source are the decision authorities. Memory and generated reports contribute bounded evidence to those decisions.
+          </div>
+        </section>
+
+        <section id="glossary" aria-labelledby="glossary-title">
+          <p class="section-kicker">14 / Glossary</p>
+          <h2 id="glossary-title">Project vocabulary</h2>
+          <p>These terms carry specific meanings throughout the codebase and operator interface.</p>
+          <dl class="glossary">
+            <dt>Active target</dt><dd>The resolved system that a task or tool call operates on. It may be the runtime host, an SSH target, a local container, or an unknown/provisional target.</dd>
+            <dt>Blocked work</dt><dd>A durable task state containing a redacted approval request and the exact captured action required to continue.</dd>
+            <dt>Candidate</dt><dd>An operational-memory record awaiting explicit review and promotion before it can satisfy active retrieval gates.</dd>
+            <dt>Console</dt><dd>The persistent five-workspace terminal interface: Overview, Jobs, Runs, Chat, and Settings.</dd>
+            <dt>Effective policy</dt><dd>The immutable, hashed result of resolving a security profile together with valid per-control overrides.</dd>
+            <dt>Effect</dt><dd>A classified consequence of a tool action, such as file overwrite, network access, service change, or credential access.</dd>
+            <dt>Exact grant</dt><dd>A short-lived, single-use approval bound to action/effect digests, policy hash, host, principal, working directory, and executor scope.</dd>
+            <dt>Finding</dt><dd>A narrow target-scoped operational observation that can serve as fallback context after review.</dd>
+            <dt>Phase</dt><dd>A model-selection and recording boundary such as planning, execution, verification, chat, or memory curation.</dd>
+            <dt>Playbook</dt><dd>A target-scoped procedure with verification, action, and success-check steps, ranked for a matching intent and tool context.</dd>
+            <dt>Runtime host</dt><dd>The machine running the CvkeHarness process. It remains distinct from a remote active target.</dd>
+            <dt>Tool advertisement</dt><dd>The set of schemas presented to the model for a turn. Dispatch authorization is evaluated when a specific call is requested.</dd>
+            <dt>Verifier</dt><dd>The completion check that compares a claimed final answer with the task, observed tool calls, and required evidence.</dd>
+          </dl>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <footer>
+    <div class="shell">CvkeHarness project guide for commit <code>f5b4c8f</code>. Evidence covers current local source, isolated product captures, and local automated validation. Deployment and production verification remain environment-specific.</div>
+  </footer>
+
+  <script>
+    (() => {
+      const links = [...document.querySelectorAll('.sidebar a')];
+      const sections = links.map((link) => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+      if (!('IntersectionObserver' in window)) return;
+      const observer = new IntersectionObserver((entries) => {
+        const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (!visible) return;
+        links.forEach((link) => {
+          if (link.getAttribute('href') === `#${visible.target.id}`) link.setAttribute('aria-current', 'location');
+          else link.removeAttribute('aria-current');
+        });
+      }, { rootMargin: '-18% 0px -68% 0px', threshold: [0, 0.2, 0.6] });
+      sections.forEach((section) => observer.observe(section));
+    })();
+  </script>
+</body>
+</html>

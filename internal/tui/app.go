@@ -352,7 +352,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		owner = tabJobs
 	case runsDataMsg, runExportMsg:
 		owner = tabRuns
-	case configSavedMsg:
+	case configSavedMsg, configModelsMsg:
 		owner = tabConfig
 	case chatDataMsg, chatDetailMsg, chatSessionReadyMsg, chatTurnDoneMsg,
 		chatExportDoneMsg, chatApprovalDoneMsg, chatRuntimeEventMsg, chatRuntimeEventWaitStoppedMsg:
@@ -677,7 +677,9 @@ func loadOverviewData(svc *Service) tea.Msg {
 	health, e3 := svc.SchedulerHealth(ctx)
 	totals, e4 := svc.ActivityTotals(ctx)
 	blocked, e5 := svc.BlockedWork(ctx)
-	return overviewDataMsg{cfg: svc.Config(), runs: runs, jobs: jobs, health: health, totals: totals, blocked: blocked, setup: svc.SetupMode(), at: time.Now(), err: errors.Join(e1, e2, e3, e4, e5)}
+	operations, e6 := svc.RecoveryOperations(ctx)
+	batches, e7 := svc.RecoveryBatches(ctx)
+	return overviewDataMsg{cfg: svc.Config(), runs: runs, jobs: jobs, health: health, totals: totals, blocked: blocked, recovery: operations, batches: batches, setup: svc.SetupMode(), at: time.Now(), err: errors.Join(e1, e2, e3, e4, e5, e6, e7)}
 }
 
 func loadJobsData(svc *Service) tea.Msg {

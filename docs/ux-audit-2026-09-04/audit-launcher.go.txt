@@ -1,0 +1,39 @@
+package main
+import (
+ "context"
+ "fmt"
+ "os"
+ "time"
+ "strings"
+ "github.com/coolcake/cvkeharness/config"
+ "github.com/coolcake/cvkeharness/internal/tui"
+ "github.com/coolcake/cvkeharness/state"
+ "github.com/coolcake/cvkeharness/scheduler"
+ "github.com/coolcake/cvkeharness/tools"
+)
+func main() {
+ cfg := config.DefaultConfig()
+ cfg.Provider = "openai"
+ cfg.DefaultModel = "audit-model"
+ cfg.StateDBPath = "/private/tmp/cvke-ux-audit-20260904/state.db"
+ cfg.MemoryDir = "/private/tmp/cvke-ux-audit-20260904/memory"
+ cfg.PromptDumpDir = "/private/tmp/cvke-ux-audit-20260904/prompts"
+ cfg.SetAPIKey("openai", "SYNTHETIC-AUDIT-KEY-NOT-A-CREDENTIAL")
+ cfg.Normalize()
+ db := state.Open(cfg.StateDBPath)
+ defer db.Close()
+ now := time.Now()
+ if err := db.RecordRun(context.Background(), state.RunRecord{
+  StartedAt: now.Add(-time.Minute), FinishedAt: now, Provider: "openai",
+  Task: "Inspect the staging API and explain whether all background workers are healthy",
+  Success: true, VerificationStatus: "satisfied",
+  FinalOutput: "## Result\n" + strings.Repeat("This is audit fixture output showing how long lines behave. ", 4) + "END-OF-RESULT",
+ }); err != nil {panic(err)}
+ svc := tui.NewService(cfg, db, nil, scheduler.New(db), nil)
+ svc.MarkSetupMode()
+ svc.SetChatStarter(func(context.Context, *config.Config, tools.EventObserver) (tui.LiveChatSession, error) {
+  time.Sleep(5 * time.Second)
+  return nil, fmt.Errorf("missing openai API key; open Settings or run setup to add credentials")
+ })
+ if err := tui.Run(svc, "cvkeharness", tui.InitialViewOverview); err != nil {fmt.Fprintln(os.Stderr, err)}
+}

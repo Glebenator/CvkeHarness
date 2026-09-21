@@ -147,6 +147,7 @@ func ProviderOptions() []ProviderOption {
 		{ID: "openrouter", Label: "OpenRouter", Description: "Cloud API with many coding models"},
 		{ID: "openai", Label: "OpenAI", Description: "Usage-based OpenAI API models"},
 		{ID: "lmstudio", Label: "LM Studio", Description: "Local OpenAI-compatible inference"},
+		{ID: "antigravity", Label: "Antigravity", Description: "Personal Google subscription (unofficial); run cvkeharness antigravity login"},
 	}
 }
 
@@ -387,6 +388,8 @@ func DetectLMStudio(ctx context.Context, baseURL string) bool {
 
 func FetchModels(ctx context.Context, cfg *config.Config) ModelResult {
 	switch cfg.Provider {
+	case "antigravity":
+		return fallbackModels(nil, "antigravity", "Enter a Gemini model ID from your Antigravity account; catalog is not verified")
 	case "codex":
 		return fetchCodexModels(time.Now())
 	case "openai":
@@ -615,6 +618,8 @@ func Finalize(ctx context.Context, opts FinalizeOptions) (FinalizeResult, error)
 
 func resolveProvider(cfg *config.Config) (provider.Provider, error) {
 	switch cfg.Provider {
+	case "antigravity":
+		return provider.NewAntigravity(), nil
 	case "codex":
 		return provider.NewCodexFromCLIAuth(), nil
 	case "openrouter":

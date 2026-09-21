@@ -1,0 +1,235 @@
+[?25l[?1049h[2J[H[?25l[?2004h[?1002h[?1006h[H  1·Overview    2·Jobs    3·Runs    4·Chat    5·Settings *  [K
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[K
+  Overview  attention and next actions[K
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[K
+[K
+  Get started[K
+  s Connect provider in Settings · v Check configuration locally[K
+  c Start first task in Chat[K
+[K
+  All history: 4 runs · 100% success[K
+  0 chat sessions · 1 jobs · updated 14:48:03[K
+[K
+  Attention, upcoming jobs, and recent outcomes[K
+  ▸ Next Sep 4 15:15 PDT: UX revised job[K
+    Completed: Inspect the staging API and explain whether all background workers are healthy[K
+    Completed: Inspect the staging API and explain whether all background workers are healthy[K
+    Completed: Inspect the staging API and explain whether all background workers are healthy[K
+    Completed: Inspect the staging API and explain whether all background workers are healthy[K
+  [K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+ CvkeHarness                          ←→ switch  enter open  c chat  s settings  v check config  r retry  ? help  q quit[40;H[H
+
+
+
+
+
+
+
+
+
+
+  0 chat sessions · 1 jobs · updated 14:48:08[K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[40;H[H
+
+
+
+
+
+
+
+
+
+
+  0 chat sessions · 1 jobs · updated 14:48:13[K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[40;H[H
+
+
+
+
+
+
+
+
+
+
+  0 chat sessions · 1 jobs · updated 14:48:18[K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[40;H[H
+
+  Chat · READY · Verification: NOT RUN[K
+  Target: not resolved yet · Environment: unknown[K
+  Security: reasonable · Ctrl+G context[K
+
+  Ready for a task                                                                       │  CONTEXT                    [K
+  Describe the outcome you want. CvkeHarness will keep target, tools,                    │  ✓ READY                    [K
+  approvals, and verification visible while it works.                                    │                             [K
+                                                                                         │  TARGET                     [K
+  /help commands                                                                         │  not resolved yet           [K
+                                                                                         │                             [K
+                                                                                         │  VERIFICATION               [K
+                                                                                         │  • NOT RUN                  [K
+                                                                                         │                             [K
+                                                                                         │  TOOLS                      [K
+                                                                                         │  No calls this session      [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+  MESSAGE  press Enter to compose[K
+  ╭────────────────────────────────────────────────────────────────────────────────────╮[K
+  │ Ask CvkeHarness                                                                    │[K
+  │                                                                                    │[K
+  │                                                                                    │[K
+  ╰────────────────────────────────────────────────────────────────────────────────────╯[K
+
+
+ CvkeHarness                                         ←→ switch  enter compose  ↑↓ scroll  ctrl+h history  ? help  q quit[40;H[H
+
+
+
+
+
+  Session context                                                                        │  CONTEXT                    [K
+  Model: openai/audit-model                                                              │  ✓ READY                    [K
+  Ctrl+G returns to the conversation.                                                    │                             [K
+
+  Ready for a task                                                                       │  not resolved yet           [K
+  Describe the outcome you want. CvkeHarness will keep target, tools,                    │                             [K
+  approvals, and verification visible while it works.                                    │  VERIFICATION               [K
+
+  /help commands                                                                         │                             [K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[40;H[2K[?2004l[?25h[?1002l[?1003l[?1006l[?1049l[?25h

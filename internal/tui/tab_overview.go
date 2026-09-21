@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/coolcake/cvkeharness/config"
+	"github.com/coolcake/cvkeharness/recovery"
 	"github.com/coolcake/cvkeharness/state"
 )
 
@@ -19,20 +21,24 @@ type overviewDataMsg struct {
 	allRuns  []state.RunSummary
 	totals   state.ActivityTotals
 	blocked  []state.BlockedWork
+	recovery []state.RecoveryOperation
+	batches  []state.RecoveryBatch
 	health   []state.SchedulerHealth
 	setup    bool
 	err      error
 	at       time.Time
 }
 type overviewItem struct {
-	label   string
-	group   string
-	title   string
-	meta    string
-	tab     int
-	run     *state.RunSummary
-	jobID   string
-	blocked *state.BlockedWork
+	label    string
+	group    string
+	title    string
+	meta     string
+	tab      int
+	run      *state.RunSummary
+	jobID    string
+	blocked  *state.BlockedWork
+	recovery *state.RecoveryOperation
+	batch    *state.RecoveryBatch
 }
 type overviewTab struct {
 	cfg      *config.Config
@@ -85,6 +91,20 @@ func (t *overviewTab) Update(msg tea.Msg, svc *Service, width, height int) (tabM
 			selected = t.items[t.cursor].label
 		}
 		t.items = nil
+		for i := range msg.batches {
+			b := msg.batches[i]
+			if b.Status == recovery.Committed || b.Status == recovery.Recovered {
+				continue
+			}
+			t.items = append(t.items, overviewItem{label: "Fleet " + b.ID, title: "Fleet: " + strings.ReplaceAll(b.Status, "_", " "), group: "Needs attention", meta: b.ID + " · Inspect rollout evidence", batch: &b})
+		}
+		for i := range msg.recovery {
+			op := msg.recovery[i]
+			if op.Status == "committed" || op.Status == "recovered" || op.Status == "preparation_failed" || op.Status == "validation_failed" {
+				continue
+			}
+			t.items = append(t.items, overviewItem{label: "Recovery " + op.ID, title: "Recovery: " + strings.ReplaceAll(op.Status, "_", " "), group: "Needs attention", meta: op.ID + " · Inspect recorded change", recovery: &op})
+		}
 		for i := range msg.blocked {
 			work := msg.blocked[i]
 			t.items = append(t.items, overviewItem{label: "Approval waiting: " + work.Task, group: "Needs attention", title: work.Task, meta: "APPROVAL REQUIRED · Review the exact action", blocked: &work})
@@ -176,7 +196,7 @@ func (t *overviewTab) Update(msg tea.Msg, svc *Service, width, height int) (tabM
 				return t, func() tea.Msg { return navigateMsg{tab: tabChat} }
 			}
 			item := t.items[t.cursor]
-			if item.blocked != nil {
+			if item.blocked != nil || item.recovery != nil || item.batch != nil {
 				t.detail = true
 				t.scroll = 0
 				return t, nil
@@ -197,6 +217,32 @@ func (t *overviewTab) View(width, height int) string {
 	if t.detail && len(t.items) > 0 && t.items[t.cursor].blocked != nil {
 		work := t.items[t.cursor].blocked
 		body := fmt.Sprintf("Approval waiting\n\nTask: %s\nReason: %s\nWork ID: %s\n\nFor an active chat, open Chat to inspect the exact action and approve once.\nFor persisted work, review it with the commands workflow before granting approval.\n\nCLI: cvkeharness commands approve-work %s\nThis action is never approved automatically from Overview.", work.Task, work.BlockedReason, work.ID, work.ID)
+		return header + scrollBody(body, width, height-4, &t.scroll)
+	}
+	if t.detail && len(t.items) > 0 && t.items[t.cursor].batch != nil {
+		b := t.items[t.cursor].batch
+		body := fmt.Sprintf("Fleet recovery batch\n\nID: %s\nController: %s\nRecorded status: %s\n\n%s\n\n", b.ID, b.Target, b.Status, b.Problem)
+		var plan recovery.FleetPlan
+		var outcomes []recovery.FleetOutcome
+		if json.Unmarshal(b.Manifest, &plan) == nil && json.Unmarshal(b.Progress, &outcomes) == nil {
+			body += fmt.Sprintf("Impact: %d hosts, %d files, %d original+candidate bytes, %d services. Serial dispatch; maximum %d repairs per target.\n\n", plan.Impact.Hosts, plan.Impact.Files, plan.Impact.Bytes, plan.Impact.Services, plan.Limits.MaxRepairAttempts)
+			for i, en := range plan.Entries {
+				if i < len(outcomes) {
+					body += fmt.Sprintf("%s: %s; dispatched %t; repairs %d\n", en.Host.Config.Name, outcomes[i].State, outcomes[i].Dispatched, outcomes[i].Repairs)
+				}
+			}
+		}
+		body += fmt.Sprintf("\nA dispatched batch cannot be applied again. Reconcile only inspects remote journals. Recovery restores dispatched operations in reverse order and preserves conflicts.\n\nCLI: cvkeharness recovery fleet inspect %s\nCLI: cvkeharness recovery fleet reconcile %s\n\nUse recovery fleet recover with the exact reviewed digest. Overview never dispatches, retries or restores automatically.", b.ID, b.ID)
+		return header + scrollBody(body, width, height-4, &t.scroll)
+	}
+	if t.detail && len(t.items) > 0 && t.items[t.cursor].recovery != nil {
+		op := t.items[t.cursor].recovery
+		body := fmt.Sprintf("Recovery operation\n\nID: %s\nRecorded status: %s\nExecutor: %s\nUpdated: %s\n\n%s\n\nInspect the exact file manifest before applying or restoring. An interrupted operation may have changed some files. Recovery never force-overwrites a conflicting destination.\n\nCLI: cvkeharness recovery inspect %s\nCLI: cvkeharness recovery reconcile %s\n\nTo restore, use recovery recover with the reviewed digest from inspect. No model or provider is required.", op.ID, op.Status, op.Target, op.UpdatedAt.Local().Format(time.RFC3339), op.Problem, op.ID, op.ID)
+		var plan recovery.Manifest
+		if json.Unmarshal(op.Manifest, &plan) == nil && plan.SSH != nil {
+			ssh := plan.SSH
+			body = fmt.Sprintf("Guarded SSH change\n\nID: %s\nRecorded status: %s\nSSH service: %s\nPort: %d -> %d\n\n%s\n\nThe target-local watchdog attempts restoration of unconfirmed changes after %d seconds from arming. Inspect the recorded deadline and current outcome. Failed automatic restoration stops for explicit operator recovery. Confirmation requires a new authenticated connection to the proposed port; an existing multiplexed connection cannot confirm.\n\nCLI: cvkeharness recovery inspect %s\nFrom the new connection: cvkeharness recovery ssh confirm %s --confirm REVIEWED_DIGEST\n\nFor explicit restoration, use recovery recover with the reviewed digest. Overview never confirms or restores automatically.", op.ID, op.Status, ssh.Config.Name, ssh.OldPort, ssh.NewPort, op.Problem, ssh.Config.ConfirmationSeconds, op.ID, op.ID)
+		}
 		return header + scrollBody(body, width, height-4, &t.scroll)
 	}
 	if t.setup || t.totals.Runs+t.totals.ChatSessions == 0 {

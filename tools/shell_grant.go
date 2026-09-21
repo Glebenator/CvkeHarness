@@ -96,7 +96,7 @@ func NewShellSecurityGrant(command string, policy securitypolicy.EffectivePolicy
 }
 
 func shellSecurityGrantBinding(command string, policy securitypolicy.EffectivePolicy) (state.SecurityActionGrant, ShellAssessment, error) {
-	command = strings.TrimSpace(command)
+	command = trimShellBoundaryWhitespace(command)
 	assessment, err := AssessShellCommand(command, policy)
 	if err != nil {
 		return state.SecurityActionGrant{}, ShellAssessment{}, err

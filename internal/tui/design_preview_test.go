@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/coolcake/cvkeharness/internal/setupflow"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/muesli/termenv"
 )
@@ -39,7 +40,7 @@ func TestExportConsolePreview(t *testing.T) {
 			theme = "light"
 		}
 		for _, size := range [][2]int{{80, 24}, {100, 30}, {120, 40}} {
-			for _, scene := range []string{"Overview", "Jobs", "Runs", "Chat", "Settings", "New job", "Run detail", "Switcher", "Connecting"} {
+			for _, scene := range []string{"Overview", "Jobs", "Runs", "Chat", "Settings", "Model picker", "New job", "Run detail", "Switcher", "Connecting"} {
 				m := recoveryModel()
 				m.width, m.height = size[0], size[1]
 				m.svc.cfg.Provider = "openai"
@@ -70,6 +71,13 @@ func TestExportConsolePreview(t *testing.T) {
 				case "Settings":
 					m.activeTab = tabConfig
 					m.tabs[tabConfig].(*configTab).cursor = 4
+				case "Model picker":
+					m.activeTab = tabConfig
+					cfg := m.tabs[tabConfig].(*configTab)
+					cfg.cfg.Provider = "codex"
+					cfg.cursor = 1
+					cfg.openModelPicker()
+					cfg.acceptModels(setupflow.ModelResult{Source: "codex-cache", Live: true, Timestamp: now, Items: []setupflow.ModelOption{{ID: "gpt-5.4", Description: "General coding model"}, {ID: "example-fast", Description: "Example catalog description"}}})
 				case "New job":
 					m.activeTab = tabJobs
 					j.initCreateInputs()

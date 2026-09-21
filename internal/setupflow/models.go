@@ -208,15 +208,12 @@ func fetchCodexModels(now time.Time) ModelResult {
 			desc += " · " + model.Description
 		}
 		items = append(items, ModelOption{ID: model.Slug, Description: desc})
-		if len(items) >= 22 {
-			break
-		}
 	}
 	if len(items) == 0 {
 		return fallbackModels(nil, "codex", "Codex cache did not contain listable API models")
 	}
 	if cache.FetchedAt.IsZero() || now.Sub(cache.FetchedAt) > 6*time.Hour {
-		return fallbackModels(nil, "codex", "Codex model cache is stale; run Codex once to refresh it")
+		return ModelResult{Items: appendCustomModel(items), Source: "codex-cache", Message: "Cached choices may be outdated; run Codex to refresh, then reload this list", Timestamp: cache.FetchedAt}
 	}
 	return ModelResult{Items: appendCustomModel(items), Live: true, Source: "codex-cache", Message: cache.ClientVersion, Timestamp: cache.FetchedAt}
 }

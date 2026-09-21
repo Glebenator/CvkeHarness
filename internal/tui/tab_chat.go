@@ -165,6 +165,8 @@ type chatTab struct {
 	commandRows      int
 	pendingApproval  *pendingChatApproval
 	approvalInFlight bool
+	approvalWorkID   string
+	approvalNotice   string
 }
 
 func newChatTab() tabModel {
@@ -351,9 +353,10 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 		return t, nil
 
 	case chatApprovalDoneMsg:
-		if t.pendingApproval == nil || t.pendingApproval.workID != msg.workID {
+		if t.approvalWorkID != msg.workID && (t.pendingApproval == nil || t.pendingApproval.workID != msg.workID) {
 			return t, nil
 		}
+		t.approvalWorkID = ""
 		t.approvalInFlight = false
 		if msg.err != nil {
 			t.status = "APPROVAL REQUIRED"
@@ -364,8 +367,11 @@ func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel
 			return t, nil
 		}
 		t.pendingApproval = nil
-		t.status = "RESUMING"
-		t.statusDetail = "approval recorded; continuing the exact tool call"
+		t.approvalNotice = "APPROVED ONCE · " + firstNonEmptyText(msg.grant.ActionKind, "exact action")
+		if t.running {
+			t.status = "RESUMING"
+			t.statusDetail = "approval recorded; continuing the exact tool call"
+		}
 		t.appendConsoleMessage("APPROVED ONCE  Exact action, host, user, directory, effects, and policy. Expires in 15 minutes.\nContinuing the current turn: " + msg.grant.MaskedSummary)
 		t.refreshViewport()
 		t.viewport.GotoBottom()
@@ -477,6 +483,7 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 	}
 	if msg.String() == "a" && !t.composerFocused && t.pendingApproval != nil && !t.approvalInFlight {
 		t.approvalInFlight = true
+		t.approvalWorkID = t.pendingApproval.workID
 		t.status = "APPROVING"
 		t.statusDetail = "creating one exact, scoped grant"
 		t.lastError = ""
@@ -682,6 +689,8 @@ func (t *chatTab) startFreshSession(svc *Service) (tabModel, tea.Cmd) {
 	t.pendingCommand = chatcmd.None
 	t.pendingApproval = nil
 	t.approvalInFlight = false
+	t.approvalWorkID = ""
+	t.approvalNotice = ""
 	t.running = false
 	t.stopping = false
 	t.target = ""
@@ -706,6 +715,8 @@ func (t *chatTab) beginTurn(prompt string) (tabModel, tea.Cmd) {
 	drainRuntimeEvents(t.eventCh)
 	t.closeCommandMenu()
 	t.activeTurn++
+	t.approvalWorkID = ""
+	t.approvalNotice = ""
 	ctx, cancel := context.WithCancel(context.Background())
 	t.activeTurnID = fmt.Sprintf("turn_%d", t.activeTurn)
 	ctx = telemetry.WithFields(ctx, telemetry.Fields{SessionID: t.sessionID, TurnID: t.activeTurnID})
@@ -932,6 +943,9 @@ func (t *chatTab) renderToolSelection(width int) string {
 		firstNonEmptyText(tool.name, "tool"),
 		action,
 	)
+	if t.approvalNotice != "" {
+		text = t.approvalNotice + " | " + text
+	}
 	return "  " + styleSelectedRow.Render(truncate(text, maxInt(width-4, 16)))
 }
 

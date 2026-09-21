@@ -12,6 +12,7 @@ import (
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
+	"github.com/coolcake/cvkeharness/recovery"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
 )
@@ -31,6 +32,8 @@ func resolveProvider(cfg *config.Config, providerName string) (provider.Provider
 	}
 
 	switch name {
+	case "antigravity":
+		return provider.NewAntigravity(), nil
 	case "codex":
 		return provider.NewCodexFromCLIAuth(), nil
 	case "openrouter":
@@ -120,6 +123,7 @@ func defaultRegistryFromConfig(cfg *config.Config, store *state.Store, mem *memo
 		PromptDumper:         promptDumper,
 		BlockManualApprovals: blockManualApprovals,
 		SecurityPolicy:       &securityPolicy,
+		Recovery:             recoveryOptions(cfg),
 		WebSearch: tools.WebSearchOptions{
 			Enabled:         cfg.WebSearch.Enabled,
 			Provider:        cfg.WebSearch.Provider,
@@ -131,6 +135,29 @@ func defaultRegistryFromConfig(cfg *config.Config, store *state.Store, mem *memo
 			BlockedDomains:  cfg.WebSearch.BlockedDomains,
 		},
 	})
+}
+
+func recoveryOptions(cfg *config.Config) recovery.Options {
+	l := recovery.DefaultLimits()
+	if cfg.Recovery.MaxRepairAttempts != 0 {
+		l.MaxRepairAttempts = cfg.Recovery.MaxRepairAttempts
+	}
+	if cfg.Recovery.MaxFiles != 0 {
+		l.MaxFiles = cfg.Recovery.MaxFiles
+	}
+	if cfg.Recovery.MaxBytes != 0 {
+		l.MaxBytes = cfg.Recovery.MaxBytes
+	}
+	if cfg.Recovery.MaxFileBytes != 0 {
+		l.MaxFileBytes = cfg.Recovery.MaxFileBytes
+	}
+	if cfg.Recovery.MaxAgeSeconds != 0 {
+		l.MaxAgeSeconds = cfg.Recovery.MaxAgeSeconds
+	}
+	if cfg.Recovery.MinFreeBytes != 0 {
+		l.MinFreeBytes = cfg.Recovery.MinFreeBytes
+	}
+	return recovery.Options{Roots: append([]string(nil), cfg.Recovery.Roots...), Limits: l, Services: append([]recovery.NGINXService(nil), cfg.Recovery.Services...), Snapshots: append([]recovery.SnapshotTarget(nil), cfg.Recovery.Snapshots...), SSHServices: append([]recovery.SSHService(nil), cfg.Recovery.SSHServices...), Fleet: cfg.Recovery.Fleet}
 }
 
 func telemetryWriterFromConfig(cfg *config.Config, store *state.Store) *telemetry.Writer {

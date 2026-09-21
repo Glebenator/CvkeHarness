@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="A step-by-step local testing guide: exact CLI commands, expected refusals, Docker fault labs, real VM reboot recovery and evidence to keep.">
+  <title>Test CvkeHarness recovery yourself</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: oklch(0.18 0.009 70);
+      --surface: oklch(0.215 0.01 70);
+      --surface-raised: oklch(0.255 0.012 70);
+      --surface-soft: oklch(0.235 0.018 72);
+      --text: oklch(0.91 0.012 78);
+      --text-strong: oklch(0.96 0.01 78);
+      --muted: oklch(0.72 0.018 72);
+      --faint: oklch(0.57 0.014 72);
+      --line: oklch(0.36 0.014 70);
+      --line-strong: oklch(0.47 0.022 70);
+      --focus: oklch(0.79 0.13 78);
+      --focus-soft: oklch(0.31 0.055 74);
+      --success: oklch(0.78 0.09 145);
+      --success-soft: oklch(0.28 0.035 145);
+      --warning: oklch(0.76 0.12 48);
+      --warning-soft: oklch(0.29 0.045 48);
+      --danger: oklch(0.71 0.13 30);
+      --danger-soft: oklch(0.285 0.052 30);
+      --info: oklch(0.76 0.08 228);
+      --info-soft: oklch(0.285 0.035 228);
+      --code: oklch(0.16 0.009 70);
+      --page: 1200px;
+      --radius: 10px;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--text);
+      font: 16px/1.65 var(--sans);
+      text-rendering: optimizeLegibility;
+    }
+    a { color: var(--info); text-underline-offset: 3px; }
+    a:hover { color: var(--text-strong); }
+    :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    code, pre, kbd { font-family: var(--mono); }
+    h1, h2, h3, p, li, figcaption, .eyebrow, .meta-strip span { overflow-wrap: anywhere; }
+    code {
+      padding: 0.08em 0.35em;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--code);
+      color: var(--text-strong);
+      font-size: 0.88em;
+      overflow-wrap: anywhere;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 100;
+      top: 12px;
+      left: 12px;
+      padding: 10px 14px;
+      border-radius: 6px;
+      background: var(--focus);
+      color: var(--canvas);
+      font-weight: 800;
+      transform: translateY(-160%);
+    }
+    .skip-link:focus { transform: translateY(0); }
+
+    .shell { width: min(calc(100% - 40px), var(--page)); margin: 0 auto; }
+    .masthead {
+      padding: 62px 0 38px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+    .eyebrow,
+    .section-kicker,
+    .sidebar-title,
+    .category-row th {
+      color: var(--focus);
+      font-family: var(--mono);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.13em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 920px;
+      margin: 12px 0 14px;
+      color: var(--text-strong);
+      font-size: clamp(2.35rem, 5vw, 3.5rem);
+      line-height: 1.02;
+      letter-spacing: -0.048em;
+    }
+    .lede {
+      max-width: 780px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 1.12rem;
+      line-height: 1.6;
+    }
+    .meta-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 28px;
+      margin-top: 28px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 0.84rem;
+    }
+    .meta-strip strong { color: var(--text-strong); }
+
+    .document-layout {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      gap: 60px;
+      align-items: start;
+      padding: 46px 0 90px;
+    }
+    .sidebar {
+      position: sticky;
+      top: 28px;
+      max-height: calc(100vh - 56px);
+      overflow: auto;
+    }
+    .sidebar-title { margin: 0 0 16px; color: var(--faint); }
+    .sidebar ol { margin: 0; padding: 0; list-style: none; counter-reset: section; }
+    .sidebar li { counter-increment: section; }
+    .sidebar a {
+      display: block;
+      padding: 7px 10px;
+      border-left: 2px solid transparent;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .sidebar a::before { content: counter(section) ". "; color: var(--faint); }
+    .sidebar a:hover,
+    .sidebar a[aria-current="location"] {
+      border-left-color: var(--focus);
+      background: var(--surface-soft);
+      color: var(--text-strong);
+    }
+    .mobile-nav {
+      display: none;
+      margin: 24px 0 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+    .mobile-nav summary {
+      min-height: 48px;
+      padding: 12px 14px;
+      color: var(--text-strong);
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .mobile-nav ol { columns: 2; margin: 0; padding: 0 32px 16px; }
+    .mobile-nav li { margin: 6px 0; break-inside: avoid; }
+    .mobile-nav a { color: var(--muted); }
+
+    main { min-width: 0; }
+    section { scroll-margin-top: 24px; margin-bottom: 88px; }
+    section:last-child { margin-bottom: 0; }
+    .section-kicker { margin: 0 0 8px; }
+    h2 {
+      max-width: 760px;
+      margin: 0 0 14px;
+      color: var(--text-strong);
+      font-size: clamp(1.75rem, 3vw, 2.15rem);
+      line-height: 1.12;
+      letter-spacing: -0.032em;
+    }
+    h3 { margin: 30px 0 8px; color: var(--text-strong); font-size: 1.08rem; }
+    p { max-width: 74ch; margin: 0 0 16px; }
+    ul, ol { padding-left: 1.3rem; }
+    li { margin: 6px 0; }
+
+    .principles {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin: 28px 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .principle { padding: 20px; background: var(--surface); }
+    .principle:nth-child(odd) { border-right: 1px solid var(--line); }
+    .principle:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
+    .principle strong { display: block; margin-bottom: 6px; color: var(--text-strong); }
+    .principle p { margin: 0; color: var(--muted); font-size: 0.94rem; }
+
+    .callout {
+      margin: 24px 0;
+      padding: 17px 18px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+    }
+    .callout strong { display: block; margin-bottom: 4px; color: var(--text-strong); }
+    .callout.info { border-color: var(--info); background: var(--info-soft); }
+    .callout.warning { border-color: var(--warning); background: var(--warning-soft); }
+    .callout.danger { border-color: var(--danger); background: var(--danger-soft); }
+    .callout.success { border-color: var(--success); background: var(--success-soft); }
+
+    .diagram-shell {
+      margin: 28px 0;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow-x: auto;
+    }
+    .diagram-shell svg { display: block; width: 100%; min-width: 720px; height: auto; }
+    .diagram-shell figcaption { margin-top: 12px; color: var(--muted); font-size: 0.9rem; }
+    .diagram-node { fill: var(--surface-raised); stroke: var(--line-strong); stroke-width: 1.5; }
+    .diagram-node.accent { fill: var(--focus-soft); stroke: var(--focus); }
+    .diagram-node.success { fill: var(--success-soft); stroke: var(--success); }
+    .diagram-line { fill: none; stroke: var(--line-strong); stroke-width: 2; }
+    .diagram-title { fill: var(--text-strong); font: 700 15px var(--sans); }
+    .diagram-copy { fill: var(--muted); font: 12px var(--sans); }
+
+    .table-wrap {
+      max-width: 100%;
+      margin: 24px 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow-x: auto;
+    }
+    table { width: 100%; min-width: 680px; border-collapse: collapse; background: var(--surface); }
+    caption { padding: 13px 15px; color: var(--muted); text-align: left; }
+    th, td { padding: 12px 14px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
+    thead th {
+      background: var(--surface-raised);
+      color: var(--text-strong);
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    tbody th { color: var(--text-strong); }
+    .category-row th { background: var(--code); }
+    .status { white-space: nowrap; font-family: var(--mono); font-size: 0.78rem; font-weight: 800; text-transform: uppercase; }
+    .status::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: currentColor; }
+    .status.success { color: var(--success); }
+    .status.warning { color: var(--warning); }
+    .status.danger { color: var(--danger); }
+    .status.info { color: var(--info); }
+
+    pre {
+      max-width: 100%;
+      margin: 20px 0;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--code);
+      color: var(--text);
+      overflow: auto;
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+    pre code { padding: 0; border: 0; background: transparent; font-size: inherit; }
+
+    footer {
+      padding: 28px 0 42px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+    @media (max-width: 900px) {
+      .masthead { padding-top: 46px; }
+      .document-layout { display: block; padding-top: 28px; }
+      .sidebar { display: none; }
+      .mobile-nav { display: block; }
+      main { padding-top: 52px; }
+      section { margin-bottom: 68px; }
+    }
+    @media (max-width: 580px) {
+      .shell { width: min(calc(100% - 28px), var(--page)); }
+      .masthead { padding: 38px 0 28px; }
+      h1 { font-size: clamp(2rem, 11vw, 2.65rem); }
+      .lede { font-size: 1rem; }
+      .meta-strip { display: grid; gap: 7px; }
+      .mobile-nav ol { columns: 1; }
+      .principles { grid-template-columns: 1fr; }
+      .principle:nth-child(odd) { border-right: 0; }
+      .principle:not(:last-child) { border-bottom: 1px solid var(--line); }
+      .diagram-shell { padding: 12px; }
+    }
+    @media print {
+      :root {
+        color-scheme: light;
+        --canvas: #ffffff;
+        --surface: #f7f4ef;
+        --surface-raised: #eeeae3;
+        --surface-soft: #f2eee7;
+        --text: #26231f;
+        --text-strong: #12100e;
+        --muted: #58524b;
+        --faint: #756e65;
+        --line: #c8c0b6;
+        --line-strong: #9f9589;
+        --focus: #b46a00;
+        --focus-soft: #f7e6c7;
+        --success: #307847;
+        --success-soft: #e7f1e8;
+        --warning: #b85d26;
+        --warning-soft: #f7e6d8;
+        --danger: #b44736;
+        --danger-soft: #f6e4e0;
+        --info: #2f6680;
+        --info-soft: #e3eef2;
+        --code: #f1ede6;
+      }
+      @page { margin: 0.52in; }
+      body { font-size: 10.5pt; }
+      .shell { width: 100%; max-width: none; }
+      .masthead { padding: 18px 0 22px; }
+      .sidebar, .mobile-nav, .skip-link { display: none !important; }
+      .document-layout { display: block; padding: 26px 0 0; }
+      main { padding: 0; }
+      section { margin-bottom: 36px; break-inside: auto; }
+      h1 { font-size: 30pt; }
+      h2 { font-size: 20pt; break-after: avoid; }
+      h3, .callout, .principle, tr { break-inside: avoid; }
+      .diagram-shell { overflow: visible; }
+      .diagram-shell svg { min-width: 0; }
+      .table-wrap { overflow: visible; }
+      table { min-width: 0; font-size: 8.5pt; }
+      a { color: inherit; }
+    }
+
+    .document-layout > div { min-width: 0; }
+    h1 { max-width: 800px; }
+    .command { margin: 22px 0; }
+    .command-label { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--muted); font: 0.75rem var(--mono); text-transform:uppercase; letter-spacing:0.045em; }
+    .command pre { margin-top: 6px; }
+    button { min-height:44px; padding:8px 14px; border:1px solid var(--line-strong); border-radius:6px; background:var(--surface-raised); color:var(--text-strong); font:600 0.82rem var(--sans); cursor:pointer; }
+    button:hover { border-color:var(--focus); }
+    .checklist { margin:24px 0 8px; padding:18px; border:1px solid var(--line); border-radius:10px; background:var(--surface); }
+    .checklist legend { padding:0 8px; font-weight:700; color:var(--text-strong); }
+    .checklist label { display:flex; align-items:flex-start; gap:12px; min-height:44px; padding:8px 0; cursor:pointer; }
+    input[type=checkbox] { flex:none; width:19px; height:19px; margin-top:4px; accent-color:var(--focus); }
+    .small, .sources { color:var(--muted); font-size:0.92rem; }
+    .extra { border-top:1px solid var(--line); border-bottom:1px solid var(--line); padding:10px 0; margin-top:24px; }
+    .extra summary { cursor:pointer; min-height:44px; padding:10px 0; font-weight:700; color:var(--text-strong); }
+    .mobile-nav a { display:block; min-height:44px; padding:8px 0; }
+    .screen-reader { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    @media print {
+      .copy, .screen-reader { display:none !important; }
+      html { scroll-behavior:auto; }
+      h3, .section-kicker, .command-label { break-after:avoid; }
+      .command { break-inside:avoid; }
+      pre { white-space:pre-wrap; overflow:visible; overflow-wrap:anywhere; font-size:8pt; padding:12px; }
+      .command-label { font-size:8pt; }
+      .checklist { break-inside:avoid; }
+      .checklist label { min-height:0; padding:3px 0; }
+      .checklist input { width:12px; height:12px; }
+      .extra { display:none; }
+      .meta-strip { font-size:8pt; }
+      #route .table-wrap, #docker .table-wrap, #vm .table-wrap { break-inside:avoid; }
+      .masthead { background:var(--surface); }
+      * { print-color-adjust:exact; -webkit-print-color-adjust:exact; }
+    }
+
+  </style>
+</head>
+<body>
+<a class="skip-link" href="#main-content">Skip to content</a>
+<header class="masthead"><div class="shell"><div class="eyebrow">CvkeHarness · Operator field guide</div>
+<h1>Test recovery yourself.</h1><p class="lede">Make a controlled change. Verify the refusal paths. Restore the original—even after the controller disappears.</p>
+<div class="meta-strip" aria-label="Document metadata"><span><strong>Start</strong> Disposable files</span><span><strong>Login</strong> Not required</span><span><strong>Scope</strong> Local working tree</span><span><strong>Checked</strong> 13 Sep 2026</span></div></div></header>
+<div class="shell document-layout"><aside class="sidebar" aria-label="Documentation sections"><p class="sidebar-title">Your test sequence</p><nav aria-label="Section navigation"><ol><li><a href="#route">Choose your test route</a></li><li><a href="#setup">Build an isolated practice copy</a></li><li><a href="#restore">Change a file, then undo it</a></li><li><a href="#refusals">Check conflicts and cancellation</a></li><li><a href="#deletion">Test quarantine and protected files</a></li><li><a href="#math">Make the calculator catch a mistake</a></li><li><a href="#console">Verify the agent approval workflow</a></li><li><a href="#docker">Run the disposable Docker fault labs</a></li><li><a href="#vm">Test real reboot and snapshot recovery</a></li><li><a href="#gate">Keep a complete result</a></li><li><a href="#troubleshooting">Handle failure and clean up</a></li><li><a href="#scope">Decide what the results justify</a></li></ol></nav></aside><div>
+<details class="mobile-nav"><summary>Jump to a step</summary><nav aria-label="Mobile section navigation"><ol><li><a href="#route">Choose your test route</a></li><li><a href="#setup">Build an isolated practice copy</a></li><li><a href="#restore">Change a file, then undo it</a></li><li><a href="#refusals">Check conflicts and cancellation</a></li><li><a href="#deletion">Test quarantine and protected files</a></li><li><a href="#math">Make the calculator catch a mistake</a></li><li><a href="#console">Verify the agent approval workflow</a></li><li><a href="#docker">Run the disposable Docker fault labs</a></li><li><a href="#vm">Test real reboot and snapshot recovery</a></li><li><a href="#gate">Keep a complete result</a></li><li><a href="#troubleshooting">Handle failure and clean up</a></li><li><a href="#scope">Decide what the results justify</a></li></ol></nav></details>
+<main id="main-content" tabindex="-1"><section id="route" aria-labelledby="route-title"><p class="section-kicker">01 / Self-test</p><h2 id="route-title">Choose your test route</h2>
+<p>Start with the temporary-file walkthrough. You will see CvkeHarness prepare a change, refuse a wrong approval, apply it, and restore the original with a fresh process. Then test the failure paths. Save Docker and VM testing for a second pass if you only have a short session.</p>
+<div class="table-wrap" role="region" aria-label="Test routes" tabindex="0"><table><caption>Recommended order · time allowances are estimates, excluding downloads</caption><thead><tr><th scope="col">Route</th><th scope="col">What you learn</th><th scope="col">Allow</th></tr></thead><tbody>
+<tr><th scope="row">1. Manual files · steps 2–6</th><td>Real CLI, exact approval, rollback, conflicts, protected paths, checked math. No provider or Docker required.</td><td>20–30 min</td></tr>
+<tr><th scope="row">2. Console + Docker · steps 7–8</th><td>Agent approval plumbing, process death, low disk space, NGINX and remote batches.</td><td>15–30 min</td></tr>
+<tr><th scope="row">3. Real VM + full gate · steps 9–10</th><td>SSH watchdog, genuine guest reboot and native Btrfs restore.</td><td>20–40 min</td></tr>
+</tbody></table></div>
+<p><strong>Yes, you should test this yourself.</strong> The useful evidence is whether the actual file, service or guest returns to the expected state—even when the model or controller is gone. A success message alone is insufficient.</p>
+<div class="callout warning"><strong>Keep the first experiment disposable.</strong> These steps use invented files and owned lab machines. Supported recovery adapters have specific limits; arbitrary shell commands are not automatically reversible. Do not substitute your real SSH configuration, credentials, database or home directory for a fixture.</div>
+<p>Run the commands in your own terminal. This is a CLI/TUI project; GUI automation is not required. Automated tests compile CvkeHarness and call its actual CLI, and the Console test drives a real pseudo-terminal. The VM tests reach the guest through generated lab SSH keys.</p>
+</section><section id="setup" aria-labelledby="setup-title"><p class="section-kicker">02 / Self-test</p><h2 id="setup-title">Build an isolated practice copy</h2>
+<p>Open a terminal in your current checkout. Start a dedicated <code>bash</code> shell by typing <code>bash</code>; paste the following blocks there, in order. They require Go 1.26.2 or a compatible newer toolchain and Python 3. Keep this shell open so its variables remain available.</p>
+<p>The build uses your existing Go dependency cache. The running app gets an empty temporary home, its own journal and one permitted target directory. No login or setup wizard is needed.</p>
+<div class="command"><div class="command-label"><span>prepare workspace</span><button type="button" class="copy" data-copy="prepare-workspace" aria-label="Copy prepare workspace">Copy</button></div><pre tabindex="0"><code id="prepare-workspace">set -euo pipefail
+umask 077
+cd /Users/coolcake/workspace/goProjects/CvkeHarness
+go version
+python3 --version
+
+lab_repo=&quot;$PWD&quot;
+lab_dir=$(mktemp -d &quot;${TMPDIR:-/tmp}/cvkeharness-selftest.XXXXXX&quot;)
+lab_dir=$(cd &quot;$lab_dir&quot; &amp;&amp; pwd -P)
+lab_home=&quot;$lab_dir/home&quot;
+lab_target=&quot;$lab_dir/target&quot;
+lab_state=&quot;$lab_dir/journal/state.db&quot;
+lab_bin=&quot;$lab_dir/cvkeharness&quot;
+mkdir -p &quot;$lab_home&quot; &quot;$lab_target&quot; &quot;$lab_dir/journal&quot;
+printf &#x27;CvkeHarness self-test only\n&#x27; &gt; &quot;$lab_dir/SELFTEST&quot;
+go build -o &quot;$lab_bin&quot; .
+printf &#x27;Your practice directory: %s\n&#x27; &quot;$lab_dir&quot;
+</code></pre></div>
+<p>Define three small helpers. <code>cvk</code> always uses the practice home and state; <code>json_field</code> extracts an exact field; <code>make_request</code> writes valid JSON without hand-escaping paths.</p>
+<div class="command"><div class="command-label"><span>define helpers</span><button type="button" class="copy" data-copy="define-helpers" aria-label="Copy define helpers">Copy</button></div><pre tabindex="0"><code id="define-helpers">cvk() {
+  HOME=&quot;$lab_home&quot; &quot;$lab_bin&quot; recovery \
+    --state &quot;$lab_state&quot; --root &quot;$lab_target&quot; &quot;$@&quot;
+}
+json_field() {
+  python3 -c &#x27;import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])&#x27; &quot;$1&quot; &quot;$2&quot;
+}
+make_request() {
+  python3 - &quot;$@&quot; &lt;&lt;&#x27;PY&#x27;
+import json, sys
+change = {&quot;action&quot;: sys.argv[1], &quot;path&quot;: sys.argv[2]}
+if change[&quot;action&quot;] != &quot;delete&quot;:
+    change[&quot;content&quot;] = sys.argv[3]
+if change[&quot;action&quot;] == &quot;create&quot;:
+    change[&quot;mode&quot;] = 384  # 0600 in octal
+print(json.dumps({&quot;changes&quot;: [change]}))
+PY
+}
+cvk identity
+{
+  printf &#x27;set -euo pipefail\n&#x27;
+  declare -p lab_repo lab_dir lab_home lab_target lab_state lab_bin
+  declare -f cvk json_field make_request
+} &gt; &quot;$lab_dir/session.sh&quot;
+printf &#x27;To resume in a new Bash shell, run: source %q\n&#x27; &quot;$lab_dir/session.sh&quot;
+</code></pre></div>
+<p><span class="status success">Expected</span> A compiled binary and JSON containing a <code>target</code> hash. All practice paths should resolve inside the printed directory. Canonical paths matter: macOS often maps <code>/tmp</code> to <code>/private/tmp</code>, which is why the setup uses <code>pwd -P</code>.</p>
+<p>Save the printed <code>source …/session.sh</code> command; it restores these paths and helpers in a new Bash shell. If a positive step errors, stop that sequence and read the error. This dedicated shell uses <code>set -e</code> to avoid continuing with missing IDs or failed setup. Only explicitly marked refusal tests are expected to return an error. Starting step 2 again creates a new independent practice directory.</p>
+</section><section id="restore" aria-labelledby="restore-title"><p class="section-kicker">03 / Self-test</p><h2 id="restore-title">Change a file, then undo it</h2>
+<h3>3A. Prepare and review</h3><p>Create the original, save an independent reference, and prepare a replacement. Preparation captures backups; it should leave the target unchanged.</p>
+<div class="command"><div class="command-label"><span>prepare change</span><button type="button" class="copy" data-copy="prepare-change" aria-label="Copy prepare change">Copy</button></div><pre tabindex="0"><code id="prepare-change">printf &#x27;enabled=false\n&#x27; &gt; &quot;$lab_target/settings.conf&quot;
+cp -p &quot;$lab_target/settings.conf&quot; &quot;$lab_dir/original.conf&quot;
+make_request replace &quot;$lab_target/settings.conf&quot; $&#x27;enabled=true\n&#x27; \
+  &gt; &quot;$lab_dir/change.json&quot;
+cvk prepare --request &quot;$lab_dir/change.json&quot; &gt; &quot;$lab_dir/plan.json&quot;
+lab_op=$(json_field &quot;$lab_dir/plan.json&quot; id)
+lab_digest=$(json_field &quot;$lab_dir/plan.json&quot; digest)
+cvk inspect &quot;$lab_op&quot;
+cmp &quot;$lab_dir/original.conf&quot; &quot;$lab_target/settings.conf&quot;
+test &quot;$(json_field &quot;$lab_dir/plan.json&quot; status)&quot; = ready
+</code></pre></div>
+<p><span class="status success">Expected</span> <code>status: ready</code>, exactly one <code>replace</code> entry, and your practice path. <code>cmp</code> prints nothing when the bytes match. Review the request’s candidate text, the path, before/after hashes and the returned digest before continuing.</p>
+<h3>3B. Prove that a wrong approval is refused</h3>
+<div class="command"><div class="command-label"><span>refuse wrong digest</span><button type="button" class="copy" data-copy="refuse-wrong-digest" aria-label="Copy refuse wrong digest">Copy</button></div><pre tabindex="0"><code id="refuse-wrong-digest">if cvk apply &quot;$lab_op&quot; --confirm wrong-digest &gt; &quot;$lab_dir/wrong-digest.log&quot; 2&gt;&amp;1; then
+  printf &#x27;FAIL: wrong digest was accepted\n&#x27;
+  exit 1
+fi
+cat &quot;$lab_dir/wrong-digest.log&quot;
+cmp &quot;$lab_dir/original.conf&quot; &quot;$lab_target/settings.conf&quot;
+</code></pre></div>
+<p><span class="status success">Expected refusal</span> An error saying the review digest or current policy does not match, and unchanged file contents. An unrelated error such as “command not found” is not a passing refusal.</p>
+<h3>3C. Apply the reviewed plan</h3><p>Copying this next block authorizes the exact stored digest. Prepared plans expire after 15 minutes by default; if yours expired, prepare again and review the new plan.</p>
+<div class="command"><div class="command-label"><span>apply change</span><button type="button" class="copy" data-copy="apply-change" aria-label="Copy apply change">Copy</button></div><pre tabindex="0"><code id="apply-change">cvk apply &quot;$lab_op&quot; --confirm &quot;$lab_digest&quot; &gt; &quot;$lab_dir/applied.json&quot;
+test &quot;$(json_field &quot;$lab_dir/applied.json&quot; status)&quot; = committed
+cat &quot;$lab_target/settings.conf&quot;
+printf &#x27;enabled=true\n&#x27; | cmp - &quot;$lab_target/settings.conf&quot;
+cvk inspect &quot;$lab_op&quot;
+</code></pre></div>
+<p><span class="status success">Expected</span> <code>committed</code>, actual contents <code>enabled=true</code>, and capacity/verification evidence in the inspection output.</p>
+<h3>3D. Restore without a model or configured roots</h3><p>Run a fresh CLI process with just the original journal path. Recovery remains tied to the recorded machine, user and manifest. No provider is initialized.</p>
+<div class="command"><div class="command-label"><span>restore offline</span><button type="button" class="copy" data-copy="restore-offline" aria-label="Copy restore offline">Copy</button></div><pre tabindex="0"><code id="restore-offline">HOME=&quot;$lab_home&quot; &quot;$lab_bin&quot; recovery --state &quot;$lab_state&quot; \
+  recover &quot;$lab_op&quot; --confirm &quot;$lab_digest&quot; &gt; &quot;$lab_dir/restored.json&quot;
+test &quot;$(json_field &quot;$lab_dir/restored.json&quot; status)&quot; = recovered
+cmp &quot;$lab_dir/original.conf&quot; &quot;$lab_target/settings.conf&quot;
+cat &quot;$lab_target/settings.conf&quot;
+</code></pre></div>
+<p><span class="status success">Expected</span> <code>recovered</code> and byte-for-byte original contents, <code>enabled=false</code>. Keep the journal and its <code>recovery/</code> directory together; they contain the recovery record and private artifacts.</p>
+</section><section id="refusals" aria-labelledby="refusals-title"><p class="section-kicker">04 / Self-test</p><h2 id="refusals-title">Check conflicts and cancellation</h2>
+<p>Now simulate another program writing a file after CvkeHarness changes it. Recovery should preserve that newer edit and report failure. This is a different fixture so the successful example remains intact.</p>
+<div class="command"><div class="command-label"><span>prepare conflict</span><button type="button" class="copy" data-copy="prepare-conflict" aria-label="Copy prepare conflict">Copy</button></div><pre tabindex="0"><code id="prepare-conflict">printf &#x27;original\n&#x27; &gt; &quot;$lab_target/conflict.conf&quot;
+make_request replace &quot;$lab_target/conflict.conf&quot; $&#x27;agent-change\n&#x27; \
+  &gt; &quot;$lab_dir/conflict-request.json&quot;
+cvk prepare --request &quot;$lab_dir/conflict-request.json&quot; &gt; &quot;$lab_dir/conflict-plan.json&quot;
+lab_conflict_op=$(json_field &quot;$lab_dir/conflict-plan.json&quot; id)
+lab_conflict_digest=$(json_field &quot;$lab_dir/conflict-plan.json&quot; digest)
+cvk inspect &quot;$lab_conflict_op&quot;
+</code></pre></div><p>Review the single <code>conflict.conf</code> replacement, then continue.</p>
+<div class="command"><div class="command-label"><span>preserve conflicting writer</span><button type="button" class="copy" data-copy="preserve-conflicting-writer" aria-label="Copy preserve conflicting writer">Copy</button></div><pre tabindex="0"><code id="preserve-conflicting-writer">cvk apply &quot;$lab_conflict_op&quot; --confirm &quot;$lab_conflict_digest&quot; &gt; &quot;$lab_dir/conflict-applied.json&quot;
+printf &#x27;human-change\n&#x27; &gt; &quot;$lab_target/conflict.conf&quot;
+if cvk recover &quot;$lab_conflict_op&quot; --confirm &quot;$lab_conflict_digest&quot; \
+    &gt; &quot;$lab_dir/conflict-refusal.log&quot; 2&gt;&amp;1; then
+  printf &#x27;FAIL: conflicting recovery unexpectedly succeeded\n&#x27;
+  exit 1
+fi
+cat &quot;$lab_dir/conflict-refusal.log&quot;
+printf &#x27;human-change\n&#x27; | cmp - &quot;$lab_target/conflict.conf&quot;
+cvk inspect &quot;$lab_conflict_op&quot;
+</code></pre></div>
+<p><span class="status success">Expected refusal</span> <code>recovery_failed</code>, a restoration-conflict error, and <code>human-change</code> still on disk. Leave this example unresolved as evidence. Do not “fix” the test by forcing an overwrite.</p>
+<h3>Cancel a plan before it runs</h3><p>A still-ready operation can be recovered as a verified cancellation. A delayed application of that same operation must then fail.</p>
+<div class="command"><div class="command-label"><span>cancel ready plan</span><button type="button" class="copy" data-copy="cancel-ready-plan" aria-label="Copy cancel ready plan">Copy</button></div><pre tabindex="0"><code id="cancel-ready-plan">printf &#x27;unchanged\n&#x27; &gt; &quot;$lab_target/cancel.conf&quot;
+make_request replace &quot;$lab_target/cancel.conf&quot; $&#x27;should-not-run\n&#x27; \
+  &gt; &quot;$lab_dir/cancel-request.json&quot;
+cvk prepare --request &quot;$lab_dir/cancel-request.json&quot; &gt; &quot;$lab_dir/cancel-plan.json&quot;
+lab_cancel_op=$(json_field &quot;$lab_dir/cancel-plan.json&quot; id)
+lab_cancel_digest=$(json_field &quot;$lab_dir/cancel-plan.json&quot; digest)
+cvk inspect &quot;$lab_cancel_op&quot;
+</code></pre></div><p>Review the plan, then authorize cancellation of that exact operation.</p>
+<div class="command"><div class="command-label"><span>verify cancellation</span><button type="button" class="copy" data-copy="verify-cancellation" aria-label="Copy verify cancellation">Copy</button></div><pre tabindex="0"><code id="verify-cancellation">cvk recover &quot;$lab_cancel_op&quot; --confirm &quot;$lab_cancel_digest&quot; &gt; &quot;$lab_dir/cancelled.json&quot;
+test &quot;$(json_field &quot;$lab_dir/cancelled.json&quot; status)&quot; = recovered
+if cvk apply &quot;$lab_cancel_op&quot; --confirm &quot;$lab_cancel_digest&quot; \
+    &gt; &quot;$lab_dir/cancel-refusal.log&quot; 2&gt;&amp;1; then
+  printf &#x27;FAIL: cancelled plan was applied\n&#x27;
+  exit 1
+fi
+cat &quot;$lab_dir/cancel-refusal.log&quot;
+printf &#x27;unchanged\n&#x27; | cmp - &quot;$lab_target/cancel.conf&quot;
+</code></pre></div>
+<p><span class="status success">Expected</span> Cancellation records <code>recovered</code>; the later apply is refused because that operation is no longer ready. The file remains <code>unchanged</code>.</p>
+</section><section id="deletion" aria-labelledby="deletion-title"><p class="section-kicker">05 / Self-test</p><h2 id="deletion-title">Test quarantine and protected files</h2>
+<h3>5A. Delete a disposable file through the typed adapter</h3><p>Here “delete” means quarantine on the same filesystem. It removes the visible file but retains recovery data; it does not reclaim disk space.</p>
+<div class="command"><div class="command-label"><span>prepare quarantine</span><button type="button" class="copy" data-copy="prepare-quarantine" aria-label="Copy prepare quarantine">Copy</button></div><pre tabindex="0"><code id="prepare-quarantine">printf &#x27;keep this original\n&#x27; &gt; &quot;$lab_target/delete-me.txt&quot;
+cp -p &quot;$lab_target/delete-me.txt&quot; &quot;$lab_dir/delete-original.txt&quot;
+make_request delete &quot;$lab_target/delete-me.txt&quot; &gt; &quot;$lab_dir/delete-request.json&quot;
+cvk prepare --request &quot;$lab_dir/delete-request.json&quot; &gt; &quot;$lab_dir/delete-plan.json&quot;
+lab_delete_op=$(json_field &quot;$lab_dir/delete-plan.json&quot; id)
+lab_delete_digest=$(json_field &quot;$lab_dir/delete-plan.json&quot; digest)
+cvk inspect &quot;$lab_delete_op&quot;
+</code></pre></div><p>Review the single delete entry and its quarantine location inside your practice target.</p>
+<div class="command"><div class="command-label"><span>quarantine and restore</span><button type="button" class="copy" data-copy="quarantine-and-restore" aria-label="Copy quarantine and restore">Copy</button></div><pre tabindex="0"><code id="quarantine-and-restore">cvk apply &quot;$lab_delete_op&quot; --confirm &quot;$lab_delete_digest&quot; &gt; &quot;$lab_dir/deleted.json&quot;
+test &quot;$(json_field &quot;$lab_dir/deleted.json&quot; status)&quot; = committed
+test ! -e &quot;$lab_target/delete-me.txt&quot;
+cvk recover &quot;$lab_delete_op&quot; --confirm &quot;$lab_delete_digest&quot; &gt; &quot;$lab_dir/undeleted.json&quot;
+test &quot;$(json_field &quot;$lab_dir/undeleted.json&quot; status)&quot; = recovered
+cmp &quot;$lab_dir/delete-original.txt&quot; &quot;$lab_target/delete-me.txt&quot;
+</code></pre></div>
+<p><span class="status success">Expected</span> The file disappears after apply and returns with the original bytes after recovery.</p>
+<h3>5B. Try a synthetic sensitive path</h3><p>This creates a fake <code>.ssh</code> directory inside the allowed practice root. It contains no credentials. Preparation should still refuse the protected path.</p>
+<div class="command"><div class="command-label"><span>refuse protected path</span><button type="button" class="copy" data-copy="refuse-protected-path" aria-label="Copy refuse protected path">Copy</button></div><pre tabindex="0"><code id="refuse-protected-path">mkdir &quot;$lab_target/.ssh&quot;
+printf &#x27;synthetic sentinel; not a key\n&#x27; &gt; &quot;$lab_target/.ssh/sentinel&quot;
+make_request delete &quot;$lab_target/.ssh/sentinel&quot; &gt; &quot;$lab_dir/protected-request.json&quot;
+if cvk prepare --request &quot;$lab_dir/protected-request.json&quot; \
+    &gt; &quot;$lab_dir/protected-refusal.log&quot; 2&gt;&amp;1; then
+  printf &#x27;FAIL: protected path was accepted\n&#x27;
+  exit 1
+fi
+cat &quot;$lab_dir/protected-refusal.log&quot;
+printf &#x27;synthetic sentinel; not a key\n&#x27; | cmp - &quot;$lab_target/.ssh/sentinel&quot;
+</code></pre></div>
+<p><span class="status success">Expected refusal</span> A protected-path error and unchanged sentinel. This is evidence about the typed recovery boundary. It does not prove that every arbitrary shell program is unable to touch a sensitive file.</p>
+</section><section id="math" aria-labelledby="math-title"><p class="section-kicker">06 / Self-test</p><h2 id="math-title">Make the calculator catch a mistake</h2>
+<p>Check “75% of 8 GiB is 6000 MiB.” The correct result is 6144 MiB. The calculator uses exact rational arithmetic, explicit units and a requested rounding rule.</p>
+<div class="command"><div class="command-label"><span>reject wrong math</span><button type="button" class="copy" data-copy="reject-wrong-math" aria-label="Copy reject wrong math">Copy</button></div><pre tabindex="0"><code id="reject-wrong-math">cat &gt; &quot;$lab_dir/math.json&quot; &lt;&lt;&#x27;JSON&#x27;
+{
+  &quot;operation&quot;: &quot;multiply&quot;,
+  &quot;left&quot;: {&quot;value&quot;: &quot;75&quot;, &quot;unit&quot;: &quot;%&quot;},
+  &quot;right&quot;: {&quot;value&quot;: &quot;8&quot;, &quot;unit&quot;: &quot;GiB&quot;},
+  &quot;output_unit&quot;: &quot;MiB&quot;,
+  &quot;rounding&quot;: &quot;exact&quot;,
+  &quot;expected&quot;: &quot;6000&quot;
+}
+JSON
+if cvk calculate --request &quot;$lab_dir/math.json&quot; &gt; &quot;$lab_dir/math-refusal.log&quot; 2&gt;&amp;1; then
+  printf &#x27;FAIL: incorrect expected result was accepted\n&#x27;
+  exit 1
+fi
+cat &quot;$lab_dir/math-refusal.log&quot;
+</code></pre></div>
+<p><span class="status success">Expected refusal</span> Computed result <code>6144</code> with a mismatch error. Then correct the expected value:</p>
+<div class="command"><div class="command-label"><span>accept correct math</span><button type="button" class="copy" data-copy="accept-correct-math" aria-label="Copy accept correct math">Copy</button></div><pre tabindex="0"><code id="accept-correct-math">python3 - &quot;$lab_dir/math.json&quot; &lt;&lt;&#x27;PY&#x27;
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    request = json.load(f)
+request[&quot;expected&quot;] = &quot;6144&quot;
+with open(path, &quot;w&quot;) as f:
+    json.dump(request, f)
+PY
+cvk calculate --request &quot;$lab_dir/math.json&quot;
+</code></pre></div>
+<p><span class="status success">Expected</span> Success with <code>6144 MiB</code>. This verifies arithmetic, not that a real server has 8 GiB available. File and NGINX executors measure their targets independently. Case matters: <code>GB</code> and <code>GiB</code> are different units.</p>
+</section><section id="console" aria-labelledby="console-title"><p class="section-kicker">07 / Self-test</p><h2 id="console-title">Verify the agent approval workflow</h2>
+<p>Run the automated Console journey from the same shell. The test starts its own local mock model endpoint, temporary home and actual Console in a pseudo-terminal. It approves a prepared operation once, verifies the persisted commit and file, shuts down the mock provider, and restores through the CLI.</p>
+<div class="command"><div class="command-label"><span>test console</span><button type="button" class="copy" data-copy="test-console" aria-label="Copy test console">Copy</button></div><pre tabindex="0"><code id="test-console">cd &quot;$lab_repo&quot;
+go test -count=1 -tags=e2e ./e2e \
+  -run &#x27;^TestRecoveryConsoleApprovalThenOfflineRestore$&#x27; -v \
+  2&gt;&amp;1 | tee &quot;$lab_dir/console-test.log&quot;
+</code></pre></div>
+<p><span class="status success">Expected</span> <code>--- PASS: TestRecoveryConsoleApprovalThenOfflineRestore</code> and final <code>PASS</code>. This validates product integration without paid model calls. It does not establish how reliably a live model chooses the tool, nor visually validate your native terminal.</p>
+<p>For a later live-model trial, use a dedicated test account/configuration and only the disposable root. Ask the model to prepare a typed <code>recovery_manage</code> change, inspect the exact manifest, and approve once. Reject a proposed raw shell edit when evaluating recovery: that would exercise a different execution path. Keep the independent CLI restore available. Antigravity login is not required for any test in this guide.</p>
+</section><section id="docker" aria-labelledby="docker-title"><p class="section-kicker">08 / Self-test</p><h2 id="docker-title">Run the disposable Docker fault labs</h2>
+<p>Start Docker Desktop, then verify the selected context points at your intended local lab daemon. These commands create images, containers and an internal test network in that daemon. Image pulls and the image build need internet access; tests use generated fixtures and no model credentials.</p>
+<div class="command"><div class="command-label"><span>check docker</span><button type="button" class="copy" data-copy="check-docker" aria-label="Copy check docker">Copy</button></div><pre tabindex="0"><code id="check-docker">cd &quot;$lab_repo&quot;
+docker context show
+docker context inspect
+docker version
+docker info
+go env GOOS GOARCH
+</code></pre></div>
+<p>Check the Docker endpoint before continuing; a remote production context is the wrong target. For the complete route, use an ARM64 Go host and ARM64 Linux Docker daemon, as on this Apple Silicon setup. The current guest image/build is packaged for ARM64. An Intel/AMD64 host needs a separately validated VM image adaptation; the file and NGINX container tests can still be run with matching host/daemon architecture.</p>
+<h3>8A. Prepare the images</h3>
+<div class="command"><div class="command-label"><span>prepare images</span><button type="button" class="copy" data-copy="prepare-images" aria-label="Copy prepare images">Copy</button></div><pre tabindex="0"><code id="prepare-images">docker pull alpine:latest
+docker pull nginx:stable-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+bash scripts/build-recovery-vm.sh 2&gt;&amp;1 | tee &quot;$lab_dir/image-build.log&quot;
+docker image inspect cvkeharness-recovery-vm:alpine323 \
+  &gt; &quot;$lab_dir/vm-image.json&quot;
+</code></pre></div>
+<p>The fleet test reuses the VM image’s SSH software even though that test does not boot a guest. The build context is only <code>e2e/labvm/</code>. The NGINX and Alpine VM base references are pinned; the file lab currently uses <code>alpine:latest</code>, and VM packages resolve when built. Save image IDs with results rather than assuming future rebuilds are identical.</p>
+<h3>8B. Run the container suites</h3>
+<div class="command"><div class="command-label"><span>test docker</span><button type="button" class="copy" data-copy="test-docker" aria-label="Copy test docker">Copy</button></div><pre tabindex="0"><code id="test-docker">bash scripts/test-recovery-docker.sh \
+  2&gt;&amp;1 | tee &quot;$lab_dir/docker-tests.log&quot;
+</code></pre></div>
+<div class="table-wrap" role="region" aria-label="Docker pass criteria" tabindex="0"><table><caption>Look for these top-level tests and a final PASS</caption><thead><tr><th scope="col">Test</th><th scope="col">What should survive</th></tr></thead><tbody>
+<tr><th scope="row"><code>TestRecoveryDockerFaultLab</code></th><td>17 cases: process death across journal stages, partial writes, parent symlink swaps, actual full storage, bad math and conflicting restore.</td></tr>
+<tr><th scope="row"><code>TestRecoveryDockerNGINX</code></th><td>11 cases: real NGINX health/reload, resource refusals, failed health rollback, interruptions, conflicting writers and dead master.</td></tr>
+<tr><th scope="row"><code>TestRecoveryDockerFleet</code></th><td>11 cases: serial targets, dropped SSH acknowledgements, pinned identities, aggregate budgets, conflicts and durable repair limits.</td></tr>
+</tbody></table></div>
+<p>File/NGINX containers have no external network. Fleet containers communicate on an owned internal network. None receive host mounts, a host Docker socket, host credentials or published ports. The fleet targets receive only the additional capabilities needed by the lab SSH daemon.</p>
+<p>Fault-injection builds deliberately terminate child processes, sometimes with exit code <code>86</code>. That is expected only where the enclosing test verifies the crash and restored state. A top-level <code>FAIL</code>, missing image or unavailable daemon is a failed test run, not evidence of recovery.</p>
+<details class="extra"><summary>Run only file and NGINX tests</summary><p>This excludes the fleet’s VM-image dependency. Pull Alpine and pinned NGINX first. Host and Docker architecture must match.</p>
+<div class="command"><div class="command-label"><span>test two containers</span><button type="button" class="copy" data-copy="test-two-containers" aria-label="Copy test two containers">Copy</button></div><pre tabindex="0"><code id="test-two-containers">go test -count=1 -tags=e2e,recoverydocker ./e2e \
+  -run &#x27;^TestRecoveryDocker(FaultLab|NGINX)$&#x27; -v \
+  2&gt;&amp;1 | tee &quot;$lab_dir/file-nginx-tests.log&quot;
+</code></pre></div></details>
+</section><section id="vm" aria-labelledby="vm-title"><p class="section-kicker">09 / Self-test</p><h2 id="vm-title">Test real reboot and snapshot recovery</h2>
+<p>A Docker container shares its host kernel, so container restarts alone cannot establish boot recovery. This lab runs a QEMU Linux guest inside an owned container. The tests compare kernel boot IDs and use real ext4/Btrfs guest disks.</p>
+<div class="command"><div class="command-label"><span>test vm</span><button type="button" class="copy" data-copy="test-vm" aria-label="Copy test vm">Copy</button></div><pre tabindex="0"><code id="test-vm">cd &quot;$lab_repo&quot;
+bash scripts/test-recovery-vm.sh \
+  2&gt;&amp;1 | tee &quot;$lab_dir/vm-tests.log&quot;
+</code></pre></div>
+<div class="table-wrap" role="region" aria-label="VM pass criteria" tabindex="0"><table><caption>All three top-level VM tests must pass</caption><thead><tr><th scope="col">Test</th><th scope="col">Evidence</th></tr></thead><tbody>
+<tr><th scope="row"><code>TestRecoveryVMKernelPersistenceAndOfflineRecovery</code></th><td>Separate guest kernel, journal survival across reboot, CLI restoration when normal configuration is unavailable.</td></tr>
+<tr><th scope="row"><code>TestRecoveryVMNativeSnapshots</code></th><td>Real Btrfs checkpoint/restore, crash recovery, conflicting tree refusal and retained displaced tree.</td></tr>
+<tr><th scope="row"><code>TestRecoveryVMSSHGuard</code></th><td>13 cases: fresh-transport confirmation, client death, lost acknowledgement, watchdog restart, conflicting edits and guest reboot before confirmation.</td></tr>
+</tbody></table></div>
+<p>The outer container is capped at 2 GiB and two CPUs; the guest uses 1 GiB and two virtual CPUs. Guest SSH forwards bind only inside the outer container’s loopback namespace. No host disk devices or host directories are passed through. The suite manages its own SSH daemon and disks—you do not need to change your Mac’s SSH service or run host disk-formatting commands.</p>
+<p><span class="status success">Expected</span> Final <code>PASS</code>, with the reboot/watchdog cases actually executed. Timed rollback tests intentionally wait; allow the suite to finish. An unavailable VM image must fail the explicit suite. A skipped or unrun VM route means boot/snapshot recovery is unverified on your setup.</p>
+</section><section id="gate" aria-labelledby="gate-title"><p class="section-kicker">10 / Self-test</p><h2 id="gate-title">Keep a complete result</h2>
+<p>Once individual routes pass, run the combined gate before trusting a release candidate. It runs the local suite, race detector, vet and all compiled CLI/PTY/Docker/VM tests. This repeats earlier checks intentionally; run it after your final code changes.</p>
+<div class="command"><div class="command-label"><span>test full gate</span><button type="button" class="copy" data-copy="test-full-gate" aria-label="Copy test full gate">Copy</button></div><pre tabindex="0"><code id="test-full-gate">cd &quot;$lab_repo&quot;
+git rev-parse HEAD &gt; &quot;$lab_dir/revision.txt&quot;
+git status --short &gt; &quot;$lab_dir/working-tree.txt&quot;
+docker image ls --digests &gt; &quot;$lab_dir/image-inventory.txt&quot;
+bash scripts/test-recovery-all.sh \
+  2&gt;&amp;1 | tee &quot;$lab_dir/full-gate.log&quot;
+printf &#x27;Full gate passed; evidence: %s\n&#x27; &quot;$lab_dir&quot;
+</code></pre></div>
+<p><code>set -o pipefail</code>, enabled in step 2, prevents <code>tee</code> from hiding a failing test command. The final success line should appear only if the gate exits successfully. Record dirty working-tree status alongside the commit: a commit ID alone does not identify uncommitted code.</p>
+<fieldset class="checklist"><legend>Your acceptance checklist</legend>
+<label><input type="checkbox"> Original bytes return after a reviewed replacement.</label>
+<label><input type="checkbox"> Wrong digest, protected path and cancelled operation are refused.</label>
+<label><input type="checkbox"> A conflicting writer’s bytes survive failed recovery.</label>
+<label><input type="checkbox"> Quarantined file returns; wrong arithmetic fails.</label>
+<label><input type="checkbox"> Console and all three Docker suites pass.</label>
+<label><input type="checkbox"> All three VM tests run and pass, including SSH reboot.</label>
+<label><input type="checkbox"> Full gate passes for the code I intend to release.</label>
+<label><input type="checkbox"> Logs saved; no forgotten lab containers or networks.</label>
+</fieldset><p class="small">Checkboxes are a session-only reading aid. They do not run tests and are not saved after you reload the page.</p>
+<p>Keep the directory private. Recovery artifacts can contain original file contents; test logs and paths may identify your machine. Share only the relevant, reviewed excerpts when reporting a failure.</p>
+</section><section id="troubleshooting" aria-labelledby="troubleshooting-title"><p class="section-kicker">11 / Self-test</p><h2 id="troubleshooting-title">Handle failure and clean up</h2>
+<div class="table-wrap" role="region" aria-label="Troubleshooting" tabindex="0"><table><caption>Choose the response that preserves evidence</caption><thead><tr><th scope="col">Symptom</th><th scope="col">Next step</th></tr></thead><tbody>
+<tr><th scope="row">Plan expired / policy changed</th><td>For an unapplied practice change, prepare again and review the new digest. Do not change global policy to make an old approval pass.</td></tr>
+<tr><th scope="row">Apply interrupted / unknown</th><td>Inspect, then reconcile with the original state and ID. Independently read the target before deciding to recover. An error does not mean nothing changed.</td></tr>
+<tr><th scope="row">Restore conflict</th><td>Preserve the newer file and journal. In a real operation, resolve which version should win before deliberate operator recovery. Do not repeat automatic repairs indefinitely.</td></tr>
+<tr><th scope="row">Protected path / symlink / metadata refusal</th><td>Use the fresh canonical practice root and plain fixtures. Do not remove protection or strip metadata from real files to satisfy a demo.</td></tr>
+<tr><th scope="row">Docker cannot connect / missing image</th><td>Start Docker, verify its local context, and finish image preparation. A pull failure is a setup failure. Keep your normal Docker credentials unchanged.</td></tr>
+<tr><th scope="row">Exec format / guest will not boot</th><td>Check Go/daemon architecture and the ARM64 VM requirement. Container-only success is not VM evidence.</td></tr>
+<tr><th scope="row">Socket “operation not permitted”</th><td>The Console fixture requires a local HTTP listener and PTY. An agent sandbox may block these; rerun from your ordinary permitted development terminal and report the environment restriction separately.</td></tr>
+<tr><th scope="row">Unexpected test failure</th><td>Retain the named test, exact error, revision/status, image IDs and full log. Stop the release decision; do not count an unrelated refusal or manual cleanup as a pass.</td></tr>
+</tbody></table></div>
+<h3>Inspect an interrupted manual operation</h3><p>If the shell closed, open a new <code>bash</code> shell and run the <code>source …/session.sh</code> command printed in step 2. The following reloads the original operation from step 3. For another operation, use its own saved plan/inspection; do not mix IDs and digests. Inspection and reconciliation do not restore files.</p>
+<div class="command"><div class="command-label"><span>inspect interruption</span><button type="button" class="copy" data-copy="inspect-interruption" aria-label="Copy inspect interruption">Copy</button></div><pre tabindex="0"><code id="inspect-interruption">lab_op=$(json_field &quot;$lab_dir/plan.json&quot; id)
+lab_digest=$(json_field &quot;$lab_dir/plan.json&quot; digest)
+cvk list
+cvk inspect &quot;$lab_op&quot;
+cvk reconcile &quot;$lab_op&quot;
+cat &quot;$lab_target/settings.conf&quot;
+</code></pre></div>
+<p>After review, use the exact <code>recover</code> command from step 3D if restoration is appropriate. For an interrupted fleet batch, inspect/reconcile its recorded target outcomes; never redispatch an already-dispatched batch just because an acknowledgement was lost. Model recovery has a durable attempt limit; the deliberate operator CLI is the escape hatch after diagnosis.</p>
+<h3>Check for leftover lab resources</h3><p>Normal test cleanup removes each test’s own containers and internal network. If a run was killed, list only recovery-labelled resources:</p>
+<div class="command"><div class="command-label"><span>inspect lab cleanup</span><button type="button" class="copy" data-copy="inspect-lab-cleanup" aria-label="Copy inspect lab cleanup">Copy</button></div><pre tabindex="0"><code id="inspect-lab-cleanup">docker ps -a --filter label=cvkeharness.test=recovery
+docker network ls --filter label=cvkeharness.test=recovery
+printf &#x27;Manual files and logs remain at: %s\n&#x27; &quot;$lab_dir&quot;
+</code></pre></div>
+<p>Before removing a leftover, verify its name, label and that no test is still using it. Remove only those exact container/network IDs through Docker Desktop or targeted Docker commands. Do not run a global prune. Cached test images can stay for the next run.</p>
+<p>Keep the manual directory until you have inspected the intentional conflict and saved your logs. Then delete only that printed <code>cvkeharness-selftest.…</code> directory using your file manager. It includes the test binary, journal, quarantine and fake home. Never delete real recovery state while a real operation may need it. Type <code>exit</code> to leave the dedicated Bash shell.</p>
+</section><section id="scope" aria-labelledby="scope-title"><p class="section-kicker">12 / Self-test</p><h2 id="scope-title">Decide what the results justify</h2>
+<p>A full pass supports using these specific adapters on disposable, representative systems, then a small noncritical target with independent backups and an out-of-band recovery path. Start with one regular file and one target. Broaden only after its actual permissions, filesystem and service configuration match the supported boundary.</p>
+<p>It does not establish universal machine rollback or public-release readiness by itself. Arbitrary shell effects, active database consistency, unsupported metadata, physical disk loss, live-model judgment and unrelated release concerns still need separate evaluation. A Btrfs snapshot is not an off-machine backup, and open file descriptors can still refer to the displaced tree after a restore.</p>
+<h3>Evidence and source map</h3>
+<p><strong>Guide checked: 13 September 2026.</strong> The manual command sequence was rehearsed against the current working tree with disposable files. HTML structure, desktop/mobile behavior and print output were checked locally. The large Docker/VM suites were not rerun solely for this documentation task.</p>
+<p><strong>Earlier implementation evidence: 11 September 2026.</strong> The <a href="recovery-implementation.md">acceptance ledger</a> records a complete local/race/vet/CLI/PTY/Docker/VM gate, with 482 seconds for its E2E portion. It also records a later 118-second targeted run after final refinements, plus local/race/vet checks. Those historical passes are not a substitute for your own run against your release candidate.</p>
+<ul class="sources">
+<li><a href="recovery.md">Operating guide</a> — adapter scope, configuration and recovery boundaries.</li>
+<li><a href="../cmd/recovery.go">Recovery CLI</a> and <a href="../cmd/recovery_calculate.go">calculator CLI</a> — exact commands and provider independence.</li>
+<li><a href="../recovery/engine.go">File executor</a> and <a href="../recovery/types.go">request/limit definitions</a> — review, conflicts, quarantine and cancellation.</li>
+<li><a href="../e2e/recovery_test.go">Console journey</a> — actual PTY, mock provider and offline recovery.</li>
+<li><a href="../e2e/recovery_docker_test.go">File fault lab</a>, <a href="../e2e/recovery_nginx_docker_test.go">NGINX lab</a> and <a href="../e2e/recovery_fleet_docker_test.go">fleet lab</a> — concrete assertions and container boundaries.</li>
+<li><a href="../e2e/recovery_vm_test.go">VM file/snapshot tests</a>, <a href="../e2e/recovery_ssh_vm_test.go">SSH guard tests</a> and <a href="../e2e/labvm/Dockerfile">guest image</a> — genuine VM evidence and image prerequisites.</li>
+<li><a href="../scripts/test-recovery-all.sh">Combined gate</a> — what the release test command actually executes.</li>
+</ul>
+</section></main></div></div>
+<footer><div class="shell">CvkeHarness · Local testing guide · Keep the evidence and the recovery artifacts together.<br><a href="recovery.md">Operating reference</a> · <a href="recovery-implementation.md">Acceptance ledger</a> · <a href="#route">Back to the test routes</a></div></footer>
+<div class="screen-reader" id="copy-status" role="status" aria-live="polite"></div>
+<script>
+(() => {
+  const status = document.getElementById('copy-status');
+  document.querySelectorAll('[data-copy]').forEach(button => button.addEventListener('click', async () => {
+    const target = document.getElementById(button.dataset.copy);
+    try {
+      await navigator.clipboard.writeText(target.textContent);
+      button.textContent = 'Copied'; status.textContent = 'Command copied.';
+      setTimeout(() => button.textContent = 'Copy', 1800);
+    } catch {
+      const range = document.createRange(); range.selectNodeContents(target);
+      const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+      status.textContent = 'Command selected. Use your keyboard copy shortcut.';
+      button.textContent = 'Selected'; setTimeout(() => button.textContent = 'Copy', 1800);
+    }
+  }));
+  const links = [...document.querySelectorAll('.sidebar a')];
+  const sections = links.map(a => document.querySelector(a.getAttribute('href')));
+  let scheduled = false;
+  const update = () => {
+    const current = [...sections].reverse().find(s => s.getBoundingClientRect().top <= 160) || sections[0];
+    links.forEach(a => a.getAttribute('href') === '#' + current.id ? a.setAttribute('aria-current','location') : a.removeAttribute('aria-current'));
+    scheduled = false;
+  };
+  addEventListener('scroll', () => { if (!scheduled) { scheduled = true; requestAnimationFrame(update); } }, {passive:true});
+  document.querySelectorAll('.mobile-nav a').forEach(a => a.addEventListener('click', () => a.closest('details').open = false));
+  update();
+})();
+</script></body></html>

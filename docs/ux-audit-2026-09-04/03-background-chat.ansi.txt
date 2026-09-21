@@ -1,0 +1,235 @@
+[?25l[?1049h[2J[H[?25l[?2004h[?1002h[?1006h[H   1·Overview      2·Jobs      3·Runs      4·Chat      5·Settings   [K
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[K
+  Overview  configuration, activity, and next work[K
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[K
+[K
+  Provider         openai    Model            audit-model[K
+  Security         reasonable    Routing          disabled[K
+[K
+  Runs             2     Success Rate     100%     Chat Sessions    0     Jobs             0[K
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[K
+[K
+  Recent Runs[K
+[K
+  ●  Inspect the staging API and explain whether all background worker…                             1m0s      1m ago[K
+  ●  Inspect the staging API and explain whether all background worker…                             1m0s      1m ago[K
+[K
+  Scheduled Jobs[K
+[K
+  No jobs configured[K
+  Create a job from the Jobs tab when you want recurring work.[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+ CvkeHarness                                                                                   q quit  ←→ switch  ? help[40;H[H
+
+
+  Chat  target: runtime host  |  model: openai/audit-model  |  safety: reasonable[K
+
+
+  Ready for a task                                                                       │  CONTEXT                    [K
+  Describe the outcome you want. CvkeHarness will keep target, tools,                    │  ✓ READY                    [K
+  approvals, and verification visible while it works.                                    │                             [K
+                                                                                         │  TARGET                     [K
+  /help commands                                                                         │  runtime host               [K
+                                                                                         │                             [K
+                                                                                         │  VERIFICATION               [K
+                                                                                         │  • NOT RUN                  [K
+                                                                                         │                             [K
+                                                                                         │  TOOLS                      [K
+                                                                                         │  No calls this session      [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+  MESSAGE  press Enter to compose[K
+  ╭────────────────────────────────────────────────────────────────────────────────────╮[K
+  │ Ask CvkeHarness                                                                    │[K
+  │                                                                                    │[K
+  │                                                                                    │[K
+  ╰────────────────────────────────────────────────────────────────────────────────────╯[K
+
+
+ CvkeHarness                                         q quit  ←→ switch  enter compose  ↑↓ scroll  ctrl+h history  ? help[40;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  MESSAGE[K
+
+
+
+
+
+
+
+ CvkeHarness                     ctrl+c quit  tab switch  enter send  ctrl+j newline  ctrl+h history  esc leave composer[40;H[H
+
+
+
+
+
+
+  Describe the outcome you want. CvkeHarness will keep target, tools,                    │  • CONNECTING               [K
+  approvals, and verification visible while it works.                                    │  loading provider, memory,  [K
+                                                                                         │  tools, and routing         [K
+  /help commands                                                                         │                             [K
+                                                                                         │  TARGET                     [K
+                                                                                         │  runtime host               [K
+                                                                                         │                             [K
+                                                                                         │  VERIFICATION               [K
+                                                                                         │  • NOT RUN                  [K
+                                                                                         │                             [K
+                                                                                         │  TOOLS                      [K
+                                                                                         │  No calls this session      [K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[40;H[H
+
+
+  Settings  provider, security, memory, and runtime behavior[K
+
+
+  State unsaved[K
+  Press s to write ~/.cvkeharness/config.yaml. Select fields cycle values or open an editor.[K
+[K
+  First-run setup: review values, then press s to save[K
+[K
+     Setting               Value                               Notes[K
+  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[K
+  ▸ Provider              openai                              Runtime provider for new runs and chat sessions[K
+    Default Model         audit-model                         Primary model used when routing is disabled or undecided[K
+    Connection URL                                            Base URL for local/OpenAI-compatible providers[K
+    Provider API Key      SYNT********TIAL                    Stored under the currently selected provider[K
+    Security              reasonable                          Open profiles and all individually overridable runtime …[K
+    Advisory Model        x-ai/grok-4.1-fast                  Secondary model used only for controls marked llm_review[K
+    Routing Enabled       false                               Let the router choose approved models per phase[K
+    Max Tokens            4096                                Maximum response tokens for model calls[K
+    Max Iterations        25                                  Maximum tool/model loop iterations per run[K
+    Log Level             off                                 Runtime logging verbosity[K
+    Prompt Dumps          false                               Debug: save full model prompts as Markdown and HTML[K
+    Prompt Dump Dir       /private/tmp/cvke-ux-audit-202609…  Directory for full prompt dump artifacts[K
+    Prompt Dump Retenti…  7                                   Days to keep debug prompt dumps before pruning[K
+    Memory Dir            /private/tmp/cvke-ux-audit-202609…  Directory for guidance, target, playbook, finding, and …[K
+    State DB              /private/tmp/cvke-ux-audit-202609…  SQLite state path for runs, jobs, approvals, and chat[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+
+
+ CvkeHarness                                    q quit  ←→ switch  ↑↓ move  enter edit  s save  r reset  unsaved  ? help[40;H[H
+
+
+  Chat  target: runtime host  |  model: openai/audit-model  |  safety: reasonable[K
+
+
+  Ready for a task                                                                       │  CONTEXT                    [K
+  Describe the outcome you want. CvkeHarness will keep target, tools,                    │  • CONNECTING               [K
+  approvals, and verification visible while it works.                                    │  loading provider, memory,  [K
+                                                                                         │  tools, and routing         [K
+  /help commands                                                                         │                             [K
+                                                                                         │  TARGET                     [K
+                                                                                         │  runtime host               [K
+                                                                                         │                             [K
+                                                                                         │  VERIFICATION               [K
+                                                                                         │  • NOT RUN                  [K
+                                                                                         │                             [K
+                                                                                         │  TOOLS                      [K
+                                                                                         │  No calls this session      [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+                                                                                                                       [K
+  MESSAGE  press Enter to compose[K
+  ╭────────────────────────────────────────────────────────────────────────────────────╮[K
+  │ Ask CvkeHarness                                                                    │[K
+  │                                                                                    │[K
+  │                                                                                    │[K
+  ╰────────────────────────────────────────────────────────────────────────────────────╯[K
+
+
+ CvkeHarness                                            ctrl+c quit  ←→ switch  enter compose  ↑↓ scroll  ctrl+h history[40;H[2K[?2004l[?25h[?1002l[?1003l[?1006l[?1049l[?25h

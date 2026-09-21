@@ -1,0 +1,87 @@
+#!/bin/sh
+set -eu
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /run /tmp
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /run
+mount -t tmpfs tmpfs /tmp
+
+# This bootstrap formats only the two virtual test disks, and only when
+# invoked by the dedicated guest's boot arguments. Never run it on a host.
+case " $(cat /proc/cmdline) " in
+  *" cvke.lab=1 "*) ;;
+  *) echo "Refusing bootstrap outside the CvkeHarness VM lab"; exec /bin/sh ;;
+esac
+hostname cvke-recovery-vm
+for module in virtio_pci virtio_blk virtio_net btrfs ext4; do
+  modprobe "$module"
+done
+count=0
+while [ ! -b /dev/vda ] || [ ! -b /dev/vdb ]; do
+  count=$((count + 1))
+  [ "$count" -lt 50 ] || { echo "Missing virtual disks"; exec /bin/sh; }
+  sleep 0.1
+done
+[ "$(blockdev --getsize64 /dev/vda)" = 536870912 ]
+[ "$(blockdev --getsize64 /dev/vdb)" = 536870912 ]
+if ! blkid /dev/vda >/dev/null 2>&1; then mkfs.ext4 -q -L cvke-state /dev/vda; fi
+[ "$(blkid -s TYPE -o value /dev/vda)" = ext4 ]
+[ "$(blkid -s LABEL -o value /dev/vda)" = cvke-state ]
+mount /dev/vda /persist
+if ! blkid /dev/vdb >/dev/null 2>&1; then mkfs.btrfs -q -L cvke-data /dev/vdb; fi
+[ "$(blkid -s TYPE -o value /dev/vdb)" = btrfs ]
+[ "$(blkid -s LABEL -o value /dev/vdb)" = cvke-data ]
+mount /dev/vdb /data
+if [ ! -d /data/work ]; then btrfs subvolume create /data/work; fi
+mkdir -p /data/.cvkeharness-snapshots /persist/state /persist/ssh /run/sshd
+chmod 0700 /data/.cvkeharness-snapshots /persist/state /persist/ssh
+if [ ! -f /persist/machine-id ]; then cat /proc/sys/kernel/random/uuid > /persist/machine-id; fi
+cp /persist/machine-id /etc/machine-id
+if [ ! -f /persist/ssh/host_key ]; then ssh-keygen -q -t ed25519 -N '' -f /persist/ssh/host_key; fi
+if [ ! -f /persist/ssh/sshd_config ]; then
+  cat > /persist/ssh/sshd_config <<'SSHD'
+Port 22
+ListenAddress 0.0.0.0
+HostKey /persist/ssh/host_key
+PidFile /run/sshd.pid
+AuthorizedKeysFile /etc/lab_authorized_keys
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+AllowUsers root
+AllowTcpForwarding no
+X11Forwarding no
+PermitTunnel no
+UseDNS no
+Subsystem sftp internal-sftp
+SSHD
+  chmod 0600 /persist/ssh/sshd_config
+fi
+ip link set lo up
+ip link set eth0 up
+ip address add 10.0.2.15/24 dev eth0
+ip route add default via 10.0.2.2
+
+if [ ! -f /persist/state/ssh-server.json ]; then
+  cat > /persist/state/ssh-server.json <<'GUARD'
+{"name":"lab","binary":"/usr/sbin/sshd","session_binary":"/usr/lib/ssh/sshd-session","config_path":"/persist/ssh/sshd_config","pid_file":"/run/sshd.pid","host_key_path":"/persist/ssh/host_key","authorized_keys_path":"/etc/lab_authorized_keys","timeout_seconds":5,"confirmation_seconds":30}
+GUARD
+  chmod 0600 /persist/state/ssh-server.json
+fi
+# The init loop owns restart and boot startup. The supervisor restores any
+# unconfirmed persisted change before it starts the dedicated SSH listener.
+(
+  while :; do
+    /usr/local/bin/cvkeharness recovery --state /persist/state/state.db ssh supervise --spec /persist/state/ssh-server.json || true
+    sleep 1
+  done
+) &
+echo "CVKE_VM_READY boot=$(cat /proc/sys/kernel/random/boot_id) kernel=$(uname -r)"
+while :; do
+  wait || true
+  sleep 1
+done

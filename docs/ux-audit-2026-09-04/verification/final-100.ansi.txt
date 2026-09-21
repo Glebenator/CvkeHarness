@@ -1,0 +1,146 @@
+[?25l[?1049h[2J[H[?25l[?2004h[?1002h[?1006h[H  1·Overview    2·Jobs    3·Runs    4·Chat    5·Settings *  [K
+────────────────────────────────────────────────────────────────────────────────────────────────────
+[K
+  Overview  attention and next actions[K
+  ────────────────────────────────────────────────────────────────────────────────────────────────[K
+[K
+  Get started[K
+  s Connect provider in Settings · v Check configuration locally[K
+  c Start first task in Chat[K
+[K
+  All history: 3 runs · 100% success[K
+  0 chat sessions · 1 jobs · updated 14:48:02[K
+[K
+  Attention, upcoming jobs, and recent outcomes[K
+  ▸ Next Sep 4 15:15 PDT: UX revised job[K
+    Completed: Inspect the staging API and explain whether all background workers are healthy[K
+    Completed: Inspect the staging API and explain whether all background workers are healthy[K
+    Completed: Inspect the staging API and explain whether all background workers are healthy[K
+  [K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+ CvkeHarness      ←→ switch  enter open  c chat  s settings  v check config  r retry  ? help  q quit[30;H[H
+
+
+
+
+
+
+
+
+
+  All history: 4 runs · 100% success[K
+  0 chat sessions · 1 jobs · updated 14:48:07[K
+
+
+
+
+
+
+    Completed: Inspect the staging API and explain whether all background workers are healthy[K
+  [K
+
+
+
+
+
+
+
+
+
+[30;H[H
+
+
+
+
+
+
+
+
+
+
+  0 chat sessions · 1 jobs · updated 14:48:12[K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[30;H[H
+
+
+
+
+
+
+
+
+
+
+  0 chat sessions · 1 jobs · updated 14:48:17[K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[30;H[H
+
+  Chat · READY · Verification: NOT RUN[K
+  Target: not resolved yet · Environment: unknown[K
+  Security: reasonable · Ctrl+G context[K
+
+  Ready for a task                                                                              [K
+  Describe the outcome you want. CvkeHarness will keep target, tools,                           [K
+  approvals, and verification visible while it works.                                           [K
+                                                                                                [K
+  /help commands                                                                                [K
+                                                                                                [K
+                                                                                                [K
+                                                                                                [K
+                                                                                                [K
+                                                                                                [K
+                                                                                                [K
+                                                                                                [K
+                                                                                                [K
+                                                                                                [K
+                                                                                                [K
+  MESSAGE  press Enter to compose[K
+  ╭────────────────────────────────────────────────────────────────────────────────────────────╮[K
+  │ Ask CvkeHarness                                                                            │[K
+  │                                                                                            │[K
+  │                                                                                            │[K
+  ╰────────────────────────────────────────────────────────────────────────────────────────────╯[K
+
+
+ CvkeHarness                     ←→ switch  enter compose  ↑↓ scroll  ctrl+h history  ? help  q quit[30;H[2K[?2004l[?25h[?1002l[?1003l[?1006l[?1049l[?25h

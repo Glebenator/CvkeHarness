@@ -1,0 +1,139 @@
+[?25l[?1049h[2J[H[?25l[?2004h[?1002h[?1006h[H 1·Overview  2·Jobs  3·Runs  4·Chat  5·Settings * [K
+────────────────────────────────────────────────────────────────────────────────
+[K
+  Overview  attention and next actions[K
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Get started[K
+  s Connect provider in Settings · v Check configuration locally[K
+  c Start first task in Chat[K
+[K
+  All history: 2 runs · 100% success[K
+  0 chat sessions · 1 jobs · updated 14:48:01[K
+[K
+  Attention, upcoming jobs, and recent outcomes[K
+  ▸ Next Sep 4 15:15 PDT: UX revised job[K
+    Completed: Inspect the staging API and explain whether all background wor…[K
+    Completed: Inspect the staging API and explain whether all background wor…[K
+  [K
+[K
+[K
+[K
+[K
+[K
+ CvkeHarness  ←→ switch  enter open  c chat  s settings  v check config  r retry[24;H[H
+
+
+
+
+
+
+
+
+
+  All history: 4 runs · 100% success[K
+  0 chat sessions · 1 jobs · updated 14:48:06[K
+
+
+
+
+
+    Completed: Inspect the staging API and explain whether all background wor…[K
+    Completed: Inspect the staging API and explain whether all background wor…[K
+  [K
+
+
+
+[24;H[H
+
+
+
+
+
+
+
+
+
+
+  0 chat sessions · 1 jobs · updated 14:48:11[K
+
+
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+
+
+
+
+
+
+
+
+  0 chat sessions · 1 jobs · updated 14:48:16[K
+
+
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+  Jobs  scheduled agent work and run history[K
+
+
+  ▸ UX revised job · active[K
+    every 30m · next Sep 4 15:15[K
+  [K
+
+[K
+[K
+
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+
+
+
+ CvkeHarness        ←→ switch  n new  r run  p pause  x del  1/1  ? help  q quit[24;H[H
+
+
+  New Scheduled Job  Step 1 of 5 · Name[K
+
+
+  A short, descriptive name[K
+[K
+  › Health check, Deploy staging…                                          [K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ CvkeHarness     tab switch  enter continue  ctrl+b back  esc close  ctrl+c quit[24;H[2K[?2004l[?25h[?1002l[?1003l[?1006l[?1049l[?25h

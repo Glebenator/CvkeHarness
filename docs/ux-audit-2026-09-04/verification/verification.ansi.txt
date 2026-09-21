@@ -1,0 +1,944 @@
+[?25l[?1049h[2J[H[?25l[?2004h[?1002h[?1006h[H 1·Overview  2·Jobs  3·Runs  4·Chat  5·Settings * [K
+────────────────────────────────────────────────────────────────────────────────
+[K
+  Overview  attention and next actions[K
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Get started[K
+  s Connect provider in Settings · v Check configuration locally[K
+  c Start first task in Chat[K
+[K
+  All history: 1 runs · 100% success[K
+  0 chat sessions · 0 jobs · updated 14:44:47[K
+[K
+  Attention, upcoming jobs, and recent outcomes[K
+  ▸ Completed: Inspect the staging API and explain whether all background wor…[K
+  [K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+ CvkeHarness   q quit  ←→ switch  enter open  c chat  s settings  v check config[24;H[H
+
+
+
+
+
+
+
+
+
+
+  0 chat sessions · 0 jobs · updated 14:44:52[K
+
+
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+
+
+
+
+
+
+
+
+  0 chat sessions · 0 jobs · updated 14:44:57[K
+
+
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+  Keyboard Shortcuts[K
+[K
+  Navigation[K
+    tab / shift+tab     Cycle tabs from any input mode[K
+    ←/→                 Cycle tabs outside text editing[K
+    1-5                 Jump to tab directly[K
+    ↑/k  ↓/j            Move cursor in lists[K
+    enter               Expand / select item[K
+    esc                 Go back / collapse detail[K
+
+  Jobs Tab[K
+    n                   Create or reopen a job draft[K
+    ctrl+b              Previous step in job wizard[K
+    r                   Trigger a job run now[K
+    p                   Pause or resume a job[K
+    x                   Delete a job[K
+
+  Chat Tab[K
+    enter               Focus the composer or send a message[K
+
+ CvkeHarness   ↑↓ / PgUp PgDn scroll  esc close[K[24;H[H
+
+  Chat Tab[K
+    enter               Focus the composer or send a message[K
+    /                   Open chat command suggestions[K
+    /new                Start a fresh chat (/clear remains an alias)[K
+    ctrl+g              Show full session context[K
+    esc                 Leave the composer or interrupt active work[K
+    ctrl+h              Toggle live chat and saved conversations[K
+    ↑/↓                 Select tool calls and scroll at list boundaries[K
+    space or ctrl+t     Expand or collapse the selected tool[K
+[K
+  Settings Tab[K
+    enter               Edit or toggle the selected setting[K
+    s                   Save configuration[K
+    r                   Reset unsaved edits[K
+[K
+  General[K
+    ?                   Toggle this help[K
+    q / ctrl+c          Quit the dashboard[K
+[K
+  ↑↓ / PgUp PgDn scroll · Esc closes help[K
+
+[24;H[H
+
+[K
+  Overview  attention and next actions[K
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Get started[K
+  s Connect provider in Settings · v Check configuration locally[K
+  c Start first task in Chat[K
+[K
+  All history: 1 runs · 100% success[K
+  0 chat sessions · 0 jobs · updated 14:44:57[K
+[K
+  Attention, upcoming jobs, and recent outcomes[K
+  ▸ Completed: Inspect the staging API and explain whether all background wor…[K
+  [K
+
+[K
+[K
+[K
+
+[K
+
+ CvkeHarness   q quit  ←→ switch  enter open  c chat  s settings  v check config[24;H[H
+
+
+
+
+
+
+
+
+
+
+  0 chat sessions · 0 jobs · updated 14:45:02[K
+
+
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+  Jobs  scheduled agent work and run history[K
+
+
+  No scheduled jobs[K
+  Create recurring or one-time agent work from here.[K
+[K
+  n new job[K
+[K
+[K
+
+[K
+[K
+[K
+
+
+
+
+
+
+
+ CvkeHarness                                q quit  ←→ switch  n new job  ? help[24;H[H
+
+
+  New Scheduled Job  Step 1 of 5 · Name[K
+
+
+  A short, descriptive name[K
+[K
+  › Health check, Deploy staging…                                          [K
+[K
+
+
+
+
+
+
+
+
+
+
+
+
+
+ CvkeHarness                ctrl+c quit  tab switch  enter continue  ctrl+b back[24;H[H
+
+
+  New Scheduled Job  Step 2 of 5 · Schedule Type[K
+
+
+  When should this job run?[K
+
+  ▸ Every interval  e.g. 30m, 1h, 24h[K
+    Cron expression  e.g. 0 */6 * * *[K
+    One-time at  e.g. 2026-05-01T09:00:00Z[K
+
+
+
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+  New Scheduled Job  Step 3 of 5 · Schedule[K
+
+
+  Every interval[K
+
+  › e.g. 30m, 1h, 24h                                                      [K
+[K
+  Go duration: 30s, 5m, 1h, 24h, 168h (weekly)[K
+
+
+
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+
+
+
+  invalid every schedule "tomorrow"[K
+
+  Every interval[K
+
+  › tomorrow                                                               [K
+
+  Go duration: 30s, 5m, 1h, 24h, 168h (weekly)[K
+
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+
+
+
+  Every interval[K
+
+  › e.g. 30m, 1h, 24h                                                      [K
+
+  Go duration: 30s, 5m, 1h, 24h, 168h (weekly)[K
+
+[K
+
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+  New Scheduled Job  Step 4 of 5 · Agent Prompt[K
+
+
+  Describe the outcome, target, and constraints.[K
+
+  › Check if the API is responding and report status                      [K
+  ›                                                                       [K
+  ›                                                                       [K
+  ›                                                                       [K
+  ›                                                                       [K
+  ›                                                                       [K
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+
+
+
+
+
+  › Inspect staging only.                                                 [K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+  New Scheduled Job  Step 5 of 5 · Review[K
+
+
+  Name: UX revised job[K
+  Schedule: Every interval 30m[K
+  Next executions (UTC):[K
+    Fri Sep 4, 22:15:20 UTC[K
+    Fri Sep 4, 22:45:20 UTC[K
+    Fri Sep 4, 23:15:20 UTC[K
+[K
+  Prompt:[K
+  Inspect staging only.[K
+  Report findings.[K
+
+  Enter creates this job. Ctrl+B revises it.[K
+
+
+
+
+
+ CvkeHarness       ctrl+c quit  tab switch  enter create  ctrl+b back  ↑↓ review[24;H[H
+
+
+  New Scheduled Job  Step 4 of 5 · Agent Prompt[K
+
+
+  Describe the outcome, target, and constraints.[K
+[K
+  › Inspect staging only.                                                 [K
+  › Report findings.                                                      [K
+  ›                                                                       [K
+  ›                                                                       [K
+  ›                                                                       [K
+  ›                                                                       [K
+[K
+[K
+
+[K
+
+
+
+
+
+ CvkeHarness                ctrl+c quit  tab switch  enter continue  ctrl+b back[24;H[H
+
+
+  New Scheduled Job  Step 5 of 5 · Review[K
+
+
+  Name: UX revised job[K
+  Schedule: Every interval 30m[K
+  Next executions (UTC):[K
+    Fri Sep 4, 22:15:20 UTC[K
+    Fri Sep 4, 22:45:20 UTC[K
+    Fri Sep 4, 23:15:20 UTC[K
+[K
+  Prompt:[K
+  Inspect staging only.[K
+  Report findings.[K
+
+  Enter creates this job. Ctrl+B revises it.[K
+
+
+
+
+
+ CvkeHarness       ctrl+c quit  tab switch  enter create  ctrl+b back  ↑↓ review[24;H[H
+
+
+  Jobs  scheduled agent work and run history[K
+
+
+  ✓ Created UX revised job[K
+  ▸ UX revised job · active[K
+    every 30m · next Sep 4 15:15[K
+  [K
+[K
+[K
+
+[K
+[K
+[K
+
+[K
+
+
+
+
+
+ CvkeHarness        q quit  ←→ switch  n new  r run  p pause  x del  1/1  ? help[24;H[H
+
+  Chat · READY · Verification: NOT RUN[K
+  Target: not resolved yet · Environment: unknown[K
+  Security: reasonable · Ctrl+G context[K
+
+  Ready for a task                                                          [K
+  Describe the outcome you want. CvkeHarness will keep target, tools,       [K
+  approvals, and verification visible while it works.                       [K
+                                                                            [K
+  /help commands                                                            [K
+                                                                            [K
+                                                                            [K
+                                                                            [K
+                                                                            [K
+  MESSAGE  press Enter to compose[K
+  ╭────────────────────────────────────────────────────────────────────────╮[K
+  │ Ask CvkeHarness                                                        │[K
+  │                                                                        │[K
+  │                                                                        │[K
+  ╰────────────────────────────────────────────────────────────────────────╯[K
+
+
+ CvkeHarness         q quit  ←→ switch  enter compose  ↑↓ scroll  ctrl+h history[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  MESSAGE[K
+
+
+
+
+
+
+
+ CvkeHarness                 ctrl+c quit  tab switch  enter send  ctrl+j newline[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  │ Check active target without making                                     │[K
+
+
+
+
+
+[24;H[H 1·Overview  2·Jobs  3·Runs  4·Chat …  5·Settings * [K
+
+  Chat · CONNECTING · Verification: NOT RUN[K
+
+
+
+  Connecting. Your message is waiting.                                      [K
+
+
+
+
+
+
+
+
+
+
+  │ Ask CvkeHarness                                                        │[K
+
+
+
+
+
+[24;H[H
+
+[K
+  Settings  provider, security, memory, and runtime behavior[K
+  ────────────────────────────────────────────────────────────────────────────[K
+
+  State unsaved[K
+  s saves settings for new sessions. Enter edits a field.[K
+[K
+  First-run setup: review values, then press s to save[K
+[K
+     Setting               Value                               Notes[K
+  ────────────────────────────────────────────────────────────────────────────[K
+  ▸ Provider              openai                              Runtime provide…[K
+    Default Model         audit-model                         Primary model u…[K
+    Connection URL                                            Base URL for lo…[K
+    Provider API Key      SYNT********TIAL                    Stored under th…[K
+    Security              reasonable                          Open profiles a…[K
+    Advisory Model        x-ai/grok-4.1-fast                  Secondary model…[K
+  ↓ 9 more[K
+[K
+  Runtime provider for new runs and chat sessions[K
+
+ CvkeHarness    q quit  ←→ switch  ↑↓ move  enter edit  s save  r reset  unsaved[24;H[H 1·Overview  2·Jobs  3·Runs  4·Chat +  5·Settings * [K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[24;H[H 1·Overview  2·Jobs  3·Runs  4·Chat  5·Settings * [K
+
+  Chat · UNAVAILABLE · Verification: NOT RUN[K
+  Target: not resolved yet · Environment: unknown[K
+  Security: reasonable · Ctrl+G context[K
+
+  Unable to continue: Missing or invalid credentials: missing openai API    [K
+                      key; open Settings or run setup to add credentials    [K
+  Your draft is preserved. Enter edits it; Enter again retries.             [K
+  Leave the composer, then press s to open Settings.                        [K
+                                                                            [K
+                                                                            [K
+                                                                            [K
+                                                                            [K
+                                                                            [K
+  MESSAGE  press Enter to compose[K
+  ╭────────────────────────────────────────────────────────────────────────╮[K
+  │ Check active target without making changes.                            │[K
+  │                                                                        │[K
+  │                                                                        │[K
+  ╰────────────────────────────────────────────────────────────────────────╯[K
+[K
+
+ CvkeHarness           q quit  ←→ switch  enter edit / retry  s settings  ? help[24;H[H
+
+[K
+  Settings  provider, security, memory, and runtime behavior[K
+  ────────────────────────────────────────────────────────────────────────────[K
+
+  State unsaved[K
+  s saves settings for new sessions. Enter edits a field.[K
+[K
+  First-run setup: review values, then press s to save[K
+[K
+     Setting               Value                               Notes[K
+  ────────────────────────────────────────────────────────────────────────────[K
+  ▸ Provider              openai                              Runtime provide…[K
+    Default Model         audit-model                         Primary model u…[K
+    Connection URL                                            Base URL for lo…[K
+    Provider API Key      SYNT********TIAL                    Stored under th…[K
+    Security              reasonable                          Open profiles a…[K
+    Advisory Model        x-ai/grok-4.1-fast                  Secondary model…[K
+  ↓ 9 more[K
+[K
+  Runtime provider for new runs and chat sessions[K
+
+ CvkeHarness    q quit  ←→ switch  ↑↓ move  enter edit  s save  r reset  unsaved[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+    Provider              openai                              Runtime provide…[K
+
+
+  ▸ Provider API Key      SYNT********TIAL                    Stored under th…[K
+
+
+
+
+  Stored under the currently selected provider[K
+
+[24;H[H
+
+
+  Provider API Key  edit setting[K
+
+
+  Stored under the currently selected provider[K
+[K
+  ▸ > ••••••••••••••••••••••••••••••••••••                 [K
+[K
+  Enter keeps edit; s in Settings saves. Esc cancels.[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+
+[K
+
+ CvkeHarness                ctrl+c quit  tab switch  enter keep edit  esc cancel[24;H[H
+
+
+  Settings  provider, security, memory, and runtime behavior[K
+
+
+  State unsaved[K
+  s saves settings for new sessions. Enter edits a field.[K
+[K
+     Setting               Value                               Notes[K
+  ────────────────────────────────────────────────────────────────────────────[K
+    Provider              openai                              Runtime provide…[K
+    Default Model         audit-model                         Primary model u…[K
+    Connection URL                                            Base URL for lo…[K
+  ▸ Provider API Key      SYNT********TIAL                    Stored under th…[K
+    Security              reasonable                          Open profiles a…[K
+    Advisory Model        x-ai/grok-4.1-fast                  Secondary model…[K
+    Routing Enabled       false                               Let the router …[K
+    Max Tokens            4096                                Maximum respons…[K
+  ↓ 7 more[K
+
+  Stored under the currently selected provider[K
+
+ CvkeHarness    q quit  ←→ switch  ↑↓ move  enter edit  s save  r reset  unsaved[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Provider API Key      SYNT********TIAL                    Stored under th…[K
+  ▸ Security              reasonable                          Open profiles a…[K
+
+
+
+
+
+  Open profiles and all individually overridable runtime controls[K
+
+[24;H[H
+
+
+  Settings / Security  profiles and per-control overrides[K
+
+
+  Effective        reasonable    Policy           a8a9f633db94a092[K
+  Profile changes require Enter and clear overrides. YOLO does not bypass OS[K
+  or provider protections.[K
+[K
+  Security changes apply to new sessions after saving[K
+[K
+     Area                  Control                   Value             Source[K
+  ────────────────────────────────────────────────────────────────────────────[K
+  ▸ Preset                Security profile          reasonable        selected[K
+    Commands              Read-only commands        allow             profile[K
+    Commands              Unknown commands          ask               profile[K
+    Commands              Script interpreters       ask               profile[K
+    Filesystem            Create files              allow             profile[K
+  ↓ 21 more[K
+
+[K
+
+ CvkeHarness       ctrl+c quit  tab switch  s save  esc back  ↑↓ move  ←→ change[24;H[H
+
+
+  Settings  provider, security, memory, and runtime behavior[K
+
+
+  State unsaved[K
+  s saves settings for new sessions. Enter edits a field.[K
+[K
+  Security editor closed; press s to save pending changes[K
+[K
+     Setting               Value                               Notes[K
+  ────────────────────────────────────────────────────────────────────────────[K
+    Default Model         audit-model                         Primary model u…[K
+    Connection URL                                            Base URL for lo…[K
+    Provider API Key      SYNT********TIAL                    Stored under th…[K
+  ▸ Security              reasonable                          Open profiles a…[K
+    Advisory Model        x-ai/grok-4.1-fast                  Secondary model…[K
+    Routing Enabled       false                               Let the router …[K
+  ↑ 1 more  ↓ 8 more[K
+
+  Open profiles and all individually overridable runtime controls[K
+
+ CvkeHarness    q quit  ←→ switch  ↑↓ move  enter edit  s save  r reset  unsaved[24;H[H
+
+
+  Runs  outcomes and execution history[K
+
+
+  all · Page 1 · / search · f filter · [ ] pages[K
+  ▸ #1 COMPLETED  Inspect the staging API and explain whether all background …[K
+    2m ago · verification: satisfied · openai[K
+  [K
+
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+
+[K
+
+ CvkeHarness        q quit  ←→ switch  enter open  / search  f filter  [ ] pages[24;H[H
+
+
+  Run #1  COMPLETED[K
+[K
+  Task             Inspect the staging API and explain whether all background[K
+workers are healthy[K
+  Provider         openai[K
+  Started          Sep 4 14:43[K
+  Duration         1m0s[K
+
+  Verification[K
+
+  Status           satisfied[K
+
+  Agent Output[K
+
+  [;1m[0m[;1m[0m[;1mResult[0m                                                                    [K
+                                                                            [K
+  This is audit fixture output showing how long lines behave. This is audit [K
+  fixture output showing how long lines behave. This is audit fixture output[K
+  ↓ 4 more[K
+
+ CvkeHarness     q quit  ←→ switch  d diagnostics  e export  esc back  ↑↓ scroll[24;H[H
+
+  Provider         openai[K
+  Started          Sep 4 14:43[K
+  Duration         1m0s[K
+[K
+  Verification[K
+[K
+  Status           satisfied[K
+[K
+  Agent Output[K
+[K
+  [;1m[0m[;1m[0m[;1mResult[0m                                                                    [K
+                                                                            [K
+  This is audit fixture output showing how long lines behave. This is audit [K
+  fixture output showing how long lines behave. This is audit fixture output[K
+  showing how long lines behave. This is audit fixture output showing how   [K
+  long lines behave. END-OF-RESULT                                          [K
+[K
+  d show / hide diagnostics[K
+  ↑ 5 more[K
+[K
+
+[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Exported privately: /private/tmp/cvke-ux-implementation-[K
+  ↑ 5 more  ↓ 1 more[K
+
+[24;H[H
+
+  Duration         1m0s[K
+[K
+  Verification[K
+
+  Status           satisfied[K
+
+  Agent Output[K
+
+  [;1m[0m[;1m[0m[;1mResult[0m                                                                    [K
+                                                                            [K
+  This is audit fixture output showing how long lines behave. This is audit [K
+  fixture output showing how long lines behave. This is audit fixture output[K
+  showing how long lines behave. This is audit fixture output showing how   [K
+  long lines behave. END-OF-RESULT                                          [K
+[K
+  d show / hide diagnostics[K
+  Exported privately: /private/tmp/cvke-ux-implementation-[K
+20260904/exports/run-1-20260904T214629Z.md[K
+  ↑ 7 more[K
+[K
+
+[24;H[H
+
+[K
+  Unsaved settings[K
+[K
+  Save settings before leaving?[K
+[K
+  s Save and quit    d Discard    Esc Continue editing[K
+[K
+
+[K
+[K
+[K
+[K
+[K
+[K
+
+[K
+[K
+[K
+[K
+
+
+ CvkeHarness   esc continue editing[K[24;H[H
+
+  Duration         1m0s[K
+[K
+  Verification[K
+[K
+  Status           satisfied[K
+[K
+  Agent Output[K
+
+  [;1m[0m[;1m[0m[;1mResult[0m                                                                    [K
+                                                                            [K
+  This is audit fixture output showing how long lines behave. This is audit [K
+  fixture output showing how long lines behave. This is audit fixture output[K
+  showing how long lines behave. This is audit fixture output showing how   [K
+  long lines behave. END-OF-RESULT                                          [K
+
+  d show / hide diagnostics[K
+  Exported privately: /private/tmp/cvke-ux-implementation-[K
+20260904/exports/run-1-20260904T214629Z.md[K
+  ↑ 7 more[K
+
+
+ CvkeHarness     q quit  ←→ switch  d diagnostics  e export  esc back  ↑↓ scroll[24;H[H
+
+[K
+  Unsaved settings[K
+[K
+  Save settings before leaving?[K
+[K
+  s Save and quit    d Discard    Esc Continue editing[K
+[K
+
+[K
+[K
+[K
+[K
+[K
+[K
+
+[K
+[K
+[K
+[K
+
+
+ CvkeHarness   esc continue editing[K[24;H[2K[?2004l[?25h[?1002l[?1003l[?1006l[?1049l[?25h

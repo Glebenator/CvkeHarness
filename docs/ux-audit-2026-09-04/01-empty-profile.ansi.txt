@@ -1,0 +1,461 @@
+[?25l[?1049h[2J[H[?25l[?2004h[?1002h[?1006h[H   1·Overview      2·Jobs      3·Runs      4·Chat      5·Settings   [K
+────────────────────────────────────────────────────────────────────────────────
+[K
+  Overview  configuration, activity, and next work[K
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Provider         openai    Model            audit-model[K
+  Security         reasonable    Routing          disabled[K
+[K
+  Runs             0     Success Rate     —     Chat Sessions    0     Jobs     
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Recent Runs[K
+[K
+  No runs recorded yet[K
+  Run an agent task to populate this feed.[K
+[K
+  Scheduled Jobs[K
+[K
+  No jobs configured[K
+  Create a job from the Jobs tab when you want recurring work.[K
+[K
+[K
+ CvkeHarness                                           q quit  ←→ switch  ? help[24;H[H
+
+
+  Keyboard Shortcuts[K
+[K
+  Navigation[K
+    tab / shift+tab     Cycle tabs from any input mode[K
+    ←/→                 Cycle tabs outside text editing[K
+    1-5                 Jump to tab directly[K
+    ↑/k  ↓/j            Move cursor in lists[K
+    enter               Expand / select item[K
+    esc                 Go back / collapse detail[K
+[K
+  Jobs Tab[K
+    n                   Create a new scheduled job[K
+    r                   Trigger a job run now[K
+    p                   Pause or resume a job[K
+    x                   Delete a job[K
+
+  Chat Tab[K
+    enter               Focus the composer or send a message[K
+    /                   Open chat command suggestions[K
+
+[24;H[H
+
+
+  Overview  configuration, activity, and next work[K
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Provider         openai    Model            audit-model[K
+  Security         reasonable    Routing          disabled[K
+[K
+  Runs             0     Success Rate     —     Chat Sessions    0     Jobs     
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Recent Runs[K
+[K
+  No runs recorded yet[K
+  Run an agent task to populate this feed.[K
+[K
+  Scheduled Jobs[K
+
+  No jobs configured[K
+  Create a job from the Jobs tab when you want recurring work.[K
+[K
+
+[24;H[H
+
+
+  Jobs  scheduled agent work and run history[K
+
+
+  No scheduled jobs[K
+  Create recurring or one-time agent work from here.[K
+
+  n new job[K
+[K
+
+[K
+
+[K
+[K
+
+[K
+
+[K
+[K
+
+
+ CvkeHarness                                q quit  ←→ switch  n new job  ? help[24;H[H
+
+
+  New Scheduled Job[K
+[K
+  ● Name  →  ○ Schedule Type  →  ○ Schedule  →  ○ Agent Prompt  →  ○ Review[K
+[K
+  ────────────────────────────────────────────────────────────────────────────[K
+
+  Job Name[K
+  A short, descriptive name for this job[K
+
+  › Health check, Deploy staging…                      [K
+
+
+
+
+
+
+
+
+
+
+ CvkeHarness                 ctrl+c quit  tab switch  Creating: Name  esc cancel[24;H[H
+
+
+
+
+  ● Name  →  ● Schedule Type  →  ○ Schedule  →  ○ Agent Prompt  →  ○ Review[K
+
+
+
+  Name: UX validation check[K
+[K
+  Schedule Type[K
+  How should this job be scheduled?[K
+
+  ▸ Every interval  e.g. 30m, 1h, 24h[K
+    Cron expression  e.g. 0 */6 * * *[K
+    One-time at  e.g. 2026-05-01T09:00:00Z[K
+
+
+
+
+
+
+ CvkeHarness        ctrl+c quit  tab switch  Creating: Schedule Type  esc cancel[24;H[H
+
+
+
+
+  ● Name  →  ● Schedule Type  →  ● Schedule  →  ○ Agent Prompt  →  ○ Review[K
+
+
+
+
+  Type: Every interval[K
+[K
+  Schedule (Every interval)[K
+
+  › e.g. 30m, 1h, 24h                                  [K
+[K
+  Go duration: 30s, 5m, 1h, 24h, 168h (weekly)[K
+
+
+
+
+
+
+ CvkeHarness             ctrl+c quit  tab switch  Creating: Schedule  esc cancel[24;H[H
+
+
+
+
+  ● Name  →  ● Schedule Type  →  ● Schedule  →  ● Agent Prompt  →  ○ Review[K
+
+
+
+
+
+  Schedule: tomorrow[K
+[K
+  Agent Prompt[K
+  What should the agent do when this job runs?[K
+
+  › Check if the API is responding and report status             [K
+
+
+
+
+
+
+ CvkeHarness         ctrl+c quit  tab switch  Creating: Agent Prompt  esc cancel[24;H[H
+
+
+
+
+  ● Name  →  ● Schedule Type  →  ● Schedule  →  ● Agent Prompt  →  ● Review[K
+
+
+
+
+
+
+  Prompt: Report the audit fixture status.[K
+[K
+  Create this job?  y/enter confirm  n/esc cancel[K
+
+[K
+
+
+
+
+
+
+ CvkeHarness               ctrl+c quit  tab switch  Creating: Review  esc cancel[24;H[H
+
+
+  Jobs  scheduled agent work and run history[K
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Error: invalid every schedule "tomorrow"[K
+[K
+  No scheduled jobs[K
+  Create recurring or one-time agent work from here.[K
+[K
+  n new job[K
+[K
+
+[K
+
+
+
+
+
+
+
+
+ CvkeHarness                                q quit  ←→ switch  n new job  ? help[24;H[H
+
+
+  New Scheduled Job[K
+[K
+  ● Name  →  ○ Schedule Type  →  ○ Schedule  →  ○ Agent Prompt  →  ○ Review[K
+[K
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Job Name[K
+  A short, descriptive name for this job[K
+[K
+  › Health check, Deploy staging…                      [K
+
+
+
+
+
+
+
+
+
+
+ CvkeHarness                 ctrl+c quit  tab switch  Creating: Name  esc cancel[24;H[H
+
+
+  Jobs  scheduled agent work and run history[K
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  No scheduled jobs[K
+  Create recurring or one-time agent work from here.[K
+
+  n new job[K
+[K
+
+[K
+
+
+
+
+
+
+
+
+
+
+ CvkeHarness                                q quit  ←→ switch  n new job  ? help[24;H[H
+
+
+  Chat  target: runtime host  |  model: openai/audit-model  |  safety: reas…[K
+
+
+  Ready for a task                                                          [K
+  Describe the outcome you want. CvkeHarness will keep target, tools,       [K
+  approvals, and verification visible while it works.                       [K
+                                                                            [K
+  /help commands                                                            [K
+                                                                            [K
+                                                                            [K
+                                                                            [K
+                                                                            [K
+  MESSAGE  press Enter to compose[K
+  ╭────────────────────────────────────────────────────────────────────────╮[K
+  │ Ask CvkeHarness                                                        │[K
+  │                                                                        │[K
+  │                                                                        │[K
+  ╰────────────────────────────────────────────────────────────────────────╯[K
+
+
+ CvkeHarness         q quit  ←→ switch  enter compose  ↑↓ scroll  ctrl+h history[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  MESSAGE[K
+
+
+
+
+
+
+
+ CvkeHarness                 ctrl+c quit  tab switch  enter send  ctrl+j newline[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  │ ERROR  Missing or invalid credentials: missing openai API key; open    │[K
+  │ Settings…                                                              │[K
+
+[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  MESSAGE  press Enter to compose[K
+
+
+
+
+
+
+
+ CvkeHarness         q quit  ←→ switch  enter compose  ↑↓ scroll  ctrl+h history[24;H[H
+
+
+  Settings  provider, security, memory, and runtime behavior[K
+
+
+  State unsaved[K
+  Press s to write ~/.cvkeharness/config.yaml. Select fields cycle values or ope
+[K
+  First-run setup: review values, then press s to save[K
+[K
+     Setting               Value                               Notes[K
+  ────────────────────────────────────────────────────────────────────────────[K
+  ▸ Provider              openai                              Runtime provide…[K
+    Default Model         audit-model                         Primary model u…[K
+    Connection URL                                            Base URL for lo…[K
+    Provider API Key                                          Stored under th…[K
+    Security              reasonable                          Open profiles a…[K
+    Advisory Model        x-ai/grok-4.1-fast                  Secondary model…[K
+    Routing Enabled       false                               Let the router …[K
+    Max Tokens            4096                                Maximum respons…[K
+    Max Iterations        25                                  Maximum tool/mo…[K
+
+ CvkeHarness    q quit  ←→ switch  ↑↓ move  enter edit  s save  r reset  unsaved[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+    Provider              openai                              Runtime provide…[K
+  ▸ Default Model         audit-model                         Primary model u…[K
+
+
+
+
+
+
+
+
+[24;H[H
+
+
+  Default Model  edit setting[K
+
+
+  Primary model used when routing is disabled or undecided[K
+[K
+  ▸ > audit-model                                          [K
+[K
+  enter applies, esc cancels[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+
+ CvkeHarness                    ctrl+c quit  tab switch  enter apply  esc cancel[24;H[H
+
+
+  Settings  provider, security, memory, and runtime behavior[K
+
+
+  State unsaved[K
+  Press s to write ~/.cvkeharness/config.yaml. Select fields cycle values or ope
+[K
+  Default Model updated[K
+[K
+     Setting               Value                               Notes[K
+  ────────────────────────────────────────────────────────────────────────────[K
+    Provider              openai                              Runtime provide…[K
+  ▸ Default Model         audit-model-unsaved                 Primary model u…[K
+    Connection URL                                            Base URL for lo…[K
+    Provider API Key                                          Stored under th…[K
+    Security              reasonable                          Open profiles a…[K
+    Advisory Model        x-ai/grok-4.1-fast                  Secondary model…[K
+    Routing Enabled       false                               Let the router …[K
+    Max Tokens            4096                                Maximum respons…[K
+    Max Iterations        25                                  Maximum tool/mo…[K
+
+ CvkeHarness    q quit  ←→ switch  ↑↓ move  enter edit  s save  r reset  unsaved[24;H[2K[?2004l[?25h[?1002l[?1003l[?1006l[?1049l[?25h

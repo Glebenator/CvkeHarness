@@ -1,0 +1,231 @@
+[?25l[?1049h[2J[H[?25l[?2004h[?1002h[?1006h[H   1·Overview      2·Jobs      3·Runs      4·Chat      5·Settings   [K
+────────────────────────────────────────────────────────────────────────────────
+[K
+  Overview  configuration, activity, and next work[K
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Provider         openai    Model            audit-model[K
+  Security         reasonable    Routing          disabled[K
+[K
+  Runs             1     Success Rate     100%     Chat Sessions    0     Jobs  
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  Recent Runs[K
+[K
+  ●  Inspect the staging API a…                             1m0s      1m ago[K
+[K
+  Scheduled Jobs[K
+[K
+  No jobs configured[K
+  Create a job from the Jobs tab when you want recurring work.[K
+[K
+[K
+[K
+ CvkeHarness                                           q quit  ←→ switch  ? help[24;H[H
+
+
+  Runs  agent executions and tool traces[K
+
+
+     Task             Model                      Duration    Tokens    Tools …[K
+  ────────────────────────────────────────────────────────────────────────────[K
+  ▸ ●  Inspect the st…  —                          1m0s        —         0      
+[K
+[K
+
+[K
+
+[K
+
+[K
+
+[K
+[K
+
+
+
+ CvkeHarness               q quit  ←→ switch  ↑↓ move  enter detail  1/1  ? help[24;H[H
+
+
+  Run #1  ●[K
+[K
+  Task             Inspect the staging API and explain whether all background wo
+  Provider         openai[K
+  Started          Sep 4 14:29[K
+  Duration         1m0s[K
+
+  Verification[K
+
+  Status           satisfied[K
+
+  ────────────────────────────────────────────────────────────────────────────[K
+
+  Agent Output[K
+
+  ## Result[K
+  This is audit fixture output showing how long lines behave. This is audit…[K
+
+
+
+ CvkeHarness                      q quit  ←→ switch  esc back  ↑↓ scroll  ? help[24;H[H
+
+
+  Settings  provider, security, memory, and runtime behavior[K
+  ────────────────────────────────────────────────────────────────────────────[K
+[K
+  State unsaved[K
+  Press s to write ~/.cvkeharness/config.yaml. Select fields cycle values or ope
+[K
+  First-run setup: review values, then press s to save[K
+[K
+     Setting               Value                               Notes[K
+  ────────────────────────────────────────────────────────────────────────────[K
+  ▸ Provider              openai                              Runtime provide…[K
+    Default Model         audit-model                         Primary model u…[K
+    Connection URL                                            Base URL for lo…[K
+    Provider API Key      SYNT********TIAL                    Stored under th…[K
+    Security              reasonable                          Open profiles a…[K
+    Advisory Model        x-ai/grok-4.1-fast                  Secondary model…[K
+    Routing Enabled       false                               Let the router …[K
+    Max Tokens            4096                                Maximum respons…[K
+    Max Iterations        25                                  Maximum tool/mo…[K
+
+ CvkeHarness    q quit  ←→ switch  ↑↓ move  enter edit  s save  r reset  unsaved[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+    Provider              openai                              Runtime provide…[K
+
+
+  ▸ Provider API Key      SYNT********TIAL                    Stored under th…[K
+
+
+
+
+
+
+[24;H[H
+
+
+  Provider API Key  edit setting[K
+
+
+  Stored under the currently selected provider[K
+[K
+  ▸ > SYNTHETIC-AUDIT-KEY-NOT-A-CREDENTIAL                 [K
+[K
+  enter applies, esc cancels[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+[K
+
+ CvkeHarness                    ctrl+c quit  tab switch  enter apply  esc cancel[24;H[H
+
+
+  Settings  provider, security, memory, and runtime behavior[K
+
+
+  State unsaved[K
+  Press s to write ~/.cvkeharness/config.yaml. Select fields cycle values or ope
+[K
+     Setting               Value                               Notes[K
+  ────────────────────────────────────────────────────────────────────────────[K
+    Provider              openai                              Runtime provide…[K
+    Default Model         audit-model                         Primary model u…[K
+    Connection URL                                            Base URL for lo…[K
+  ▸ Provider API Key      SYNT********TIAL                    Stored under th…[K
+    Security              reasonable                          Open profiles a…[K
+    Advisory Model        x-ai/grok-4.1-fast                  Secondary model…[K
+    Routing Enabled       false                               Let the router …[K
+    Max Tokens            4096                                Maximum respons…[K
+    Max Iterations        25                                  Maximum tool/mo…[K
+    Log Level             off                                 Runtime logging…[K
+    Prompt Dumps          false                               Debug: save ful…[K
+
+ CvkeHarness    q quit  ←→ switch  ↑↓ move  enter edit  s save  r reset  unsaved[24;H[H
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Provider API Key      SYNT********TIAL                    Stored under th…[K
+  ▸ Security              reasonable                          Open profiles a…[K
+
+
+
+
+
+
+
+[24;H[H
+
+
+  Settings / Security  profiles and per-control overrides[K
+
+
+  Effective        reasonable    Policy           a8a9f633db94a092[K
+  Profile changes require Enter and clear overrides. YOLO does not bypass OS[K
+  or provider protections.[K
+[K
+  Security changes apply to new sessions after saving[K
+[K
+     Area                  Control                   Value             Source[K
+  ────────────────────────────────────────────────────────────────────────────[K
+  ▸ Preset                Security profile          reasonable        selected[K
+    Commands              Read-only commands        allow             profile[K
+    Commands              Unknown commands          ask               profile[K
+    Commands              Script interpreters       ask               profile[K
+    Filesystem            Create files              allow             profile[K
+    Filesystem            Overwrite files           ask               profile[K
+    Filesystem            Append to files           allow             profile[K
+    Filesystem            Delete files              ask               profile[K
+
+ CvkeHarness   ctrl+c quit  tab switch  ↑↓ move  ←→ change  r reset  R reset all[24;H[H
+
+
+  Settings  provider, security, memory, and runtime behavior[K
+
+
+  State unsaved[K
+  Press s to write ~/.cvkeharness/config.yaml. Select fields cycle values or ope
+[K
+  Security editor closed; press s to save pending changes[K
+[K
+     Setting               Value                               Notes[K
+  ────────────────────────────────────────────────────────────────────────────[K
+    Provider              openai                              Runtime provide…[K
+    Default Model         audit-model                         Primary model u…[K
+    Connection URL                                            Base URL for lo…[K
+    Provider API Key      SYNT********TIAL                    Stored under th…[K
+  ▸ Security              reasonable                          Open profiles a…[K
+    Advisory Model        x-ai/grok-4.1-fast                  Secondary model…[K
+    Routing Enabled       false                               Let the router …[K
+    Max Tokens            4096                                Maximum respons…[K
+    Max Iterations        25                                  Maximum tool/mo…[K
+
+ CvkeHarness    q quit  ←→ switch  ↑↓ move  enter edit  s save  r reset  unsaved[24;H[2K[?2004l[?25h[?1002l[?1003l[?1006l[?1049l[?25h

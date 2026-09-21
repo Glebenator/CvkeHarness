@@ -14,6 +14,7 @@ The runtime is phase-routed, approval-aware, and uses a target-aware operational
 - Distinguishes the runtime host from remote SSH targets
 - Retrieves target-specific playbooks, cautions, and findings with strict prompt budget caps
 - Fails closed for operational-memory retrieval when the state DB is unavailable
+- Offers typed file recovery, standalone NGINX transactions, guarded SSH port changes, native Btrfs checkpoints, and checked resource arithmetic; see the [recovery operating guide](docs/recovery.md) for supported scope and the [implementation ledger](docs/recovery-implementation.md) for test evidence and remaining work
 
 ## Runtime Model
 
@@ -504,7 +505,16 @@ gofmt -w .
 
 ## Generated Artifacts
 
-The repository already includes generated safety artifacts under `docs/`:
+Start with the standalone [project guide](docs/project-guide.html) for a
+source-grounded walkthrough of the operator surfaces, architecture, agent loop,
+action authorization, operational memory, routing, scheduling, persistence,
+and validation.
+
+For a hands-on recovery check, follow the [step-by-step self-testing guide](docs/recovery-testing-guide.html).
+It starts with disposable files and expected refusals, then covers Console,
+Docker fault labs, genuine VM reboot tests, and the evidence to keep.
+
+The repository also includes generated safety artifacts under `docs/`:
 
 - `docs/redteam-report.md`
 - `docs/redteam-report.json`
@@ -518,9 +528,14 @@ The harness now supports routed execution plus target-aware operational memory, 
 
 - routing is heuristic, not fully autonomous
 - the default tool surface is narrow
-- memory is markdown-first and local
+- operational memory is SQLite-canonical with local Markdown views
 - retrieval is structured-first and bounded, not semantic-first
 - SQLite carries the machine-structured indexing and operational history
 - provider support is focused on a shared abstraction rather than provider-specific features
 
 That keeps the system inspectable, testable, and easy to extend.
+
+### Personal Antigravity integration
+
+An unofficial Gemini provider is available through `cvkeharness antigravity login`
+and provider `antigravity`. See [authentication, configuration, and limitations](docs/antigravity.md).
