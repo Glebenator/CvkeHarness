@@ -57,9 +57,7 @@ func Open(path string) *Store {
 	// connection used during migration. Transactions in this store write: take
 	// the writer reservation at BEGIN so a watchdog heartbeat cannot invalidate
 	// a read snapshot just before its evidence/CAS write (SQLITE_BUSY_SNAPSHOT).
-	query := url.Values{"_pragma": {"busy_timeout(5000)"}, "_txlock": {"immediate"}}
-	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolutePath), RawQuery: query.Encode()}).String()
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", stateDatabaseDSN(absolutePath))
 	if err != nil {
 		return &Store{err: err}
 	}
@@ -105,6 +103,17 @@ func Open(path string) *Store {
 	}
 
 	return &Store{db: db, path: path}
+}
+
+func stateDatabaseDSN(absolutePath string) string {
+	path := filepath.ToSlash(absolutePath)
+	// A drive-letter path must be file:///C:/... . Without the leading slash,
+	// net/url emits file://C:/... and SQLite treats the drive as an authority.
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	query := url.Values{"_pragma": {"busy_timeout(5000)"}, "_txlock": {"immediate"}}
+	return (&url.URL{Scheme: "file", Path: path, RawQuery: query.Encode()}).String()
 }
 
 // Available reports whether the backing database is usable.

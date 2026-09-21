@@ -15,12 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type SnapshotInventory struct {
-	Entries      int    `json:"entries"`
-	LogicalBytes int64  `json:"logical_bytes"`
-	Digest       string `json:"digest"`
-}
-
 // Inventory stays bounded and never follows a symlink or crosses a nested
 // subvolume/mount. The first backend supports regular files/directories with
 // the same explicit metadata boundary as file recovery. Native snapshots are

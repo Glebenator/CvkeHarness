@@ -10,6 +10,21 @@ for validation scope and recorded test results.
 For a first hands-on run, use the [HTML self-testing guide](recovery-testing-guide.html):
 exact commands, expected results, disposable-file exercises, and Docker/VM lab steps.
 
+## Platform support
+
+The application builds on Windows, Linux and macOS. The recovery executor's
+filesystem identity, metadata and locking implementation currently supports
+Linux and macOS only. On native Windows, executor commands return an explicit
+unsupported-platform error before opening recovery state, and the agent does
+not advertise `recovery_manage` or `recovery_fleet`. Checked arithmetic through
+`recovery calculate` and `safety_calculate` remains available.
+
+Use a Linux build inside WSL2 for recovery workflows on a Windows machine, with
+test files in the Linux filesystem and the required service/filesystem support.
+NGINX, managed SSH and native Btrfs adapters retain their narrower Linux-specific
+requirements; merely building the Windows executable does not provide rollback
+coverage for native Windows files, services or disks.
+
 ## Configure the operator boundary
 
 Add roots and optional budgets to `config.yaml`:

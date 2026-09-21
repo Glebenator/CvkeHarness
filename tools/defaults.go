@@ -94,7 +94,7 @@ func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, erro
 	if opts.Store != nil && opts.Store.Available() {
 		registry.Register(NewScheduleManageTool(opts.Store))
 		registry.Register(NewSystemCronManageTool(opts.Store))
-		if opts.SecurityPolicy != nil {
+		if opts.SecurityPolicy != nil && recovery.Supported() {
 			opts.Recovery.Policy = opts.SecurityPolicy.Hash
 			engine, err := recovery.New(opts.Store, opts.Recovery)
 			if err != nil {
