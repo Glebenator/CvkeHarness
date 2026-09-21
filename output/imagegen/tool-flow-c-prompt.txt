@@ -1,0 +1,41 @@
+Use case: ui-mockup.
+Asset type: one design exploration image, option C of a terminal UI interaction study.
+Primary request: Create one polished but plausible keyboard-driven terminal UI for CvkeHarness, depicting a separate activity workspace attached to the selected conversation turn.
+Composition: A single flat straight-on landscape image approximately 1600x1100. No perspective, no hardware. One terminal application window, plus a small editorial label above and quiet subtitle below. The window has a wide main chat LEFT around 60% and separate ACTIVITY pane RIGHT around 40%, separated by a thin neutral vertical rule. Keep the two panes part of the same window. The complete composition is a precise interface design mockup.
+Style: Native monospace text throughout, warm charcoal canvas, stone body text, muted gray dividers, sage success indicators, restrained amber focus on the selected activity row. Crisp, legible typesetting with exact short text. Warm charcoal terminal rather than pure black. No gradients, shadows, browser cards, or decorative styling.
+Top editorial label, exact: "C / Separate activity workspace"
+Window chrome text, exact: "CvkeHarness   Chat"
+Window chrome context, exact: "staging-api · read only"
+
+LEFT CHAT PANE, in this exact chronological order:
+"YOU"
+"Check API health"
+small per-turn text link: "View 2 tool calls"
+"CVKEHARNESS"
+"The API is healthy. All three instances are serving requests."
+[comfortable vertical gap]
+"YOU"
+"What about the worker?"
+small per-turn text link: "View 1 tool call"
+"CVKEHARNESS"
+"The worker is running. The queue is empty."
+At bottom left, persistent draft composer with prompt: "Ask CvkeHarness…"
+
+RIGHT ACTIVITY PANE:
+Top context: "ACTIVITY / TURN 1"
+Below: "Check API health"
+First completed tool row: "✓ curl /health   0.4s"
+Second completed tool row, visibly selected with restrained amber focus: "✓ systemctl status api   1.2s"
+Below these rows, selected-row details in the SAME pane, separated by a quiet horizontal rule:
+"COMMAND"
+"systemctl status api"
+"OUTPUT"
+"Active: active (running)"
+"Instances: 3 / 3 healthy"
+"Exit code: 0"
+Quiet success label: "Verified"
+
+Window footer exact: "↑↓ scroll    Ctrl+T activity    Esc back"
+Editorial subtitle outside below the window: "Conversation and execution have separate places."
+
+Constraints: This image must make the main distinction unmistakable: the conversation remains visible in the left pane while selected-turn tool execution and output have a separate right pane. The older turn on the right is deliberately selected by the operator while the newer worker conversation remains visible on the left. The selected tool is systemctl status api. No pinned historical tool selector beneath the conversation. No inline detailed tool-output card in the chat pane. No extra sub-windows, before/after views, dashboard widgets, people, photographs, decorative logos, fake charts, or watermarks. Exact text and clear hierarchy matter. All text must fit; no clipped content.

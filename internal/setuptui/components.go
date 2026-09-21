@@ -61,10 +61,11 @@ var stepLabels = map[step]string{
 	stepModel:            "Model",
 	stepSafety:           "Safety",
 	stepSecurityControls: "Security Controls",
+	stepJudge:            "Judge Model",
 	stepScan:             "System Scan",
 	stepDependencies:     "Dependencies",
 	stepDaemon:           "Scheduler Daemon",
-	stepCapabilities:     "Capabilities",
+	stepCapabilities:     "Optional Features",
 	stepWebSearch:        "Web Search",
 	stepRecommendations:  "Guided Review",
 	stepSoul:             "Guidance",
@@ -142,20 +143,25 @@ func (m setupModel) progressRail() string {
 }
 
 func (m setupModel) footer() string {
+	if m.saving || m.validating || m.modelsLoading || m.scanning || m.recommending {
+		return "  " + keyHint("ctrl+c", "quit")
+	}
+	if m.step == stepDone {
+		return "  " + keyHint("enter", "finish") + "  " + keyHint("q", "quit")
+	}
 	if m.inputMode != inputNone {
 		return "  " + keyHint("enter", "submit") + "  " + keyHint("esc", "cancel") + "  " + keyHint("ctrl+c", "quit")
 	}
 	hints := []string{
 		keyHint("enter", "select"),
-		keyHint("n", "continue"),
 		keyHint("esc", "back"),
 		keyHint("↑↓", "move"),
 	}
-	if m.step == stepSafety || m.step == stepScan || m.step == stepCapabilities {
+	if m.step == stepSafety || m.step == stepScan {
 		hints = append(hints, keyHint("a", "advanced"))
 	}
 	if m.step == stepSecurityControls {
-		hints = append(hints, keyHint("←→", "change"), keyHint("r", "reset"))
+		hints = []string{keyHint("enter", "continue"), keyHint("↑↓", "move"), keyHint("←→", "change"), keyHint("r", "reset"), keyHint("esc", "back"), keyHint("q", "quit")}
 	}
 	if m.width >= 72 {
 		hints = append(hints, keyHint("q", "quit"))

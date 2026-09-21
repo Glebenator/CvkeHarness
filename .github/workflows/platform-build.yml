@@ -34,6 +34,8 @@ jobs:
         run: ./cvkeharness-ci.exe --help
       - name: Check platform support, state persistence, runtime registration and calculator
         run: go test ./recovery ./tools ./cmd ./state -run '^(TestRecoveryPlatform.*|TestStatePlatform.*|TestDefaultRegistryRecoveryPlatformSupport)$' -count=1
+      - name: Check first-run gating and onboarding on the native platform
+        run: go test ./config ./cmd ./internal/setupflow ./internal/setuptui -run '^(TestFirstRun.*|TestJudgeDefault.*|TestWizardReload.*|TestProviderSwitch.*|TestFinalize.*|TestSkippedScan.*|TestSetupRepairs.*|TestCodexSetup.*|TestFailedCredential.*|TestSetupBusy.*|TestSkipClears.*|TestContinuingExisting.*|TestBlankCustom.*|TestRerunPreserves.*|TestUnsupportedDaemon.*|TestOptionalActionFailure.*)$' -count=1
       - name: Cross-compile Windows ARM64
         if: runner.os == 'Windows'
         env:

@@ -176,54 +176,61 @@ func SoulProfiles() []SoulProfile {
 func DefaultSoulProfile() SoulProfile { return SoulProfiles()[0] }
 
 func LoadWizardConfig() (*config.Config, error) {
-	existing, loadErr := config.LoadConfig()
-	cfg := config.DefaultConfig()
-	if existing == nil {
-		path, pathErr := config.ConfigPath()
-		if pathErr == nil {
-			if _, statErr := os.Stat(path); statErr == nil || !os.IsNotExist(statErr) {
-				return nil, loadErr
-			}
-		}
+	path, err := config.ConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		cfg := config.DefaultConfig()
 		cfg.Normalize()
 		return cfg, nil
+	} else if err != nil {
+		return nil, err
 	}
-	clone := *cfg
-	clone.Provider = firstNonEmpty(existing.Provider, cfg.Provider)
-	clone.DefaultModel = firstNonEmpty(existing.PrimaryModel(), cfg.PrimaryModel())
-	clone.APIKeys = cloneStringMap(existing.APIKeys)
-	clone.BaseURL = firstNonEmpty(existing.BaseURL, cfg.BaseURL)
-	clone.SafetyMode = firstNonEmpty(existing.SafetyMode, cfg.SafetyMode)
-	clone.SafetyModel = firstNonEmpty(existing.SafetyModel, cfg.SafetyModel)
-	if existing.MaxTokens > 0 {
-		clone.MaxTokens = existing.MaxTokens
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return nil, err
 	}
-	if existing.MaxIterations > 0 {
-		clone.MaxIterations = existing.MaxIterations
+	// Preserve every saved setting, including recovery and phase routing.
+	return cfg.Clone(), nil
+}
+
+// SelectProvider clears provider-native models when the connection changes.
+// Credentials and explicitly approved routing models remain available.
+func SelectProvider(cfg *config.Config, name string) {
+	if cfg.Provider == name {
+		return
 	}
-	clone.LogLevel = firstNonEmpty(existing.LogLevel, cfg.LogLevel)
-	clone.AllowedCommands = append([]string(nil), existing.AllowedCommands...)
-	clone.RoutingEnabled = existing.RoutingEnabled
-	clone.RoutingMode = firstNonEmpty(existing.RoutingMode, cfg.RoutingMode)
-	clone.ApprovedModels = append([]string(nil), existing.ApprovedModels...)
-	clone.FavoriteModels = append([]string(nil), existing.FavoriteModels...)
-	clone.MemoryDir = firstNonEmpty(existing.MemoryDir, cfg.MemoryDir)
-	clone.StateDBPath = firstNonEmpty(existing.StateDBPath, cfg.StateDBPath)
-	clone.DebugPromptDumps = existing.DebugPromptDumps
-	clone.PromptDumpDir = firstNonEmpty(existing.PromptDumpDir, cfg.PromptDumpDir)
-	clone.RoutingMinConfidence = existing.RoutingMinConfidence
-	clone.SetupAgentMode = firstNonEmpty(existing.SetupAgentMode, cfg.SetupAgentMode)
-	clone.CapabilityPolicy = existing.CapabilityPolicy
-	clone.Security = existing.Security.Clone()
-	clone.WebSearch = existing.WebSearch
-	clone.WebSearch.AllowedDomains = append([]string(nil), existing.WebSearch.AllowedDomains...)
-	clone.WebSearch.BlockedDomains = append([]string(nil), existing.WebSearch.BlockedDomains...)
-	clone.Normalize()
-	return &clone, nil
+	cfg.Provider = name
+	cfg.DefaultModel = ""
+	cfg.Model = ""
+	cfg.SafetyModel = ""
+}
+
+// ValidateReady checks local configuration and login presence, not live service
+// availability. Offline operation does not force users through setup again.
+func ValidateReady(cfg *config.Config) error {
+	if err := cfg.ValidateConnection(); err != nil {
+		return err
+	}
+	switch cfg.Provider {
+	case "codex":
+		if _, ok := CodexAuthSummary(); !ok {
+			return fmt.Errorf("Codex login is missing or unreadable; run 'codex login', then complete setup")
+		}
+	case "antigravity":
+		if _, err := provider.LoadAntigravityAuth(provider.AntigravityAuthPath()); err != nil {
+			return fmt.Errorf("Antigravity login is missing or unreadable; run 'cvkeharness antigravity login', then complete setup")
+		}
+	}
+	return nil
 }
 
 func SetDefaultModel(cfg *config.Config, model string) {
 	model = config.NormalizeProviderModelID(cfg.Provider, model)
+	if cfg.SafetyModel == "" || cfg.SafetyModel == cfg.PrimaryModel() {
+		cfg.SafetyModel = model
+	}
 	cfg.DefaultModel = model
 	EnsureDefaultApproved(cfg)
 }
@@ -508,7 +515,7 @@ func GenerateRecommendations(cfg *config.Config, profile HostProfile, installPla
 	if effective, err := cfg.EffectiveSecurity(); err == nil && effective.Profile == securitypolicy.ProfileYOLO {
 		out = append(out, "YOLO removes CvkeHarness approval and deletion guards. It does not bypass operating-system or provider protections; use it only on disposable or trusted environments.")
 	}
-	if !profile.Python.Found {
+	if !profile.ScannedAt.IsZero() && !profile.Python.Found {
 		out = append(out, "Install Python if you expect the agent to generate diagnostic scripts or data-processing helpers.")
 	}
 	if installPlan.Selected {
@@ -517,7 +524,7 @@ func GenerateRecommendations(cfg *config.Config, profile HostProfile, installPla
 	if daemonPlan.Supported && !daemonPlan.Selected {
 		out = append(out, "Install the scheduler daemon if you want CvkeHarness jobs to run while the TUI is closed.")
 	}
-	if !profile.InternetReachable {
+	if !profile.ScannedAt.IsZero() && !profile.InternetReachable {
 		out = append(out, "Internet reachability failed; cloud providers may not work until network or DNS is fixed.")
 	}
 	if len(out) == 0 {
@@ -531,6 +538,10 @@ func AgentRecommendations(ctx context.Context, cfg *config.Config, profile HostP
 	if err != nil {
 		return nil, err
 	}
+	hostSummary := "Host scan skipped; installed tools and connectivity are unknown. Do not infer missing tools or failed internet access."
+	if !profile.ScannedAt.IsZero() {
+		hostSummary = fmt.Sprintf("Host: %s/%s, CPUs=%d, Python=%v, internet=%v, provider endpoint=%v", profile.OS, profile.Arch, profile.CPUs, profile.Python.Found, profile.InternetReachable, profile.ProviderReachable)
+	}
 	prompt := strings.Join([]string{
 		"You are helping configure CvkeHarness, a local-first DevOps and coding agent.",
 		"Return 3 to 6 concise setup recommendations as plain bullet lines. Do not ask to run commands.",
@@ -538,7 +549,7 @@ func AgentRecommendations(ctx context.Context, cfg *config.Config, profile HostP
 		"Provider: " + cfg.Provider,
 		"Model: " + cfg.PrimaryModel(),
 		"Safety mode: " + cfg.SafetyMode,
-		fmt.Sprintf("Host: %s/%s, CPUs=%d, Python=%v, internet=%v, provider endpoint=%v", profile.OS, profile.Arch, profile.CPUs, profile.Python.Found, profile.InternetReachable, profile.ProviderReachable),
+		hostSummary,
 		"Python install plan: " + installPlan.Description + " selected=" + strconv.FormatBool(installPlan.Selected),
 		"Daemon supported=" + strconv.FormatBool(daemonPlan.Supported) + " selected=" + strconv.FormatBool(daemonPlan.Selected),
 		"Capabilities: python_scripts=" + cfg.CapabilityPolicy.PythonScripts + ", diagnostics=" + cfg.CapabilityPolicy.AutonomousDiagnostics + ", network=" + cfg.CapabilityPolicy.NetworkProbes + ", installs=" + cfg.CapabilityPolicy.InstallMissingTools,
@@ -562,25 +573,33 @@ func Finalize(ctx context.Context, opts FinalizeOptions) (FinalizeResult, error)
 	cfg := opts.Config
 	cfg.Normalize()
 	EnsureDefaultApproved(cfg)
-	if err := cfg.Save(); err != nil {
+	if err := ValidateReady(cfg); err != nil {
 		return FinalizeResult{}, err
 	}
-	result := FinalizeResult{ConfigSaved: true}
-	hostPath, err := WriteHostProfile(cfg.MemoryDir, opts.HostProfile)
-	if err != nil {
-		return result, err
+	result := FinalizeResult{}
+	if !opts.HostProfile.ScannedAt.IsZero() {
+		hostPath, err := WriteHostProfile(cfg.MemoryDir, opts.HostProfile)
+		if err != nil {
+			return result, err
+		}
+		result.HostProfilePath = hostPath
 	}
-	result.HostProfilePath = hostPath
 	wroteSoul, err := WriteSoul(cfg.MemoryDir, opts.SoulProfile)
 	if err != nil {
 		return result, err
 	}
 	result.SoulWritten = wroteSoul
-	wroteHost, err := WriteHostNotes(cfg.MemoryDir, append(SummarizeHostProfile(opts.HostProfile), opts.HostNotes...))
+	notes := append(SummarizeHostProfile(opts.HostProfile), opts.HostNotes...)
+	wroteHost, err := WriteHostNotes(cfg.MemoryDir, notes)
 	if err != nil {
 		return result, err
 	}
 	result.HostNotesWritten = wroteHost
+	// Publish the usable configuration after required local artifacts succeed.
+	if err := cfg.Save(); err != nil {
+		return result, err
+	}
+	result.ConfigSaved = true
 	if !opts.ApplyActions {
 		return result, nil
 	}
@@ -666,6 +685,9 @@ func WriteHostProfile(memoryDir string, profile HostProfile) (string, error) {
 }
 
 func SummarizeHostProfile(profile HostProfile) []string {
+	if profile.ScannedAt.IsZero() {
+		return nil
+	}
 	var notes []string
 	if profile.OS != "" {
 		notes = append(notes, fmt.Sprintf("Setup detected host platform %s/%s with %d CPU cores.", profile.OS, profile.Arch, profile.CPUs))

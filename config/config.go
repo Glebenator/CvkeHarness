@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,10 +150,17 @@ func (c *Config) Normalize() {
 	}
 	c.DefaultModel = NormalizeProviderModelID(c.Provider, c.DefaultModel)
 	c.Model = NormalizeProviderModelID(c.Provider, c.Model)
+	if c.MaxTokens <= 0 {
+		c.MaxTokens = 4096
+	}
+	if c.MaxIterations <= 0 {
+		c.MaxIterations = 25
+	}
 
-	// Fallback for safety model if not found
-	if c.SafetyModel == "" {
-		c.SafetyModel = "x-ai/grok-4.1-fast"
+	// The judge uses the selected provider's credentials and endpoint too.
+	// Repair the OpenRouter default leaked by older onboarding versions.
+	if c.SafetyModel == "" || (c.Provider != "openrouter" && c.SafetyModel == "x-ai/grok-4.1-fast") {
+		c.SafetyModel = c.PrimaryModel()
 	}
 	c.SafetyModel = NormalizeProviderModelID(c.Provider, c.SafetyModel)
 	if c.SafetyMode == "" {
@@ -215,6 +223,39 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("security configuration is required")
 	}
 	return c.Security.Validate()
+}
+
+// ValidateConnection checks durable setup requirements without calling a model.
+// A hand-authored or legacy configuration is ready when these fields are set;
+// no separate onboarding-completed flag is needed.
+func (c *Config) ValidateConnection() error {
+	if c == nil {
+		return fmt.Errorf("configuration is required")
+	}
+	switch c.Provider {
+	case "openrouter", "openai":
+		if strings.TrimSpace(c.GetAPIKey(c.Provider)) == "" {
+			return fmt.Errorf("%s API key is required", c.Provider)
+		}
+	case "codex", "antigravity":
+		// Their local login files are checked by the setup/runtime boundary.
+	case "lmstudio":
+		if c.BaseURL != "" {
+			u, err := url.Parse(c.BaseURL)
+			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+				return fmt.Errorf("LM Studio URL must be an http or https URL with a host")
+			}
+		}
+	default:
+		return fmt.Errorf("choose a supported provider")
+	}
+	if strings.TrimSpace(c.PrimaryModel()) == "" {
+		return fmt.Errorf("choose a primary model")
+	}
+	if strings.TrimSpace(c.SafetyModel) == "" {
+		return fmt.Errorf("choose a judge model")
+	}
+	return c.Validate()
 }
 
 // EffectiveSecurity returns the single resolved policy used by runtimes.
@@ -356,7 +397,7 @@ func DefaultConfig() *Config {
 		Provider:                "openrouter",
 		DefaultModel:            "anthropic/claude-sonnet-4.6",
 		SafetyMode:              "llm_judge",
-		SafetyModel:             "x-ai/grok-4.1-fast",
+		SafetyModel:             "anthropic/claude-sonnet-4.6",
 		MaxTokens:               4096,
 		MaxIterations:           25,
 		LogLevel:                "off",

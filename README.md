@@ -159,7 +159,7 @@ codex login
 
 Choose `Sign in with ChatGPT`. CvkeHarness reuses the official `~/.codex/auth.json` login cache and sends Codex model requests to the ChatGPT Codex backend, so usage follows your ChatGPT/Codex plan rather than a manually pasted OpenAI API key. If you previously used API-key mode in Codex CLI, run `codex logout` and then `codex login` to switch to subscription-backed access.
 
-The setup wizard also reads the official Codex `~/.codex/models_cache.json` model cache. When that cache was refreshed recently, the model picker and LLM judge picker show a `LIVE` status and list the same current Codex models exposed to your signed-in Codex account. If the cache is missing, stale, or empty, CvkeHarness does not guess at Codex model names; it offers only manual entry until Codex refreshes the account-scoped cache.
+The setup wizard also reads the Codex `~/.codex/models_cache.json` model cache (or the cache under `CODEX_HOME`). The primary and judge model pickers use that account-scoped catalog and distinguish recent from older cached choices. These are cached models, not a live availability check. If the cache is missing or empty, enter an exact model ID or run Codex to refresh the cache. Existing configured models remain selectable even when absent from the catalog.
 
 ### Build
 
@@ -194,6 +194,8 @@ Windows ARM64. These checks do not replace the recovery Docker/VM fault labs.
 ./cvkeharness setup
 ```
 
+Fresh installations must complete setup before opening the console (including Chat and the `tui` alias), running tasks, or starting scheduled work. Missing, empty, incomplete, or unreadable configuration produces a setup prompt instead of creating runtime state. Existing usable configurations continue to work without a new completion flag. Help, provider login, and model-independent recovery remain available.
+
 The setup wizard configures:
 
 - provider
@@ -201,15 +203,14 @@ The setup wizard configures:
 - default model
 - security profile (`extra_strict`, `reasonable`, `less_strict`, `minimal`, or `yolo`)
 - optional per-control overrides for filesystem, commands, system, network, remote actions, autonomy, approvals, and limits
-- advisory model for controls explicitly set to `llm_review`
-- routing mode
-- token limit
-- iteration limit
-- log level
+- judge model using the same provider connection, defaulting to the primary model
+- optional host scan and dependency planning (daemon installation is Linux-only)
 - initial `guidance.md` profile
 - optional runtime-host machine notes for stable local quirks
 - optional Tavily-backed public web search tools
 - bootstrap of the structured memory files
+
+The basic path skips host probes, model-generated suggestions, and optional integrations. The review shows both models and offers external actions only when you selected them. Setup preserves existing recovery, routing, and security overrides; routing, token/iteration limits, and logging can be edited in Settings. Older non-OpenRouter configurations carrying the obsolete Grok judge default automatically use their primary model instead.
 
 `setup` creates the managed memory surfaces up front in `~/.cvkeharness/`. If generated views are missing or drift from canonical state, normal initialization repairs them from SQLite. A populated legacy Markdown-only installation is migrated once into quarantined candidates.
 

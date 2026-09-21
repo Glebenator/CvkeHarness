@@ -371,3 +371,29 @@ func TestLoadConfigDeduplicatesFavoriteModels(t *testing.T) {
 		t.Fatalf("expected favorite models to be deduplicated, got %#v", cfg.FavoriteModels)
 	}
 }
+
+func TestJudgeDefaultUsesSelectedProviderModel(t *testing.T) {
+	for _, provider := range []string{"codex", "openai", "lmstudio", "antigravity", "openrouter"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := &Config{Provider: provider, DefaultModel: "primary"}
+			cfg.Normalize()
+			if cfg.SafetyModel != "primary" {
+				t.Fatalf("judge=%q", cfg.SafetyModel)
+			}
+			cfg.SafetyModel = "custom-judge"
+			cfg.Normalize()
+			if cfg.SafetyModel != "custom-judge" {
+				t.Fatal("overwrote custom judge")
+			}
+			cfg.SafetyModel = "x-ai/grok-4.1-fast"
+			cfg.Normalize()
+			want := "primary"
+			if provider == "openrouter" {
+				want = "x-ai/grok-4.1-fast"
+			}
+			if cfg.SafetyModel != want {
+				t.Fatalf("legacy judge=%q, want %q", cfg.SafetyModel, want)
+			}
+		})
+	}
+}
