@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/coolcake/cvkeharness/internal/httputil"
 )
@@ -20,9 +21,16 @@ type OpenRouter struct {
 
 // NewOpenRouter creates a new OpenRouter API client.
 func NewOpenRouter(apiKey string) *OpenRouter {
+	return NewOpenRouterWithBaseURL(apiKey, "")
+}
+
+func NewOpenRouterWithBaseURL(apiKey, baseURL string) *OpenRouter {
+	if baseURL == "" {
+		baseURL = "https://openrouter.ai/api/v1"
+	}
 	return &OpenRouter{
 		client:  httputil.NewDefaultClient(),
-		baseURL: "https://openrouter.ai/api/v1",
+		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 	}
 }

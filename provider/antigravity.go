@@ -24,7 +24,11 @@ type Antigravity struct {
 }
 
 func NewAntigravity() *Antigravity {
-	return &Antigravity{client: antigravityHTTPClient(), endpoint: antigravityEndpoint, authPath: AntigravityAuthPath()}
+	return NewAntigravityWithAuthPath(AntigravityAuthPath())
+}
+
+func NewAntigravityWithAuthPath(authPath string) *Antigravity {
+	return &Antigravity{client: antigravityHTTPClient(), endpoint: antigravityEndpoint, authPath: authPath}
 }
 
 func antigravityHTTPClient() *http.Client {

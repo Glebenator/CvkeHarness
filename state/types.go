@@ -44,6 +44,9 @@ type RunRecord struct {
 
 // PhaseRecord captures one routed phase invocation.
 type PhaseRecord struct {
+	// Connection distinguishes named endpoints at the write boundary. Legacy
+	// routing aggregates have no connection dimension and exclude these phases.
+	Connection        string
 	Phase             core.Phase
 	Provider          string
 	RequestedModel    string

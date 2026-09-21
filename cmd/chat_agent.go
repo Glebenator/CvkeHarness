@@ -23,7 +23,7 @@ func newChatAgent(
 	blockManualApprovals bool,
 	modelApproval router.ApprovalPrompter,
 ) (*agent.Agent, error) {
-	p, err := resolveProvider(cfg, "")
+	models, err := resolveRuntimeModels(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +33,7 @@ func newChatAgent(
 		return nil, err
 	}
 	promptDumper := promptdump.NewWithRetentionDays(cfg.DebugPromptDumps, cfg.PromptDumpDir, cfg.PromptDumpRetentionDays)
-	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper, blockManualApprovals)
+	registry, err := defaultRegistryFromConfig(cfg, store, mem, models.Judge, promptDumper, blockManualApprovals)
 	if err != nil {
 		return nil, err
 	}
@@ -41,12 +41,12 @@ func newChatAgent(
 	r := router.New(routingCfg, store, modelApproval)
 
 	return agent.New(agent.Options{
-		Provider:             p,
-		ProviderName:         cfg.Provider,
+		Provider:             models.Primary,
+		ProviderName:         models.PrimaryModel.Connection.Provider,
 		ProviderResolver:     providerResolver{cfg: cfg},
 		ToolRegistry:         registry,
 		EventObserver:        observer,
-		DefaultModel:         cfg.PrimaryModel(),
+		DefaultModel:         models.PrimaryModel.Model,
 		MaxIterations:        cfg.MaxIterations,
 		MaxTokens:            cfg.MaxTokens,
 		RoutingConfig:        routingCfg,
@@ -58,8 +58,10 @@ func newChatAgent(
 		PromptDumper:         promptDumper,
 		TelemetryWriter:      telemetryWriterFromConfig(cfg, store),
 		SafetyMode:           cfg.SafetyMode,
-		SafetyModel:          cfg.SafetyModel,
-		ClassifierProvider:   p,
+		SafetyModel:          models.JudgeModel.Model,
+		ClassifierProvider:   models.Classifier,
+		ClassifierModel:      models.ClassifierModel.Model,
+		VerifierModel:        models.Verifier,
 		AwaitManualApprovals: blockManualApprovals,
 	}), nil
 }

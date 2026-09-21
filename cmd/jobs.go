@@ -241,7 +241,7 @@ func newScheduledAgentRunner(ctx context.Context, store *state.Store) (scheduled
 		return scheduledAgentRunner{}, err
 	}
 	log.Init(cfg.LogLevel, "text")
-	p, err := resolveProvider(cfg, "")
+	models, err := resolveRuntimeModels(cfg)
 	if err != nil {
 		return scheduledAgentRunner{}, err
 	}
@@ -251,7 +251,7 @@ func newScheduledAgentRunner(ctx context.Context, store *state.Store) (scheduled
 	}
 	promptDumper := promptdump.NewWithRetentionDays(cfg.DebugPromptDumps, cfg.PromptDumpDir, cfg.PromptDumpRetentionDays)
 	telemetryWriter := telemetryWriterFromConfig(cfg, store)
-	registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper, true)
+	registry, err := defaultRegistryFromConfig(cfg, store, mem, models.Judge, promptDumper, true)
 	if err != nil {
 		return scheduledAgentRunner{}, err
 	}
@@ -260,11 +260,11 @@ func newScheduledAgentRunner(ctx context.Context, store *state.Store) (scheduled
 		return false, nil
 	})
 	return scheduledAgentRunner{agent: agent.New(agent.Options{
-		Provider:           p,
-		ProviderName:       cfg.Provider,
+		Provider:           models.Primary,
+		ProviderName:       models.PrimaryModel.Connection.Provider,
 		ProviderResolver:   providerResolver{cfg: cfg},
 		ToolRegistry:       registry,
-		DefaultModel:       cfg.PrimaryModel(),
+		DefaultModel:       models.PrimaryModel.Model,
 		MaxIterations:      cfg.MaxIterations,
 		MaxTokens:          cfg.MaxTokens,
 		RoutingConfig:      routingCfg,
@@ -276,8 +276,10 @@ func newScheduledAgentRunner(ctx context.Context, store *state.Store) (scheduled
 		PromptDumper:       promptDumper,
 		TelemetryWriter:    telemetryWriter,
 		SafetyMode:         cfg.SafetyMode,
-		SafetyModel:        cfg.SafetyModel,
-		ClassifierProvider: p,
+		SafetyModel:        models.JudgeModel.Model,
+		ClassifierProvider: models.Classifier,
+		ClassifierModel:    models.ClassifierModel.Model,
+		VerifierModel:      models.Verifier,
 	})}, nil
 }
 

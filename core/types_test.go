@@ -2,6 +2,21 @@ package core
 
 import "testing"
 
+func TestNamedModelRefIdentityAndNativePath(t *testing.T) {
+	first := ParseModelRef("laptop::lmstudio/vendor/group/model", "codex")
+	second := ParseModelRef("server::lmstudio/vendor/group/model", "codex")
+	if first.Connection != "laptop" || first.Provider != "lmstudio" || first.Model != "vendor/group/model" || first.String() != "laptop::lmstudio/vendor/group/model" {
+		t.Fatalf("bad ref %+v", first)
+	}
+	if first.Equal(second) {
+		t.Fatal("different connections compared equal")
+	}
+	bare := ParseModelRef("vendor/group/model", "openrouter")
+	if bare.Provider != "openrouter" || bare.Model != "vendor/group/model" {
+		t.Fatalf("native model namespace treated as provider: %+v", bare)
+	}
+}
+
 func TestParseModelRefRecognizesOpenAIProvider(t *testing.T) {
 	t.Parallel()
 

@@ -262,6 +262,9 @@ func (s *Store) RecordRun(ctx context.Context, record RunRecord) error {
 }
 
 func (s *Store) bumpModelStatsTx(ctx context.Context, tx *sql.Tx, taskClass core.TaskClass, phase PhaseRecord, tools []ToolOutcome) error {
+	if phase.Connection != "" {
+		return nil
+	}
 	toolset := ""
 	for _, tool := range tools {
 		if tool.Phase == phase.Phase {

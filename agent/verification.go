@@ -188,17 +188,23 @@ func (e incompleteTaskError) Error() string {
 }
 
 func (a *Agent) verifyCompletion(ctx context.Context, selection core.RoutingSelection, taskClass core.TaskClass, prompt, output string, observed []memory.ObservedToolCall, execErr error) (CompletionVerification, state.PhaseRecord, error) {
-	p, err := a.resolveProvider(selection.Requested.Provider)
+	explanation := "same execution model verified whether the user request was satisfied"
+	if !a.opts.VerifierModel.IsZero() {
+		selection.Requested = a.opts.VerifierModel
+		explanation = "configured verifier model checked whether the user request was satisfied"
+	}
+	p, err := a.resolveModelProvider(selection.Requested)
 	if err != nil {
 		return CompletionVerification{}, state.PhaseRecord{}, err
 	}
 
 	record := state.PhaseRecord{
+		Connection:     selection.Requested.Connection,
 		Phase:          core.PhaseVerification,
 		Provider:       selection.Requested.Provider,
 		RequestedModel: selection.Requested.Model,
 		ActualModel:    selection.Requested.Model,
-		Explanation:    "same execution model verified whether the user request was satisfied",
+		Explanation:    selectionExplanation(core.RoutingSelection{Requested: selection.Requested, Reason: explanation}),
 	}
 
 	req := &provider.ChatRequest{
@@ -220,7 +226,7 @@ func (a *Agent) verifyCompletion(ctx context.Context, selection core.RoutingSele
 		PrefixHash: hashJSON([]any{req.Messages[:1]}),
 		PromptHash: hashJSON([]any{req.Messages, req.Tools}),
 	}
-	emitPromptPlanned(ctx, core.PhaseVerification, 0, selection.Requested.Provider, selection.Requested.Model, verificationPlan, len(req.Messages))
+	emitPromptPlanned(ctx, core.PhaseVerification, 0, selection.Requested.Provider, selection.Requested.Model, verificationPlan, len(req.Messages), selection.Requested.Connection)
 	dump := a.dumpPrompt(ctx, promptdump.Metadata{
 		Phase:     core.PhaseVerification,
 		Provider:  selection.Requested.Provider,

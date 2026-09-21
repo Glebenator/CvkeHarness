@@ -8,6 +8,7 @@ import (
 
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/modelruntime"
 	"github.com/coolcake/cvkeharness/internal/promptdump"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
 	"github.com/coolcake/cvkeharness/memory"
@@ -25,32 +26,64 @@ func (r providerResolver) Resolve(providerName string) (provider.Provider, error
 	return resolveProvider(r.cfg, providerName)
 }
 
+func (r providerResolver) ResolveModel(ref core.ModelRef) (provider.Provider, error) {
+	return modelruntime.ResolveModel(r.cfg, ref)
+}
+
 func resolveProvider(cfg *config.Config, providerName string) (provider.Provider, error) {
 	name := strings.TrimSpace(providerName)
 	if name == "" {
-		name = strings.TrimSpace(cfg.Provider)
+		client, _, err := modelruntime.ResolveRole(cfg, config.RolePrimary)
+		return client, err
 	}
+	connection, err := cfg.ConnectionByID(name)
+	if err != nil {
+		return nil, err
+	}
+	return modelruntime.NewClient(connection)
+}
 
-	switch name {
-	case "antigravity":
-		return provider.NewAntigravity(), nil
-	case "codex":
-		return provider.NewCodexFromCLIAuth(), nil
-	case "openrouter":
-		return provider.NewOpenRouter(cfg.GetAPIKey("openrouter")), nil
-	case "openai":
-		return provider.NewOpenAI(cfg.GetAPIKey("openai")), nil
-	case "lmstudio":
-		return provider.NewLMStudio(cfg.BaseURL), nil
-	default:
-		return nil, fmt.Errorf("unsupported provider %q", name)
+type runtimeModelClients struct {
+	Primary, Judge, Classifier                provider.Provider
+	PrimaryModel, JudgeModel, ClassifierModel config.ResolvedModel
+	Verifier                                  core.ModelRef
+}
+
+func resolveRuntimeModels(cfg *config.Config) (runtimeModelClients, error) {
+	var result runtimeModelClients
+	var err error
+	if err = cfg.ValidateModelRoles(true); err != nil {
+		return result, err
 	}
+	if result.Primary, result.PrimaryModel, err = modelruntime.ResolveRole(cfg, config.RolePrimary); err != nil {
+		return result, err
+	}
+	if result.Judge, result.JudgeModel, err = modelruntime.ResolveRole(cfg, config.RoleSafetyJudge); err != nil {
+		return result, err
+	}
+	if result.Classifier, result.ClassifierModel, err = modelruntime.ResolveRole(cfg, config.RoleClassifier); err != nil {
+		return result, err
+	}
+	if !cfg.VerifierInheritsExecution() {
+		resolved, resolveErr := cfg.ResolveRole(config.RoleVerifier)
+		if resolveErr != nil {
+			return result, resolveErr
+		}
+		result.Verifier = modelruntime.Ref(resolved)
+	}
+	return result, nil
 }
 
 func routingConfigFromConfig(cfg *config.Config, store *state.Store) core.RoutingConfig {
+	primary, _ := cfg.ResolveRole(config.RolePrimary)
+	defaultRef := modelruntime.Ref(primary)
 	approved := make([]core.ModelRef, 0, len(cfg.ApprovedModels))
 	for _, raw := range cfg.ApprovedModels {
-		ref := core.ParseModelRef(raw, cfg.Provider)
+		normalized, err := normalizeModelArg(cfg, raw)
+		if err != nil {
+			continue
+		}
+		ref := core.ParseModelRef(normalized, primary.Connection.Provider)
 		if ref.IsZero() {
 			continue
 		}
@@ -69,7 +102,6 @@ func routingConfigFromConfig(cfg *config.Config, store *state.Store) core.Routin
 		}
 	}
 
-	defaultRef := core.NewModelRef(cfg.Provider, cfg.PrimaryModel())
 	seenDefault := false
 	for _, ref := range approved {
 		if ref.Equal(defaultRef) {
@@ -82,15 +114,12 @@ func routingConfigFromConfig(cfg *config.Config, store *state.Store) core.Routin
 	}
 
 	phaseModels := map[core.Phase]core.ModelRef{}
-	if cfg.PlanningModel != "" {
-		phaseModels[core.PhasePlanning] = core.ParseModelRef(cfg.PlanningModel, cfg.Provider)
+	for role, phase := range map[config.ModelRole]core.Phase{config.RolePlanning: core.PhasePlanning, config.RoleExecution: core.PhaseExecution, config.RoleCuration: core.PhaseCuration} {
+		if resolved, err := cfg.ResolveRole(role); err == nil {
+			phaseModels[phase] = modelruntime.Ref(resolved)
+		}
 	}
-	if cfg.ExecutionModel != "" {
-		phaseModels[core.PhaseExecution] = core.ParseModelRef(cfg.ExecutionModel, cfg.Provider)
-	}
-	if cfg.CurationModel != "" {
-		phaseModels[core.PhaseCuration] = core.ParseModelRef(cfg.CurationModel, cfg.Provider)
-	}
+	phaseModels[core.PhaseChat] = phaseModels[core.PhaseExecution]
 
 	mode := core.RoutingMode(cfg.RoutingMode)
 	if !cfg.RoutingEnabled {
@@ -112,13 +141,17 @@ func defaultRegistryFromConfig(cfg *config.Config, store *state.Store, mem *memo
 	if err != nil {
 		return nil, fmt.Errorf("resolve security policy: %w", err)
 	}
+	judgeModel, err := cfg.ResolveRole(config.RoleSafetyJudge)
+	if err != nil {
+		return nil, err
+	}
 	return tools.NewDefaultRegistryFromOptions(tools.DefaultRegistryOptions{
 		AllowedCommands:      cfg.AllowedCommands,
 		Store:                store,
 		Memory:               mem,
 		Judge:                judge,
 		SafetyMode:           cfg.SafetyMode,
-		SafetyModel:          cfg.SafetyModel,
+		SafetyModel:          judgeModel.Model,
 		PrimaryModel:         cfg.PrimaryModel(),
 		PromptDumper:         promptDumper,
 		BlockManualApprovals: blockManualApprovals,

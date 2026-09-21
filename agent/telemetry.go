@@ -52,8 +52,13 @@ func emitModelCallCompleted(ctx context.Context, phase core.Phase, iteration int
 	})
 }
 
-func emitPromptPlanned(ctx context.Context, phase core.Phase, iteration int, providerName, requestedModel string, plan promptPlan, messageCount int) {
+func emitPromptPlanned(ctx context.Context, phase core.Phase, iteration int, providerName, requestedModel string, plan promptPlan, messageCount int, connection ...string) {
+	connectionID := ""
+	if len(connection) > 0 {
+		connectionID = connection[0]
+	}
 	payload, _ := json.Marshal(map[string]any{
+		"connection_id":      connectionID,
 		"stable_prefix_hash": plan.PrefixHash,
 		"prompt_hash":        plan.PromptHash,
 		"message_count":      messageCount,

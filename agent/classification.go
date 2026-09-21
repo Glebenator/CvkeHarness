@@ -39,7 +39,7 @@ func (a *Agent) classifyTask(ctx context.Context, prompt string, prior classific
 		Actionable: actionableTaskClass(deterministic),
 		Source:     "deterministic",
 	}
-	if a == nil || a.opts.SafetyMode != tools.SafetyModeLLMJudge || a.opts.ClassifierProvider == nil || strings.TrimSpace(a.opts.SafetyModel) == "" {
+	if a == nil || a.opts.SafetyMode != tools.SafetyModeLLMJudge || a.opts.ClassifierProvider == nil || strings.TrimSpace(a.classifierModel()) == "" {
 		a.emitClassification(ctx, decision)
 		return decision
 	}
@@ -47,7 +47,7 @@ func (a *Agent) classifyTask(ctx context.Context, prompt string, prior classific
 	callCtx, cancel := context.WithTimeout(ctx, classifierTimeout)
 	defer cancel()
 	req := &provider.ChatRequest{
-		Model: a.opts.SafetyModel,
+		Model: a.classifierModel(),
 		Messages: []provider.Message{
 			{Role: "system", Content: "Classify the user's current task for CvkeHarness. Follow-ups such as again, retry, repeat, retest, and do that again inherit the prior actionable task. Return exactly one JSON object and no prose. task_class must be one of general, inspection, debugging, shell_heavy, policy_sensitive, long_horizon, summarization."},
 			{Role: "user", Content: classifierPrompt(prompt, prior)},
@@ -58,14 +58,14 @@ func (a *Agent) classifyTask(ctx context.Context, prompt string, prior classific
 	resp, err := a.opts.ClassifierProvider.ChatCompletion(callCtx, req)
 	if err != nil {
 		decision.Source = "deterministic_fallback"
-		decision.Model = a.opts.SafetyModel
+		decision.Model = a.classifierModel()
 		decision.FallbackReason = err.Error()
 		a.emitClassification(ctx, decision)
 		return decision
 	}
 	if resp == nil {
 		decision.Source = "deterministic_fallback"
-		decision.Model = a.opts.SafetyModel
+		decision.Model = a.classifierModel()
 		decision.FallbackReason = "classifier returned no response"
 		a.emitClassification(ctx, decision)
 		return decision
@@ -73,7 +73,7 @@ func (a *Agent) classifyTask(ctx context.Context, prompt string, prior classific
 	parsed, err := parseTaskClassification(resp.Message.Content)
 	if err != nil {
 		decision.Source = "deterministic_fallback"
-		decision.Model = a.opts.SafetyModel
+		decision.Model = a.classifierModel()
 		decision.FallbackReason = "invalid classifier response: " + err.Error()
 		a.emitClassification(ctx, decision)
 		return decision
@@ -83,7 +83,7 @@ func (a *Agent) classifyTask(ctx context.Context, prompt string, prior classific
 	decision.Source = "llm_judge"
 	decision.Model = resp.Model
 	if strings.TrimSpace(decision.Model) == "" {
-		decision.Model = a.opts.SafetyModel
+		decision.Model = a.classifierModel()
 	}
 	// Follow-up inheritance is a deterministic conversation contract. The
 	// judge improves ambiguous classification but cannot erase that contract.
@@ -183,4 +183,14 @@ func (a *Agent) emitClassification(ctx context.Context, decision taskClassificat
 		"fallback_reason": decision.FallbackReason,
 	})
 	_ = telemetry.Record(ctx, telemetry.Event{Type: telemetry.EventTaskClassified, Payload: payload})
+}
+
+func (a *Agent) classifierModel() string {
+	if a == nil {
+		return ""
+	}
+	if a.opts.ClassifierModel != "" {
+		return a.opts.ClassifierModel
+	}
+	return a.opts.SafetyModel
 }

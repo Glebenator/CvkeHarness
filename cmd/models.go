@@ -9,6 +9,7 @@ import (
 
 	"github.com/coolcake/cvkeharness/config"
 	"github.com/coolcake/cvkeharness/core"
+	"github.com/coolcake/cvkeharness/internal/modelruntime"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/spf13/cobra"
 )
@@ -258,7 +259,7 @@ var modelsApproveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		ref := core.ParseModelRef(normalized, cfg.Provider)
+		ref := core.ParseModelRef(normalized, "")
 
 		already := false
 		for _, item := range cfg.ApprovedModels {
@@ -276,7 +277,7 @@ var modelsApproveCmd = &cobra.Command{
 
 		store := state.Open(cfg.StateDBPath)
 		defer store.Close()
-		if store.Available() {
+		if store.Available() && ref.Connection == "" {
 			if err := store.SaveModelApproval(context.Background(), state.ModelApproval{
 				Provider:  ref.Provider,
 				Model:     ref.Model,
@@ -341,9 +342,38 @@ func init() {
 }
 
 func normalizeModelArg(cfg *config.Config, raw string) (string, error) {
-	ref := core.ParseModelRef(raw, cfg.Provider)
+	primary, err := cfg.ResolveRole(config.RolePrimary)
+	if err != nil {
+		return "", err
+	}
+	ref := core.ParseModelRef(raw, primary.Connection.Provider)
+	if raw == "openrouter/auto" || raw == "openrouter/free" {
+		ref = core.NewModelRef("openrouter", raw)
+		if primary.Connection.Provider == "openrouter" {
+			ref.Connection = modelruntime.Ref(primary).Connection
+		}
+	}
+	// Bare model IDs use the current primary connection. Qualified references
+	// retain their explicit connection/provider identity.
+	if !strings.Contains(raw, "::") && !strings.HasPrefix(raw, ref.Provider+"/") && ref.Provider == primary.Connection.Provider {
+		ref.Connection = modelruntime.Ref(primary).Connection
+	}
 	if ref.IsZero() {
 		return "", fmt.Errorf("invalid model reference %q", raw)
+	}
+	id := ref.Connection
+	if id == "" {
+		id = ref.Provider
+	}
+	connection, err := cfg.ConnectionByID(id)
+	if err != nil {
+		return "", err
+	}
+	if connection.Provider != ref.Provider {
+		return "", fmt.Errorf("connection %s does not use provider %s", id, ref.Provider)
+	}
+	if _, explicitConnection := cfg.Connections[id]; explicitConnection {
+		ref.Connection = id
 	}
 	return ref.String(), nil
 }

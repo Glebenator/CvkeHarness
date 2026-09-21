@@ -24,6 +24,12 @@ type ProviderResolver interface {
 	Resolve(provider string) (provider.Provider, error)
 }
 
+// ModelProviderResolver can resolve a named connection without confusing its
+// identity with the provider protocol used by that connection.
+type ModelProviderResolver interface {
+	ResolveModel(core.ModelRef) (provider.Provider, error)
+}
+
 // Router picks a model for a routed phase.
 type Router interface {
 	Select(ctx context.Context, phase core.Phase, task string, taskClass core.TaskClass, toolNames []string) (core.RoutingSelection, error)
@@ -80,6 +86,9 @@ type Options struct {
 	SafetyMode         string
 	SafetyModel        string
 	ClassifierProvider provider.Provider
+	ClassifierModel    string
+	// A zero verifier model inherits the actual execution selection at runtime.
+	VerifierModel core.ModelRef
 	// AwaitManualApprovals keeps interactive chat turns alive while the UI
 	// records a persisted, exact-action approval. Non-interactive runs continue
 	// returning a resumable blocked-work result instead of waiting indefinitely.
@@ -209,10 +218,14 @@ func (a *Agent) Run(ctx context.Context, prompt string) (result RunResult, err e
 	runRecord.Phases = append(runRecord.Phases, phaseRecord)
 	if verificationRecord.Provider != "" {
 		runRecord.Phases = append(runRecord.Phases, verificationRecord)
+		verificationRef := execSelection.Requested
+		if !a.opts.VerifierModel.IsZero() {
+			verificationRef = a.opts.VerifierModel
+		}
 		routingSelections = append(routingSelections, core.RoutingSelection{
 			Phase:     core.PhaseVerification,
-			Requested: execSelection.Requested,
-			Reason:    "completion verification uses the same model as execution",
+			Requested: verificationRef,
+			Reason:    verificationRecord.Explanation,
 		})
 	}
 	runRecord.Tools = append(runRecord.Tools, toolOutcomes...)
@@ -335,14 +348,15 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 	chat := NewChatState(append(append([]provider.Message(nil), plan.SystemMessages...), volatileMessages...)...)
 
 	phaseRecord := state.PhaseRecord{
+		Connection:     selection.Requested.Connection,
 		Phase:          core.PhaseExecution,
 		Provider:       selection.Requested.Provider,
 		RequestedModel: selection.Requested.Model,
 		Confidence:     selection.Confidence,
-		Explanation:    selection.Reason,
+		Explanation:    selectionExplanation(selection),
 	}
 
-	execProvider, err := a.resolveProvider(selection.Requested.Provider)
+	execProvider, err := a.resolveModelProvider(selection.Requested)
 	if err != nil {
 		return "", phaseRecord, state.PhaseRecord{}, CompletionVerification{}, nil, nil, targetResolution, err
 	}
@@ -372,7 +386,7 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 		}
 		iterPlan := plan
 		iterPlan.PromptHash = hashJSON([]any{req.Messages, req.Tools})
-		emitPromptPlanned(iterCtx, core.PhaseExecution, iter, selection.Requested.Provider, selection.Requested.Model, iterPlan, len(req.Messages))
+		emitPromptPlanned(iterCtx, core.PhaseExecution, iter, selection.Requested.Provider, selection.Requested.Model, iterPlan, len(req.Messages), selection.Requested.Connection)
 		dump := a.dumpPrompt(iterCtx, promptdump.Metadata{
 			Phase:     core.PhaseExecution,
 			Provider:  selection.Requested.Provider,
@@ -803,7 +817,7 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 	}
 	emitMemoryInjection(ctx, phase, retrieved)
 
-	p, err := a.resolveProvider(selection.Requested.Provider)
+	p, err := a.resolveModelProvider(selection.Requested)
 	if err != nil {
 		return "", state.PhaseRecord{}, "", err
 	}
@@ -820,7 +834,7 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 	}
 	singlePlan := buildPromptPlan(retrieved, "", []provider.Message{{Role: "user", Content: userPrompt}}, nil)
 	singlePlan.PromptHash = hashJSON([]any{req.Messages, req.Tools})
-	emitPromptPlanned(ctx, phase, 0, selection.Requested.Provider, selection.Requested.Model, singlePlan, len(req.Messages))
+	emitPromptPlanned(ctx, phase, 0, selection.Requested.Provider, selection.Requested.Model, singlePlan, len(req.Messages), selection.Requested.Connection)
 	dump := a.dumpPrompt(ctx, promptdump.Metadata{
 		Phase:     phase,
 		Provider:  selection.Requested.Provider,
@@ -830,11 +844,12 @@ func (a *Agent) singleModelCall(ctx context.Context, phase core.Phase, selection
 	}, req)
 
 	record := state.PhaseRecord{
+		Connection:     selection.Requested.Connection,
 		Phase:          phase,
 		Provider:       selection.Requested.Provider,
 		RequestedModel: selection.Requested.Model,
 		Confidence:     selection.Confidence,
-		Explanation:    selection.Reason,
+		Explanation:    selectionExplanation(selection),
 	}
 
 	start := time.Now()
@@ -1001,6 +1016,23 @@ func (a *Agent) resolveProvider(providerName string) (provider.Provider, error) 
 		return nil, fmt.Errorf("no provider resolver configured for %q", providerName)
 	}
 	return a.opts.ProviderResolver.Resolve(providerName)
+}
+
+func (a *Agent) resolveModelProvider(ref core.ModelRef) (provider.Provider, error) {
+	if resolver, ok := a.opts.ProviderResolver.(ModelProviderResolver); ok {
+		return resolver.ResolveModel(ref)
+	}
+	if ref.Connection != "" {
+		return nil, fmt.Errorf("no connection resolver configured for %q", ref.Connection)
+	}
+	return a.resolveProvider(ref.Provider)
+}
+
+func selectionExplanation(selection core.RoutingSelection) string {
+	if selection.Requested.Connection == "" {
+		return selection.Reason
+	}
+	return selection.Reason + " (connection: " + selection.Requested.Connection + ")"
 }
 
 func classifyPolicyDenial(err error) (bool, string) {

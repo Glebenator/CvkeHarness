@@ -10,6 +10,18 @@ import (
 	"github.com/coolcake/cvkeharness/state"
 )
 
+func TestNamedConnectionDoesNotUseProviderOnlyHistoricalRouting(t *testing.T) {
+	ref := core.ModelRef{Connection: "private-server", Provider: "lmstudio", Model: "chosen"}
+	r := New(core.RoutingConfig{Enabled: true, Mode: core.RoutingModeAutoWithinPolicy, DefaultModel: ref}, nil, func(context.Context, core.RoutingSelection) (bool, error) {
+		t.Fatal("provider-only history must not propose another endpoint")
+		return false, nil
+	})
+	selection, err := r.Select(context.Background(), core.PhaseChat, "hello", core.TaskClassGeneral, nil)
+	if err != nil || !selection.Requested.Equal(ref) || !selection.UsedDefault {
+		t.Fatalf("connection changed: %+v %v", selection, err)
+	}
+}
+
 func TestSelectUsesBestApprovedModelPerPhase(t *testing.T) {
 	t.Parallel()
 

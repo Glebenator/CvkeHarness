@@ -265,7 +265,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 	}
 	emitMemoryInjection(ctx, core.PhaseChat, retrieved)
 
-	execProvider, err := c.agent.resolveProvider(c.selection.Requested.Provider)
+	execProvider, err := c.agent.resolveModelProvider(c.selection.Requested)
 	if err != nil {
 		return state.PhaseRecord{}, state.PhaseRecord{}, CompletionVerification{}, nil, nil, targetResolution, nil, "", err
 	}
@@ -279,11 +279,12 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 	turnChat := NewChatState(append(append([]provider.Message(nil), plan.SystemMessages...), volatileMessages...)...)
 
 	phaseRecord := state.PhaseRecord{
+		Connection:     c.selection.Requested.Connection,
 		Phase:          core.PhaseChat,
 		Provider:       c.selection.Requested.Provider,
 		RequestedModel: c.selection.Requested.Model,
 		Confidence:     c.selection.Confidence,
-		Explanation:    c.selection.Reason,
+		Explanation:    selectionExplanation(c.selection),
 	}
 
 	var actualModel = c.selection.Requested.Model
@@ -310,7 +311,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 		}
 		iterPlan := plan
 		iterPlan.PromptHash = hashJSON([]any{req.Messages, req.Tools})
-		emitPromptPlanned(iterCtx, core.PhaseChat, iter, c.selection.Requested.Provider, c.selection.Requested.Model, iterPlan, len(req.Messages))
+		emitPromptPlanned(iterCtx, core.PhaseChat, iter, c.selection.Requested.Provider, c.selection.Requested.Model, iterPlan, len(req.Messages), c.selection.Requested.Connection)
 		dump := c.agent.dumpPrompt(iterCtx, promptdump.Metadata{
 			Phase:     core.PhaseChat,
 			Provider:  c.selection.Requested.Provider,

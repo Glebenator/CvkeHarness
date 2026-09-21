@@ -56,7 +56,7 @@ var runCmd = &cobra.Command{
 		logger := log.FromContext(ctx)
 		logger.Debug("CvkeHarness starting up", "default_model", cfg.PrimaryModel())
 
-		p, err := resolveProvider(cfg, "")
+		models, err := resolveRuntimeModels(cfg)
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
@@ -75,7 +75,7 @@ var runCmd = &cobra.Command{
 		}
 		promptDumper := promptdump.NewWithRetentionDays(cfg.DebugPromptDumps, cfg.PromptDumpDir, cfg.PromptDumpRetentionDays)
 		telemetryWriter := telemetryWriterFromConfig(cfg, store)
-		registry, err := defaultRegistryFromConfig(cfg, store, mem, p, promptDumper, false)
+		registry, err := defaultRegistryFromConfig(cfg, store, mem, models.Judge, promptDumper, false)
 		if err != nil {
 			fmt.Printf("Error: %v\n", err)
 			os.Exit(1)
@@ -90,12 +90,12 @@ var runCmd = &cobra.Command{
 		})
 
 		a := agent.New(agent.Options{
-			Provider:           p,
-			ProviderName:       cfg.Provider,
+			Provider:           models.Primary,
+			ProviderName:       models.PrimaryModel.Connection.Provider,
 			ProviderResolver:   providerResolver{cfg: cfg},
 			ToolRegistry:       registry,
 			EventObserver:      console,
-			DefaultModel:       cfg.PrimaryModel(),
+			DefaultModel:       models.PrimaryModel.Model,
 			MaxIterations:      cfg.MaxIterations,
 			MaxTokens:          cfg.MaxTokens,
 			RoutingConfig:      routingCfg,
@@ -107,8 +107,10 @@ var runCmd = &cobra.Command{
 			PromptDumper:       promptDumper,
 			TelemetryWriter:    telemetryWriter,
 			SafetyMode:         cfg.SafetyMode,
-			SafetyModel:        cfg.SafetyModel,
-			ClassifierProvider: p,
+			SafetyModel:        models.JudgeModel.Model,
+			ClassifierProvider: models.Classifier,
+			ClassifierModel:    models.ClassifierModel.Model,
+			VerifierModel:      models.Verifier,
 		})
 
 		initialTarget, targetErr := mem.ResolveTarget(ctx, memory.TargetResolutionInput{Task: task})
@@ -123,7 +125,7 @@ var runCmd = &cobra.Command{
 		ui.PrintRunHeader(cli.RunHeader{
 			Task:   task,
 			Target: runTargetLabel(initialTarget),
-			Model:  core.NewModelRef(cfg.Provider, cfg.PrimaryModel()).String(),
+			Model:  routingCfg.PhaseModels[core.PhaseExecution].String(),
 		})
 
 		runCtx, cancelRun := context.WithCancel(ctx)

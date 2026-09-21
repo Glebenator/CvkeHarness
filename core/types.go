@@ -40,8 +40,9 @@ const (
 
 // ModelRef normalizes a provider/model pair.
 type ModelRef struct {
-	Provider string
-	Model    string
+	Connection string
+	Provider   string
+	Model      string
 }
 
 // NewModelRef creates a normalized model reference.
@@ -58,14 +59,16 @@ func ParseModelRef(raw, defaultProvider string) ModelRef {
 	if raw == "" {
 		return ModelRef{}
 	}
+	if connection, qualified, found := strings.Cut(raw, "::"); found {
+		ref := ParseModelRef(qualified, defaultProvider)
+		ref.Connection = connection
+		return ref
+	}
 
 	parts := strings.Split(raw, "/")
-	if len(parts) >= 3 {
-		return NewModelRef(parts[0], strings.Join(parts[1:], "/"))
-	}
-	if len(parts) == 2 {
-		if parts[0] == "codex" || parts[0] == "openrouter" || parts[0] == "openai" || parts[0] == "lmstudio" {
-			return NewModelRef(parts[0], parts[1])
+	if len(parts) >= 2 {
+		if parts[0] == "codex" || parts[0] == "openrouter" || parts[0] == "openai" || parts[0] == "lmstudio" || parts[0] == "antigravity" {
+			return NewModelRef(parts[0], strings.Join(parts[1:], "/"))
 		}
 	}
 	return NewModelRef(defaultProvider, raw)
@@ -81,12 +84,16 @@ func (m ModelRef) String() string {
 	if m.IsZero() {
 		return ""
 	}
-	return fmt.Sprintf("%s/%s", m.Provider, m.Model)
+	ref := fmt.Sprintf("%s/%s", m.Provider, m.Model)
+	if m.Connection != "" {
+		return m.Connection + "::" + ref
+	}
+	return ref
 }
 
 // Equal reports provider/model equality.
 func (m ModelRef) Equal(other ModelRef) bool {
-	return strings.EqualFold(m.Provider, other.Provider) && m.Model == other.Model
+	return m.Connection == other.Connection && strings.EqualFold(m.Provider, other.Provider) && m.Model == other.Model
 }
 
 // ToolTrouble captures a failing tool pattern for refreshed retrieval.

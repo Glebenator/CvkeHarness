@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/coolcake/cvkeharness/internal/httputil"
 )
@@ -15,16 +16,22 @@ import (
 type LMStudio struct {
 	client  *httputil.Client
 	baseURL string
+	apiKey  string
 }
 
 // NewLMStudio creates a new LM Studio API client.
 func NewLMStudio(baseURL string) *LMStudio {
+	return NewLMStudioWithAPIKey(baseURL, "")
+}
+
+func NewLMStudioWithAPIKey(baseURL, apiKey string) *LMStudio {
 	if baseURL == "" {
 		baseURL = "http://localhost:1234/v1"
 	}
 	return &LMStudio{
 		client:  httputil.NewDefaultClient(),
-		baseURL: baseURL,
+		baseURL: strings.TrimRight(baseURL, "/"),
+		apiKey:  apiKey,
 	}
 }
 
@@ -75,7 +82,11 @@ func (l *LMStudio) ChatCompletion(ctx context.Context, req *ChatRequest) (*ChatR
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	// LM Studio typically doesn't strictly require a token, but OpenAI clients usually send one
-	httpReq.Header.Set("Authorization", "Bearer lm-studio")
+	apiKey := l.apiKey
+	if apiKey == "" {
+		apiKey = "lm-studio"
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 
 	httpResp, err := l.client.Do(httpReq)
 	if err != nil {

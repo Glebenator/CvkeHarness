@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +13,9 @@ import (
 
 // Config represents the application configuration.
 type Config struct {
-	Provider string `yaml:"provider"`
+	Connections map[string]Connection `yaml:"connections,omitempty"`
+	Models      ModelRoles            `yaml:"models,omitempty"`
+	Provider    string                `yaml:"provider,omitempty"`
 	// APIKeys stores credentials keyed by provider name (e.g. "openrouter",
 	// "anthropic"). All providers are preserved so a user switching providers
 	// never has to re-enter a key they already validated.
@@ -26,7 +27,7 @@ type Config struct {
 	ExecutionModel          string                    `yaml:"execution_model,omitempty"`
 	CurationModel           string                    `yaml:"curation_model,omitempty"`
 	SafetyMode              string                    `yaml:"safety_mode,omitempty"`
-	SafetyModel             string                    `yaml:"safety_model"`
+	SafetyModel             string                    `yaml:"safety_model,omitempty"`
 	MaxTokens               int                       `yaml:"max_tokens"`
 	MaxIterations           int                       `yaml:"max_iterations"`
 	LogLevel                string                    `yaml:"log_level"`
@@ -110,6 +111,12 @@ func (c *Config) TavilyAPIKey() string {
 
 // PrimaryModel returns the configured default model with legacy fallback.
 func (c *Config) PrimaryModel() string {
+	if !c.Models.Primary.IsZero() {
+		if resolved, err := c.ResolveRole(RolePrimary); err == nil {
+			return resolved.Model
+		}
+		return ""
+	}
 	if c.DefaultModel != "" {
 		return c.DefaultModel
 	}
@@ -222,7 +229,13 @@ func (c *Config) Validate() error {
 	if c.Security == nil {
 		return fmt.Errorf("security configuration is required")
 	}
-	return c.Security.Validate()
+	if err := c.Security.Validate(); err != nil {
+		return err
+	}
+	if len(c.Connections) != 0 || !c.Models.Primary.IsZero() {
+		return c.ValidateModelRoles(false)
+	}
+	return nil
 }
 
 // ValidateConnection checks durable setup requirements without calling a model.
@@ -232,28 +245,8 @@ func (c *Config) ValidateConnection() error {
 	if c == nil {
 		return fmt.Errorf("configuration is required")
 	}
-	switch c.Provider {
-	case "openrouter", "openai":
-		if strings.TrimSpace(c.GetAPIKey(c.Provider)) == "" {
-			return fmt.Errorf("%s API key is required", c.Provider)
-		}
-	case "codex", "antigravity":
-		// Their local login files are checked by the setup/runtime boundary.
-	case "lmstudio":
-		if c.BaseURL != "" {
-			u, err := url.Parse(c.BaseURL)
-			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-				return fmt.Errorf("LM Studio URL must be an http or https URL with a host")
-			}
-		}
-	default:
-		return fmt.Errorf("choose a supported provider")
-	}
-	if strings.TrimSpace(c.PrimaryModel()) == "" {
-		return fmt.Errorf("choose a primary model")
-	}
-	if strings.TrimSpace(c.SafetyModel) == "" {
-		return fmt.Errorf("choose a judge model")
+	if err := c.ValidateModelRoles(true); err != nil {
+		return err
 	}
 	return c.Validate()
 }
@@ -272,6 +265,12 @@ func (c *Config) Clone() *Config {
 		return nil
 	}
 	out := *c
+	if c.Connections != nil {
+		out.Connections = make(map[string]Connection, len(c.Connections))
+		for id, connection := range c.Connections {
+			out.Connections[id] = connection
+		}
+	}
 	out.Recovery.Roots = append([]string(nil), c.Recovery.Roots...)
 	out.Recovery.Services = append([]recovery.NGINXService(nil), c.Recovery.Services...)
 	out.Recovery.Snapshots = append([]recovery.SnapshotTarget(nil), c.Recovery.Snapshots...)
@@ -354,7 +353,11 @@ func (c *Config) Save() error {
 	// Keep reading legacy `model`, but stop actively persisting it.
 	c.Model = ""
 
-	data, err := yaml.Marshal(c)
+	serialized := c.Clone()
+	if !serialized.Models.Primary.IsZero() {
+		serialized.EnsureModelBindings()
+	}
+	data, err := yaml.Marshal(serialized)
 	if err != nil {
 		return err
 	}
@@ -388,6 +391,7 @@ func (c *Config) Save() error {
 		_ = handle.Sync()
 		_ = handle.Close()
 	}
+	*c = *serialized
 	return nil
 }
 

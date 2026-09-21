@@ -43,6 +43,13 @@ func (r *Router) Select(ctx context.Context, phase core.Phase, task string, task
 	if !r.config.Enabled || r.config.Mode == core.RoutingModeDisabled {
 		return selection, nil
 	}
+	// Stored statistics predate named connections and cannot establish which
+	// endpoint/account produced a result. Never route away from a named binding
+	// on the strength of provider-only history or approvals.
+	if defaultRef.Connection != "" {
+		selection.Reason = "using the configured connection; historical routing statistics are not connection-scoped"
+		return selection, nil
+	}
 
 	toolset := core.ToolsetKey(toolNames)
 	stats, err := r.listStats(ctx, phase, taskClass, toolset)
