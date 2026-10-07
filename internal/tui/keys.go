@@ -31,19 +31,19 @@ var keys = keyMap{
 	),
 	Tab: key.NewBinding(
 		key.WithKeys("tab"),
-		key.WithHelp("tab", "next tab"),
+		key.WithHelp("tab", "next focus"),
 	),
 	ShiftTab: key.NewBinding(
 		key.WithKeys("shift+tab"),
-		key.WithHelp("shift+tab", "prev tab"),
+		key.WithHelp("shift+tab", "previous focus"),
 	),
 	Left: key.NewBinding(
 		key.WithKeys("left"),
-		key.WithHelp("←", "prev tab"),
+		key.WithHelp("←", "left"),
 	),
 	Right: key.NewBinding(
 		key.WithKeys("right"),
-		key.WithHelp("→", "next tab"),
+		key.WithHelp("→", "right"),
 	),
 	Tab1: key.NewBinding(key.WithKeys("1"), key.WithHelp("1", "overview")),
 	Tab2: key.NewBinding(key.WithKeys("2"), key.WithHelp("2", "jobs")),

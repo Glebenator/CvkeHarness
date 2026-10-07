@@ -65,6 +65,8 @@ func RoleLabel(role config.ModelRole) string {
 		return "Primary"
 	case config.RoleSafetyJudge:
 		return "Safety judge"
+	case config.RoleSafetyAdvisor:
+		return "Safety advisor"
 	case config.RoleClassifier:
 		return "Classifier"
 	case config.RoleVerifier:

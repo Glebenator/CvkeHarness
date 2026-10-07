@@ -153,7 +153,7 @@ func requiredCapabilityUnavailable(verification CompletionVerification, toolName
 	if (strings.Contains(text, "shell_execute") || strings.Contains(text, "run a shell") || strings.Contains(text, "execute a command")) && !available["shell_execute"] {
 		return true
 	}
-	for _, name := range []string{"web_search", "web_fetch", "schedule_manage", "system_cron_manage", "memory_record_finding"} {
+	for _, name := range []string{"web_search", "web_fetch", "schedule_manage", "system_cron_manage", "memory_record_finding", "memory_remember_target"} {
 		if strings.Contains(text, name) && !available[name] {
 			return true
 		}
@@ -216,7 +216,7 @@ func (a *Agent) verifyCompletion(ctx context.Context, selection core.RoutingSele
 			},
 			{
 				Role:    "user",
-				Content: verificationPrompt(prompt, output, observed, execErr),
+				Content: verificationPromptWithContext(ctx, prompt, output, observed, execErr),
 			},
 		},
 		Temperature: 0,
@@ -289,6 +289,9 @@ func (a *Agent) verifyCompletion(ctx context.Context, selection core.RoutingSele
 }
 
 func verificationPrompt(prompt, output string, observed []memory.ObservedToolCall, execErr error) string {
+	return verificationPromptWithContext(context.Background(), prompt, output, observed, execErr)
+}
+func verificationPromptWithContext(ctx context.Context, prompt, output string, observed []memory.ObservedToolCall, execErr error) string {
 	payload := map[string]any{
 		"user_request":           prompt,
 		"assistant_final_output": output,
@@ -301,8 +304,17 @@ func verificationPrompt(prompt, output string, observed []memory.ObservedToolCal
 			"repair_instruction": "what the agent should do next if not satisfied",
 		},
 	}
+	if request, ok := ctx.Value(chatRequestKey{}).(*chatRequestContext); ok {
+		payload["conversation_context"] = request
+		if request.PendingRequest != "" {
+			payload["user_request"] = request.PendingRequest
+		}
+		if request.Memory != nil {
+			payload["memory_completion_rule"] = "Memory is already handled by the runtime. Evaluate remaining execution only. Never request another memory write or overturn memory_result."
+		}
+	}
 	data, _ := json.MarshalIndent(payload, "", "  ")
-	return "Review this run summary. The assistant must have completed the user's requested actions, not merely reported that more work could be done. If the user asked for a conditional action, checking the condition without performing the required action is unsatisfied.\n\nReturn JSON only.\n\n" + string(data)
+	return "Review this run summary. The assistant must have completed the user's requested actions, not merely reported that more work could be done. If the user asked for a conditional action, checking the condition without performing the required action is unsatisfied. A successful memory_remember_target receipt with status=saved_and_recallable and readback_verified=true completes a request to remember a server endpoint. That declaration does not require live host verification, operational-memory promotion, or command approval. A memory_record_finding candidate alone does not establish future recall.\n\nReturn JSON only.\n\n" + string(data)
 }
 
 func summarizeObservedToolCalls(observed []memory.ObservedToolCall) []map[string]any {
@@ -317,6 +329,9 @@ func summarizeObservedToolCalls(observed []memory.ObservedToolCall) []map[string
 		if call.PolicyDenied {
 			item["policy_denied"] = true
 			item["denial_class"] = call.DenialClass
+		}
+		if call.PrerequisiteRejected {
+			item["prerequisite_rejected"] = true
 		}
 		out = append(out, item)
 	}
@@ -367,4 +382,22 @@ func truncateForVerification(s string, limit int) string {
 		return s
 	}
 	return s[:limit] + "...[truncated]"
+}
+
+// Use the latest outcome for a required tool: a later success clears an earlier
+// rejection. Ordinary argument errors are not immutable prerequisites.
+func requiredPrerequisiteRejected(v CompletionVerification, observed []memory.ObservedToolCall) bool {
+	required := strings.ToLower(strings.Join(v.MissingActions, " ") + " " + v.RepairInstruction)
+	seen := map[string]bool{}
+	for i := len(observed) - 1; i >= 0; i-- {
+		call := observed[i]
+		if seen[call.ToolName] {
+			continue
+		}
+		seen[call.ToolName] = true
+		if call.PrerequisiteRejected && strings.Contains(required, call.ToolName) {
+			return true
+		}
+	}
+	return false
 }

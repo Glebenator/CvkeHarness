@@ -480,6 +480,17 @@ func (s *Store) ListRoutingCandidates(ctx context.Context) ([]RoutingCandidate, 
 
 func migrate(ctx context.Context, db *sql.DB) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS user_endpoints (
+			name TEXT PRIMARY KEY,
+			endpoint TEXT NOT NULL,
+			declaration TEXT NOT NULL,
+			declared_at DATETIME NOT NULL,
+			evidence_hash TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS endpoint_captures (
+            turn_id TEXT NOT NULL, name TEXT NOT NULL,
+            PRIMARY KEY(turn_id, name)
+        );`,
 		`CREATE TABLE IF NOT EXISTS runs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			started_at DATETIME NOT NULL,

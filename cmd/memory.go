@@ -65,6 +65,43 @@ var memoryInboxCmd = &cobra.Command{
 	},
 }
 
+var memoryEndpointsCmd = &cobra.Command{
+	Use:   "endpoints",
+	Short: "Show user-declared server names and addresses",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mem, store, err := openMemoryManager()
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		out, err := mem.ShowUserEndpoints(cmd.Context())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), out)
+		return nil
+	},
+}
+
+var memoryForgetEndpointCmd = &cobra.Command{
+	Use:   "forget-endpoint [name]",
+	Short: "Remove one user-declared endpoint name without changing operational memory",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mem, store, err := openMemoryManager()
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		if err := mem.ForgetUserEndpoint(cmd.Context(), args[0]); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "Removed endpoint declaration:", args[0])
+		return nil
+	},
+}
+
 func memoryTransitionCommand(use, short string, transition func(*memory.Manager, context.Context, string, string) error) *cobra.Command {
 	return &cobra.Command{
 		Use:   use + " [kind] [id]",
@@ -211,6 +248,8 @@ var memoryTargetSetEnvironmentCmd = &cobra.Command{
 func init() {
 	memoryTargetCmd.AddCommand(memoryTargetSetEnvironmentCmd)
 	memoryCmd.AddCommand(
+		memoryEndpointsCmd,
+		memoryForgetEndpointCmd,
 		memoryShowCmd,
 		memoryInboxCmd,
 		memoryPromoteCmd,

@@ -5,8 +5,14 @@
 uses the same connection editor and model picker.
 
 Settings has four sections: **Models**, **Connections**, **Security**, and
-**Runtime**. Use `[` / `]` to change section, arrows to move, Enter to edit, and
-`s` to save. `r` restores saved settings. Changes stay in a draft until Save;
+**Runtime**. Left focuses the section list; Up/Down chooses a section and
+Right/Enter focuses its content. Tab/Shift+Tab toggles between sections and
+content. Security keeps Left/Right for changing values, so use Tab there to
+return to sections. `[` / `]` also changes section. Within content, Up/Down moves,
+Enter edits, and `s` saves. Esc closes an editor or cancels a confirmation;
+otherwise it focuses the Console top bar without resetting the section.
+Left/Right then selects a workspace and Enter focuses it.
+`r` restores saved settings. Changes stay in a draft until Save;
 closing a child editor cancels only that editor's pending changes. Existing
 chat sessions keep their configuration snapshot; use `/new` after saving.
 
@@ -26,13 +32,14 @@ does not change the primary's Codex connection. Model IDs such as
 | --- | --- | --- |
 | Primary | Explicit connection and model | Default for other agent roles |
 | Safety judge | Uses Primary | Advisory reviews for security controls using LLM review |
+| Safety advisor | Uses Primary | Explains gated actions and recommends approve/reject in LLM advisor mode; humans decide |
 | Classifier | Uses Safety judge | Classifies tasks in LLM-judge mode before execution |
 | Verifier | Uses Execution | Checks completion evidence; inherits the model actually selected for execution |
 | Planning | Uses Primary | Planning phase when routing is enabled |
 | Execution | Uses Primary | Agent execution, including console chat |
 | Curation | Uses Primary | LLM-based memory curators; the normal structured memory curator does not call an LLM |
 
-Primary and Safety judge are always visible. Press `a` to show the advanced
+Primary, Safety judge, and Safety advisor are always visible. Press `a` to show the advanced
 roles. Every role opens the same picker:
 
 - Type to search model IDs and names. Arrows and page keys move through results.
@@ -46,6 +53,43 @@ Catalogs identify their source and cache/fallback state. Catalog availability
 does not establish that authentication or a model call will succeed. Codex uses
 its local CLI model cache; the configured login file can be reused without
 copying subscription tokens into the harness configuration.
+
+## LLM judge preset
+
+Select **Security → Security profile → llm_judge** to use the judge for most
+actions that should not run automatically. Choose its model and provider in
+**Models → Safety judge**, save, and start a new session with `/new`. Setup also
+offers the preset and opens the judge model picker.
+
+| Actions | Preset decision |
+| --- | --- |
+| Known read-only diagnostics | Allow |
+| Unknown commands, scripts, file creation/overwrite/append/deletion | LLM review |
+| Privilege, service, package, network, remote, cloud, container, database, and scheduled changes | LLM review |
+| Credential access and raw-device operations | Deny |
+
+Critical-path protection can escalate an action to direct human approval.
+Credential-path protection stays enabled, approval reuse is disabled, and limits
+match Reasonable. Individual overrides remain available.
+
+This preset uses the existing judge behavior: `DANGEROUS`, invalid responses,
+and provider errors block execution; `SAFE` proceeds to human approval. Unlike
+[LLM advisor](llm-advisor.md), it uses the binary judge rather than generating an
+explanation and recommendation. The preset does not grant automatic execution
+authority to the model.
+
+```yaml
+security:
+  profile: llm_judge
+models:
+  safety_judge:
+    inherit: primary
+# Or set connection and model to choose a different judge.
+```
+
+The default remains Reasonable. Existing legacy `safety_mode: llm_judge`
+configurations keep their migration behavior; select `security.profile:
+llm_judge` explicitly to enable the new preset.
 
 ## Managing connections
 

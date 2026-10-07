@@ -67,6 +67,7 @@ func TestHorizontalNavigationCrossesChatWithoutFocusingComposer(t *testing.T) {
 		},
 	}
 
+	m = navigationKey(m, tea.KeyMsg{Type: tea.KeyEsc})
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	m = updated.(model)
 	if m.activeTab != tabChat {
@@ -83,7 +84,7 @@ func TestHorizontalNavigationCrossesChatWithoutFocusingComposer(t *testing.T) {
 	}
 }
 
-func TestTabLeavesFocusedChatComposer(t *testing.T) {
+func TestTabStaysInsideFocusedChatComposer(t *testing.T) {
 	t.Parallel()
 
 	chat := newChatTab().(*chatTab)
@@ -104,8 +105,8 @@ func TestTabLeavesFocusedChatComposer(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = updated.(model)
-	if m.activeTab != tabConfig {
-		t.Fatalf("expected tab to leave the focused composer, got tab %d", m.activeTab)
+	if m.activeTab != tabChat || m.topBarFocused {
+		t.Fatalf("Tab must stay in the focused workspace, got tab %d", m.activeTab)
 	}
 }
 
@@ -161,8 +162,8 @@ func TestFocusedInputStatusBarPrioritizesRealEscapeHint(t *testing.T) {
 	m.tabs[tabChat] = chat
 
 	status := m.renderStatusBar()
-	if !strings.Contains(status, "tab") || !strings.Contains(status, "switch") {
-		t.Fatalf("expected focused input footer to expose tab switching, got %q", status)
+	if !strings.Contains(status, "esc top bar") || strings.Contains(status, "switch") {
+		t.Fatalf("expected focused input footer to expose top-bar focus, got %q", status)
 	}
 	if strings.Contains(status, "?") {
 		t.Fatalf("footer must not advertise help while ? is captured as input, got %q", status)

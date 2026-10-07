@@ -83,10 +83,14 @@ type liveVerificationActivity struct {
 }
 
 type pendingChatApproval struct {
-	workID  string
-	summary string
-	reason  string
-	effects []tools.ShellEffect
+	workID    string
+	summary   string
+	reason    string
+	effects   []tools.ShellEffect
+	advice    *tools.CommandAdvice
+	dismissed bool
+	details   bool
+	offset    int
 }
 
 type channelEventObserver struct{ ch chan tools.Event }
@@ -100,7 +104,7 @@ func (o channelEventObserver) Observe(event tools.Event) {
 		// and approval waits are compact and control-relevant, so make room for
 		// their latest snapshot; final tool outcomes are still reconciled from
 		// the turn result.
-		if event.Type != tools.EventVerificationActivity && event.Type != tools.EventApprovalRequired && event.Type != tools.EventTargetResolved {
+		if event.Type != tools.EventVerificationActivity && event.Type != tools.EventApprovalRequired && event.Type != tools.EventTargetResolved && event.Type != tools.EventMemoryCaptured {
 			return
 		}
 		select {
@@ -197,17 +201,12 @@ func newChatTab() tabModel {
 	}
 }
 
-// Activate lands in navigation mode so moving across the tab bar with left or
-// right never drops the operator into an input trap. Enter focuses the composer.
+// Activate starts with the conversation visible. Enter focuses the composer.
 func (t *chatTab) Activate() {
 	t.composerFocused = false
 	t.activity.focused = false
 	t.composer.Blur()
 	t.closeCommandMenu()
-}
-
-func (t *chatTab) HorizontalTabNavigation() bool {
-	return !t.history && !t.composerFocused && !t.activity.focused
 }
 
 func (t *chatTab) Init(svc *Service) tea.Cmd {
@@ -228,10 +227,13 @@ func (t *chatTab) Init(svc *Service) tea.Cmd {
 }
 
 func (t *chatTab) Consuming() bool {
-	return !t.history && (t.composerFocused || t.activity.focused || t.running || t.starting || t.approvalInFlight)
+	return !t.history && (t.approvalDialogOpen() || t.composerFocused || t.activity.focused || t.running || t.starting || t.approvalInFlight)
 }
 
 func (t *chatTab) StatusHints() []string {
+	if t.approvalDialogOpen() {
+		return []string{renderKeyHint("a", "approve once + continue"), renderKeyHint("↑↓", "scroll command"), renderKeyHint("d", "details"), renderKeyHint("esc", "back without approving")}
+	}
 	if t.history {
 		if t.expanded {
 			return []string{
@@ -253,24 +255,24 @@ func (t *chatTab) StatusHints() []string {
 		return []string{renderKeyHint("↑↓", "scroll"), renderKeyHint("n/p", "tool"), renderKeyHint("enter", "output"), renderKeyHint("[/]", "turn"), renderKeyHint("esc", "chat")}
 	}
 	if t.approvalInFlight {
-		return []string{renderKeyHint("…", "recording scoped approval"), renderKeyHint("esc", "interrupt")}
+		return []string{renderKeyHint("…", "recording scoped approval"), renderKeyHint("ctrl+x", "interrupt")}
 	}
 	if t.pendingApproval != nil && !t.composerFocused {
-		return []string{renderKeyHint("a", "approve once + continue"), renderKeyHint("esc", "interrupt"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("↑↓", "scroll")}
+		return []string{renderKeyHint("a", "review command"), renderKeyHint("ctrl+x", "interrupt"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("↑↓", "scroll")}
 	}
 	if t.running {
-		return []string{renderKeyHint("esc", "interrupt"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("↑↓", "scroll"), renderKeyHint("ctrl+end", "latest")}
+		return []string{renderKeyHint("ctrl+x", "interrupt"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("↑↓", "scroll"), renderKeyHint("ctrl+end", "latest")}
 	}
 	if !t.composerFocused && t.lastError != "" {
 		return []string{renderKeyHint("enter", "edit / retry"), renderKeyHint("s", "settings"), renderKeyHint("esc", "dismiss error")}
 	}
 	if !t.composerFocused {
-		return []string{renderKeyHint("enter", "compose"), renderKeyHint("↑↓", "scroll"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("ctrl+end", "latest")}
+		return []string{renderKeyHint("enter", "compose"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("ctrl+end", "latest"), renderKeyHint("↑↓", "scroll")}
 	}
 	if t.commandOpen {
 		return []string{renderKeyHint("↑↓", "commands"), renderKeyHint("enter", "complete or run"), renderKeyHint("esc", "close")}
 	}
-	return []string{renderKeyHint("enter", "send"), renderKeyHint("ctrl+j", "newline"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("esc", "back")}
+	return []string{renderKeyHint("enter", "send"), renderKeyHint("tab", "read"), renderKeyHint("ctrl+t", "activity"), renderKeyHint("ctrl+j", "newline")}
 }
 
 func (t *chatTab) Update(msg tea.Msg, svc *Service, width, height int) (tabModel, tea.Cmd) {
@@ -431,6 +433,27 @@ func verticalMouseWheelDirection(msg tea.MouseMsg) int {
 }
 
 func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
+	if msg.String() == "ctrl+x" {
+		if t.running && t.cancelTurn != nil {
+			t.stopping = true
+			t.status = "INTERRUPTING"
+			t.statusDetail = "waiting for the active turn to stop safely"
+			t.cancelTurn()
+		}
+		return t, nil
+	}
+	if t.approvalDialogOpen() {
+		return t.updateApprovalDialog(msg)
+	}
+	if (msg.String() == "tab" || msg.String() == "shift+tab") && !t.activity.focused && !t.running && !t.starting && !t.approvalInFlight && t.pendingApproval == nil {
+		t.composerFocused = !t.composerFocused
+		if t.composerFocused {
+			return t, t.composer.Focus()
+		}
+		t.composer.Blur()
+		t.closeCommandMenu()
+		return t, nil
+	}
 	if msg.String() == "ctrl+t" {
 		if t.activity.focused {
 			t.closeActivity()
@@ -463,24 +486,14 @@ func (t *chatTab) updateLive(msg tea.KeyMsg, svc *Service) (tabModel, tea.Cmd) {
 		}
 	}
 	if msg.String() == "a" && !t.composerFocused && !t.activity.focused && t.pendingApproval != nil && !t.approvalInFlight {
-		t.approvalInFlight = true
-		t.approvalWorkID = t.pendingApproval.workID
-		t.status = "APPROVING"
-		t.statusDetail = "creating one exact, scoped grant"
-		t.lastError = ""
-		return t, approveBlockedWorkCmd(t.session, t.pendingApproval.workID)
+		t.pendingApproval.dismissed = false
+		return t, nil
+
 	}
 	switch msg.String() {
 	case "esc":
 		if t.commandOpen {
 			t.closeCommandMenu()
-			return t, nil
-		}
-		if t.running && t.cancelTurn != nil {
-			t.stopping = true
-			t.status = "INTERRUPTING"
-			t.statusDetail = "waiting for the active turn to stop safely"
-			t.cancelTurn()
 			return t, nil
 		}
 		t.composerFocused = false
@@ -768,6 +781,9 @@ func (t *chatTab) View(width, height int) string {
 }
 
 func (t *chatTab) viewLive(width, height int) string {
+	if t.approvalDialogOpen() {
+		return t.approvalDialogView(width, height)
+	}
 	header := t.liveHeader(width)
 	split, mainWidth, paneWidth := liveChatColumns(width)
 	if !split && t.activity.focused {
@@ -787,12 +803,16 @@ func (t *chatTab) viewLive(width, height int) string {
 	if !split {
 		return header + left.String()
 	}
+	sidebar := t.activityView()
+	if !t.activity.focused && !t.activity.inspecting {
+		sidebar = t.taskProgressView()
+	}
 	bodyHeight := maxInt(height-strings.Count(header, "\n"), 1)
 	divider := strings.TrimSuffix(strings.Repeat(styleMuted.Render("│")+"\n", bodyHeight), "\n")
 	return header + lipgloss.JoinHorizontal(lipgloss.Top,
 		lipgloss.NewStyle().Width(mainWidth).Render(clampLines(left.String(), bodyHeight)),
 		divider,
-		lipgloss.NewStyle().Width(paneWidth).Render(t.activityView()),
+		lipgloss.NewStyle().Width(paneWidth).Render(sidebar),
 	)
 }
 
@@ -989,18 +1009,7 @@ func (t *chatTab) appendApprovalPrompt(lines *[]string, approval *pendingChatApp
 	if approval == nil {
 		return
 	}
-	*lines = append(*lines, "", "  "+renderNamedStatus("APPROVAL REQUIRED"))
-	appendWrappedBlock(lines, "  ", "Policy reason:", firstNonEmptyText(approval.reason, "policy requires explicit approval"), width, styleMuted, styleBase)
-	appendWrappedBlock(lines, "  ", "Action:", approval.summary, width, styleMuted, styleBright)
-	for _, effect := range approval.effects {
-		detail := strings.TrimSpace(effect.Detail)
-		if effect.Target != "" {
-			detail += " → " + effect.Target
-		}
-		appendWrappedBlock(lines, "  ", "Effect:", effect.Setting+" · "+detail, width, styleMuted, styleBase)
-	}
-	appendWrappedBlock(lines, "  ", "Scope:", "one use, 15 minutes, exact action + host + user + directory + effects + policy", width, styleMuted, styleBase)
-	*lines = append(*lines, "  "+renderKeyHint("a", "approve once + continue"))
+	*lines = append(*lines, "", "  "+renderNamedStatus("APPROVAL REQUIRED"), "  "+renderKeyHint("a", "review command"))
 }
 
 func (t *chatTab) appendAssistantResponse(lines *[]string, content string) {
@@ -1064,6 +1073,12 @@ func (t *chatTab) applyRuntimeEvent(event tools.Event) {
 		t.applyVerificationActivity(event.Verification)
 		return
 	}
+	if event.Type == tools.EventMemoryCaptured {
+		if event.MemoryCapture != nil {
+			t.appendConsoleMessage(event.MemoryCapture.Summary())
+		}
+		return
+	}
 	if event.Type == tools.EventMemoryInjected {
 		t.memorySources = append([]tools.MemorySource(nil), event.MemorySources...)
 		return
@@ -1098,6 +1113,10 @@ func (t *chatTab) applyRuntimeEvent(event tools.Event) {
 		item.status = "APPROVAL CHECK"
 		t.status = "APPROVAL CHECK"
 		t.statusDetail = strings.ReplaceAll(event.ApprovalMode, "_", " ")
+	case tools.EventApprovalReviewStarted:
+		item.status = "ADVISOR REVIEW"
+		t.status = "ADVISOR REVIEW"
+		t.statusDetail = "explaining the pending action before human approval"
 	case tools.EventApprovalRequired:
 		item.status = "APPROVAL REQUIRED"
 		item.approvalReason = strings.TrimSpace(event.ApprovalReason)
@@ -1107,6 +1126,7 @@ func (t *chatTab) applyRuntimeEvent(event tools.Event) {
 			summary: secrets.Mask(event.Command),
 			reason:  strings.TrimSpace(event.ApprovalReason),
 			effects: append([]tools.ShellEffect(nil), event.ApprovalEffects...),
+			advice:  event.ApprovalAdvice,
 		}
 		t.status = "APPROVAL REQUIRED"
 		t.statusDetail = firstNonEmptyText(strings.TrimSpace(event.ApprovalReason), "policy requires explicit approval")
@@ -1227,7 +1247,9 @@ func compactLiveVerificationText(value string, limit int) string {
 }
 
 func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
-	if result.Target.TargetID != "" {
+	if result.Target.Ambiguous {
+		t.target = "unresolved"
+	} else if result.Target.TargetID != "" {
 		t.target = result.Target.TargetID
 	} else if result.Target.RuntimeHostID != "" {
 		t.target = result.Target.RuntimeHostID
@@ -1237,10 +1259,17 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 	t.reconcileToolOutcomes(result.Tools)
 	t.reconcileToolOutputs(result.Observed)
 
-	blockedForApproval := result.TaskState == state.TaskStateBlockedWaitingUser
+	blockedForApproval := result.TaskState == state.TaskStateBlockedWaitingUser && !result.AwaitingTarget
 	t.reconcileVerificationOutcome(result, err, blockedForApproval)
 	switch result.TaskState {
 	case state.TaskStateBlockedWaitingUser:
+		if result.AwaitingTarget {
+			t.pendingApproval = nil
+			t.approvalInFlight = false
+			t.status = "TARGET REQUIRED"
+			t.statusDetail = "provide the remote server address to continue"
+			break
+		}
 		t.status = "APPROVAL REQUIRED"
 		if result.BlockedWorkID != "" {
 			t.pendingApproval = &pendingChatApproval{
@@ -1248,6 +1277,7 @@ func (t *chatTab) applyTurnResult(result agent.ChatTurnResult, err error) {
 				summary: secrets.Mask(result.ApprovalSummary),
 				reason:  strings.TrimSpace(result.ApprovalReason),
 				effects: append([]tools.ShellEffect(nil), result.ApprovalEffects...),
+				advice:  result.ApprovalAdvice,
 			}
 			t.statusDetail = firstNonEmptyText(strings.TrimSpace(result.ApprovalReason), "policy requires explicit approval")
 		} else {
@@ -1360,6 +1390,7 @@ func isToolRuntimeEvent(eventType tools.EventType) bool {
 		tools.EventShellCommandStarted,
 		tools.EventShellApproval,
 		tools.EventApprovalRequired,
+		tools.EventApprovalReviewStarted,
 		tools.EventShellOutput,
 		tools.EventShellCommandFinished:
 		return true
@@ -1563,7 +1594,7 @@ func liveChatColumns(width int) (split bool, mainWidth, paneWidth int) {
 	if width < 120 {
 		return false, width, 0
 	}
-	paneWidth = maxInt(width*2/5, 40)
+	paneWidth = minInt(maxInt(width/4, 30), 42)
 	mainWidth = width - paneWidth - 1
 	return true, mainWidth, paneWidth
 }

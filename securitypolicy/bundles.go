@@ -1,7 +1,7 @@
 package securitypolicy
 
 func bundleValues() map[Profile]map[string]string {
-	return map[Profile]map[string]string{
+	bundles := map[Profile]map[string]string{
 		ProfileExtraStrict: decisions(
 			DecisionAllow, DecisionDeny, DecisionDeny,
 			DecisionAsk, DecisionDeny, DecisionAsk, DecisionDeny,
@@ -16,6 +16,14 @@ func bundleValues() map[Profile]map[string]string {
 			DecisionAsk, DecisionAsk, DecisionAsk, DecisionDeny,
 			DecisionAsk, DecisionAsk, DecisionAsk, DecisionAsk, DecisionAsk,
 			DecisionAsk, DecisionDeny,
+			false, true, true, 8192, 16, 30, 8192,
+		),
+		ProfileLLMJudge: decisions(
+			DecisionAllow, DecisionLLMReview, DecisionLLMReview,
+			DecisionLLMReview, DecisionLLMReview, DecisionLLMReview, DecisionLLMReview,
+			DecisionLLMReview, DecisionLLMReview, DecisionLLMReview, DecisionDeny,
+			DecisionLLMReview, DecisionLLMReview, DecisionLLMReview, DecisionLLMReview, DecisionLLMReview,
+			DecisionLLMReview, DecisionDeny,
 			false, true, true, 8192, 16, 30, 8192,
 		),
 		ProfileLessStrict: decisions(
@@ -43,6 +51,9 @@ func bundleValues() map[Profile]map[string]string {
 			false, false, false, 65536, 64, 3600, 1048576,
 		),
 	}
+	// Advice changes how humans review a gate, never the underlying policy.
+	bundles[ProfileLLMAdvisor] = bundles[ProfileReasonable]
+	return bundles
 }
 
 func decisions(

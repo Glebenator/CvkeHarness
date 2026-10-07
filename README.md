@@ -203,7 +203,7 @@ The setup wizard configures:
 - default model
 - security profile (`extra_strict`, `reasonable`, `less_strict`, `minimal`, or `yolo`)
 - optional per-control overrides for filesystem, commands, system, network, remote actions, autonomy, approvals, and limits
-- judge model using the same provider connection, defaulting to the primary model
+- safety judge or advisor model, defaulting to the primary model with an independent connection/model available
 - optional host scan and dependency planning (daemon installation is Linux-only)
 - initial `guidance.md` profile
 - optional runtime-host machine notes for stable local quirks
@@ -332,7 +332,7 @@ Important fields:
 - `connections`
   Named provider access: provider type, endpoint, credential or login-file reference. Multiple connections can use the same provider.
 - `models`
-  Primary, safety judge, classifier, verifier, planning, execution and curation assignments. Each selects a connection/model or explicitly inherits another role. See the [model and Settings guide](docs/models-settings.md).
+  Primary, safety judge, safety advisor, classifier, verifier, planning, execution and curation assignments. Each selects a connection/model or explicitly inherits another role. See the [model and Settings guide](docs/models-settings.md).
 - `provider` (legacy model configuration)
   Use `codex` for ChatGPT subscription-backed Codex access, `openai` for usage-based OpenAI API access, `openrouter` for OpenRouter, or `lmstudio` for a local server.
 - `api_keys`
@@ -402,6 +402,26 @@ The shell tool:
 - consumes only exact, expiring, single-use persisted grants or exact process-local session grants
 - records telemetry and tool outcomes
 - provides the main target discovery signal for remote SSH work
+
+Choose **LLM advisor** (`llm_advisor`) in setup or **Settings → Security →
+Security profile** to add plain-language advice to commands that require human
+approval. Select its model and provider under **Settings → Models → Safety
+advisor**, save, and start a new chat session (`/new`) to apply the change.
+
+The advisor explains the full action, including command chains, pipelines,
+redirections, and embedded scripts, and recommends **approve** or **reject**
+with risks and uncertainty. It receives the command and policy context with
+recognized credentials masked, has no tools, and never grants approval. The
+profile uses Reasonable's policy defaults; allowed actions still run and denied
+actions stay blocked. Failed, timed-out, or invalid advice leaves the human
+approval gate in place. See [the advisor guide](docs/llm-advisor.md).
+
+The **LLM judge** (`llm_judge`) preset allows known reads and sets most other
+actions to `llm_review`, including file changes, scripts, network access, and
+system or remote mutations. Credential and raw-device access remain denied.
+Select the model under **Settings → Models → Safety judge**. A `SAFE` verdict
+still requires human approval; rejected or failed reviews block execution.
+See [preset details](docs/models-settings.md#llm-judge-preset).
 
 ### `memory_record_finding`
 

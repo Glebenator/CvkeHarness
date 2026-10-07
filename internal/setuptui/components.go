@@ -61,7 +61,7 @@ var stepLabels = map[step]string{
 	stepModel:            "Primary",
 	stepSafety:           "Safety",
 	stepSecurityControls: "Security Controls",
-	stepJudge:            "Safety judge",
+	stepJudge:            "Safety model",
 	stepScan:             "System Scan",
 	stepDependencies:     "Dependencies",
 	stepDaemon:           "Scheduler Daemon",

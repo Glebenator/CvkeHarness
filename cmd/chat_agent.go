@@ -53,6 +53,7 @@ func newChatAgent(
 		Router:               r,
 		MemoryRetriever:      mem,
 		MemoryCurator:        mem,
+		MemoryCapture:        cfg.MemoryCapture,
 		RunRecorder:          store,
 		BlockedWorkStore:     store,
 		PromptDumper:         promptDumper,

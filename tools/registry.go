@@ -11,6 +11,7 @@ import (
 	"github.com/coolcake/cvkeharness/core"
 	"github.com/coolcake/cvkeharness/internal/secrets"
 	"github.com/coolcake/cvkeharness/internal/telemetry"
+	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/securitypolicy"
 	"github.com/coolcake/cvkeharness/state"
@@ -124,6 +125,11 @@ func (r *Registry) ExecuteTool(ctx context.Context, call provider.ToolCall) (str
 		return "", fmt.Errorf("unknown tool: %s", call.Function.Name)
 	}
 
+	// A capture already passed policy in this turn. Replaying its result must
+	// neither ask again nor perform another write, including after failure.
+	if endpointTool, ok := t.(*MemoryRememberTargetTool); ok && cachedEndpointCapture(ctx) != nil {
+		return endpointTool.Execute(ctx, json.RawMessage(call.Function.Arguments))
+	}
 	toolCtx := WithToolCallContext(ctx, call.ID, call.Function.Name)
 	if _, ok := t.(*RecoveryManageTool); ok && r.securityPolicy == nil {
 		return "", fmt.Errorf("recovery tools require an effective security policy")
@@ -169,7 +175,7 @@ func (r *Registry) authorizeToolCall(ctx context.Context, call provider.ToolCall
 		decision = strictestSecurityDecision(decision, securitypolicy.DecisionAsk)
 	}
 	if decision == securitypolicy.DecisionDeny {
-		return fmt.Errorf("security violation: %s", reason)
+		return PrerequisiteError{Reason: fmt.Sprintf("security violation: %s", reason)}
 	}
 	if decision == securitypolicy.DecisionAllow {
 		return nil
@@ -222,7 +228,7 @@ func (r *Registry) authorizeToolCall(ctx context.Context, call provider.ToolCall
 		return err
 	}
 	if !result.Approved {
-		return fmt.Errorf("security violation: approval gate did not approve %s", call.Function.Name)
+		return PrerequisiteError{Reason: fmt.Sprintf("security violation: approval gate did not approve %s", call.Function.Name)}
 	}
 	return nil
 }
@@ -272,7 +278,7 @@ func classifyToolEffects(name string, raw json.RawMessage) []ShellEffect {
 		default:
 			return []ShellEffect{{Setting: securitypolicy.SettingScheduledChanges, Detail: "system-cron " + action}}
 		}
-	case "memory_record_finding":
+	case "memory_record_finding", "memory_remember_target":
 		return []ShellEffect{{Setting: securitypolicy.SettingFileAppend, Detail: "durable memory write"}}
 	case "web_search", "web_fetch":
 		return []ShellEffect{{Setting: securitypolicy.SettingNetworkAccess, Detail: "external web access"}}
@@ -297,7 +303,13 @@ func toolRelevantForTask(name string, taskClass core.TaskClass, lower string) bo
 		// ShellTool at execution time.
 		return true
 	case "memory_record_finding":
+		if _, direct := memory.ParseEndpointDeclaration(lower); direct {
+			return false
+		}
 		return containsAny(lower, "remember", "record finding", "note this", "save this", "memory")
+	case "memory_remember_target":
+		_, direct := memory.ParseEndpointDeclaration(lower)
+		return direct || containsAny(lower, "remember", "save", "memory")
 	case "schedule_manage":
 		return containsAny(lower, "schedule", "remind", "recurring", "every ", "daily", "weekly", "job", "health check")
 	case "system_cron_manage":

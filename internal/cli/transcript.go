@@ -46,6 +46,10 @@ func (r *TranscriptRenderer) Observe(event tools.Event) {
 	defer r.mu.Unlock()
 
 	switch event.Type {
+	case tools.EventMemoryCaptured:
+		if event.MemoryCapture != nil {
+			fmt.Fprintln(r.out, event.MemoryCapture.Summary())
+		}
 	case tools.EventMemoryInjected:
 		if message := memoryEventSummary(event); message != "" {
 			fmt.Fprintln(r.out, r.label("done", message))
@@ -74,6 +78,8 @@ func (r *TranscriptRenderer) Observe(event tools.Event) {
 		}
 	case tools.EventApprovalRequired:
 		fmt.Fprintln(r.out, r.label("stopped", "Protected action not executed"))
+	case tools.EventApprovalReviewStarted:
+		fmt.Fprintln(r.out, r.label("running", "LLM advisor reviewing pending action; human approval still required"))
 	case tools.EventShellOutput:
 		state := r.shellState(event)
 		r.writeShellOutput(state, event.Output)

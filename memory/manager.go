@@ -79,28 +79,32 @@ type TargetResolutionInput struct {
 	Task        string
 	Command     string
 	Environment string
+	// PreviousTargetID is an in-session reference, never persistent authority.
+	PreviousTargetID string
 }
 
 // TargetResolution is the resolved runtime and active target identity.
 type TargetResolution struct {
-	RuntimeHostID string
-	TargetID      string
-	TargetKind    string
-	Environment   string
-	PrimaryName   string
-	Ambiguous     bool
+	RuntimeHostID  string
+	TargetID       string
+	TargetKind     string
+	Environment    string
+	PrimaryName    string
+	Ambiguous      bool
+	UnresolvedName string
 }
 
 // ObservedToolCall captures a tool invocation for post-run curation.
 type ObservedToolCall struct {
-	ToolName     string
-	Command      string
-	Result       string
-	TargetID     string
-	Success      bool
-	PolicyDenied bool
-	DenialClass  string
-	DurationMs   int64
+	PrerequisiteRejected bool
+	ToolName             string
+	Command              string
+	Result               string
+	TargetID             string
+	Success              bool
+	PolicyDenied         bool
+	DenialClass          string
+	DurationMs           int64
 }
 
 // RunOutcome is the structured input to deterministic memory curation.

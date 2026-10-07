@@ -55,7 +55,7 @@ func TestSetupSecurityProfilesAndProgressiveCustomization(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Normalize()
 	m := setupModel{cfg: cfg, step: stepSafety, cursor: 1}
-	if got := setupflow.SafetyOptions(); len(got) != 5 || got[1].ID != string(securitypolicy.ProfileReasonable) {
+	if got := setupflow.SafetyOptions(); len(got) != 7 || got[1].ID != string(securitypolicy.ProfileReasonable) {
 		t.Fatalf("unexpected security profiles: %#v", got)
 	}
 
@@ -83,7 +83,7 @@ func TestSetupYOLORequiresExplicitSecondConfirmation(t *testing.T) {
 	t.Parallel()
 	cfg := config.DefaultConfig()
 	cfg.Normalize()
-	m := setupModel{cfg: cfg, step: stepSafety, cursor: 4}
+	m := setupModel{cfg: cfg, step: stepSafety, cursor: len(setupflow.SafetyOptions()) - 1}
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	first := next.(setupModel)
 	if first.step != stepSafety || !first.yoloConfirm || first.cfg.Security.Profile == securitypolicy.ProfileYOLO {

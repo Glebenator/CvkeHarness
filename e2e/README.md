@@ -26,11 +26,13 @@ go test -tags=e2e ./e2e -v
 | Guided setup | Keyboard navigation reaches the shared named connection editor and explicit provider chooser at 80, 100, and 120 columns | Quitting early saves nothing |
 | Cached Codex onboarding | Setup creates a named connection and saves Primary and Safety judge through the same searchable picker at 80, 100, and 120 columns | Synthetic cached auth/model fixtures only; saved bindings resolve the exact model IDs without provider requests |
 | Configuration-only Settings | Both `settings` and `console --view settings` open the same Models workspace before a provider is configured; Connections and Add remain reachable | Opening and quitting creates neither a config nor a runtime database |
+| Workspace focus | At 80 and 120 columns, Esc focuses the top bar, arrows select a workspace, and Enter enables its actions; Settings sidebar arrows select a section before entering its content | Navigation neither edits configuration nor creates runtime state |
 | Local Console chat commands | Help, memory, tools, unknown-command handling, and exit remain usable | Zero model requests; zero turns persisted |
 | Tool-backed Console chat | A model-requested allowlisted command shows output and a verified final response | Tool outcome and turn are persisted |
 | Activity inspection | At 80, 100, 120, and 144 columns, `Ctrl+T` opens Activity, `Enter` opens output, and two `Esc` presses return to composing | Inspection and local `/help` cause no additional model requests |
 | Tool-free follow-up | After a long tool-backed response and a short direct reply, `Ctrl+T` at Latest opens the newest turn with no tool calls at 80 and 100 columns | Earlier tool evidence remains separate from the new turn |
 | Manual approval continuation | The inline policy reason and exact action are shown; `a` creates one scoped grant and continues the same turn | The exact grant is atomically consumed; no legacy reusable approval is persisted |
+| LLM advisor | An independent advisor connection explains the action and recommends approval in the console dialog | Advice alone leaves work blocked; explicit approval continues once without repeating the advisor call |
 | Unapproved interruption | Leaving an approval ungranted and interrupting the turn never runs the proposed action; Activity exposes the cancellation reason | A filesystem marker is not created; blocked work and the interrupted outcome remain inspectable |
 | Chat export | `/export` produces a readable transcript | Export file is mode `0600` |
 | Approval management | `commands approve` is visible in `commands list` | Approval survives a second process |

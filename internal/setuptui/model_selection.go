@@ -104,7 +104,7 @@ func (m setupModel) acceptModel(msg modelui.PickerResultMsg) (setupModel, tea.Cm
 	}
 	role := config.RolePrimary
 	if m.step == stepJudge {
-		role = config.RoleSafetyJudge
+		role = m.safetyRole()
 	}
 	if msg.Role != role {
 		return m, nil
@@ -156,4 +156,15 @@ func (m setupModel) modelChildView() string {
 		body = m.modelPicker.View(width, height)
 	}
 	return "\n  " + styleTitle.Render("CvkeHarness") + styleMuted.Render("  GUIDED SETUP  ") + styleStep.Render(stageLabels[m.stage()]) + "\n\n" + body
+}
+
+func (m setupModel) safetyRole() config.ModelRole {
+	if m.cfg.SafetyMode == "llm_advisor" {
+		return config.RoleSafetyAdvisor
+	}
+	return config.RoleSafetyJudge
+}
+
+func (m setupModel) usesSafetyModel() bool {
+	return m.cfg.SafetyMode == "llm_judge" || m.cfg.SafetyMode == "llm_advisor"
 }

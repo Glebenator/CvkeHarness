@@ -68,6 +68,7 @@ func TestProfileRiskOrderingForDestructiveEffects(t *testing.T) {
 	want := map[Profile]Decision{
 		ProfileExtraStrict: DecisionDeny,
 		ProfileReasonable:  DecisionAsk,
+		ProfileLLMJudge:    DecisionLLMReview,
 		ProfileLessStrict:  DecisionAsk,
 		ProfileMinimal:     DecisionAllow,
 		ProfileYOLO:        DecisionAllow,
@@ -79,6 +80,37 @@ func TestProfileRiskOrderingForDestructiveEffects(t *testing.T) {
 		}
 		if got := resolved.Decision(SettingFileDelete); got != expected {
 			t.Fatalf("%s delete = %q, want %q", profile, got, expected)
+		}
+	}
+}
+
+func TestLLMJudgePresetReviewsAllNonReadEffectsExceptHardBlocks(t *testing.T) {
+	policy, err := Resolve(&Selection{Profile: ProfileLLMJudge})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, setting := range Catalog() {
+		if setting.Kind != KindDecision {
+			continue
+		}
+		want := DecisionLLMReview
+		switch setting.ID {
+		case SettingReadCommands:
+			want = DecisionAllow
+		case SettingCredentialAccess, SettingRawDeviceAccess:
+			want = DecisionDeny
+		}
+		if got := policy.Decision(setting.ID); got != want {
+			t.Errorf("%s = %s, want %s", setting.ID, got, want)
+		}
+	}
+	if !policy.Bool(SettingProtectCritical) || !policy.Bool(SettingProtectCredentials) || policy.Bool(SettingRememberApprovals) {
+		t.Fatal("judge preset must preserve path protection and disable approval reuse")
+	}
+	reasonable, _ := Resolve(DefaultSelection())
+	for _, setting := range Catalog() {
+		if setting.Kind == KindInt && policy.Value(setting.ID) != reasonable.Value(setting.ID) {
+			t.Errorf("judge preset changed runtime limit %s", setting.ID)
 		}
 	}
 }

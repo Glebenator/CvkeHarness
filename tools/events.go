@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"github.com/coolcake/cvkeharness/memory"
 	"time"
 
 	"github.com/coolcake/cvkeharness/internal/telemetry"
@@ -12,16 +13,18 @@ import (
 type EventType string
 
 const (
-	EventTargetResolved       EventType = "target_resolved"
-	EventToolCallStarted      EventType = "tool_call_started"
-	EventToolCallFinished     EventType = "tool_call_finished"
-	EventShellCommandStarted  EventType = "shell_command_started"
-	EventShellApproval        EventType = "shell_approval"
-	EventApprovalRequired     EventType = "approval_required"
-	EventShellOutput          EventType = "shell_output"
-	EventShellCommandFinished EventType = "shell_command_finished"
-	EventMemoryInjected       EventType = "memory_injected"
-	EventVerificationActivity EventType = "verification_activity"
+	EventTargetResolved        EventType = "target_resolved"
+	EventToolCallStarted       EventType = "tool_call_started"
+	EventToolCallFinished      EventType = "tool_call_finished"
+	EventShellCommandStarted   EventType = "shell_command_started"
+	EventShellApproval         EventType = "shell_approval"
+	EventApprovalRequired      EventType = "approval_required"
+	EventApprovalReviewStarted EventType = "approval_review_started"
+	EventShellOutput           EventType = "shell_output"
+	EventShellCommandFinished  EventType = "shell_command_finished"
+	EventMemoryCaptured        EventType = "memory_captured"
+	EventMemoryInjected        EventType = "memory_injected"
+	EventVerificationActivity  EventType = "verification_activity"
 )
 
 // VerificationPhase names the operator-visible phase of completion
@@ -89,11 +92,13 @@ type Event struct {
 	BlockedWorkID   string
 	ApprovalReason  string
 	ApprovalEffects []ShellEffect
+	ApprovalAdvice  *CommandAdvice
 	Success         bool
 	ExitCode        int
 	ExitCodeKnown   bool
 	Duration        time.Duration
 	ErrorMessage    string
+	MemoryCapture   *memory.EndpointCapture
 	MemorySources   []MemorySource
 	Verification    VerificationActivity
 	SessionID       string

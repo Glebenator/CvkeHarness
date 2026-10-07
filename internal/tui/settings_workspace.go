@@ -22,7 +22,10 @@ const (
 var settingsSections = []string{"Models", "Connections", "Security", "Runtime"}
 
 func (t *configTab) workspaceHints() []string {
-	hints := []string{renderKeyHint("[/]", "section"), renderKeyHint("↑↓", "move"), renderKeyHint("enter", "edit"), renderKeyHint("s", "save")}
+	if t.sidebarFocused {
+		return []string{renderKeyHint("↑↓", "section"), renderKeyHint("→/enter", "content"), renderKeyHint("[/]", "section")}
+	}
+	hints := []string{renderKeyHint("←", "sections"), renderKeyHint("↑↓", "move"), renderKeyHint("enter", "edit"), renderKeyHint("s", "save")}
 	if t.section == settingsModels {
 		hints = append(hints, renderKeyHint("a", "advanced"), renderKeyHint("c", "connections"))
 	} else if t.section == settingsConnections {
@@ -39,6 +42,35 @@ func (t *configTab) setSection(section settingsSection) {
 }
 
 func (t *configTab) updateSectionNavigation(msg tea.KeyMsg, svc *Service) (bool, tea.Cmd) {
+	if msg.String() == "tab" || msg.String() == "shift+tab" {
+		t.sidebarFocused = !t.sidebarFocused
+		if t.sidebarFocused {
+			t.pendingProfile = ""
+			t.resetAllPending = false
+		}
+		return true, nil
+	}
+	if msg.String() == "left" && !t.securityOpen {
+		t.sidebarFocused = true
+		return true, nil
+	}
+	if t.sidebarFocused {
+		switch msg.String() {
+		case "up", "k":
+			t.setSection(settingsSection((int(t.section) + len(settingsSections) - 1) % len(settingsSections)))
+		case "down", "j":
+			t.setSection(settingsSection((int(t.section) + 1) % len(settingsSections)))
+		case "right", "enter":
+			t.sidebarFocused = false
+		case "[", "]", "c", "m":
+			// Retain the existing section shortcuts in either pane.
+		default:
+			return true, nil
+		}
+		if msg.String() != "[" && msg.String() != "]" && msg.String() != "c" && msg.String() != "m" {
+			return true, nil
+		}
+	}
 	switch msg.String() {
 	case "[":
 		t.setSection(settingsSection((int(t.section) + len(settingsSections) - 1) % len(settingsSections)))
@@ -55,7 +87,7 @@ func (t *configTab) updateSectionNavigation(msg tea.KeyMsg, svc *Service) (bool,
 }
 
 func (t *configTab) modelRoles() []config.ModelRole {
-	roles := []config.ModelRole{config.RolePrimary, config.RoleSafetyJudge}
+	roles := []config.ModelRole{config.RolePrimary, config.RoleSafetyJudge, config.RoleSafetyAdvisor}
 	if t.advancedModels {
 		roles = append(roles, config.RoleClassifier, config.RoleVerifier, config.RolePlanning, config.RoleExecution, config.RoleCuration)
 	}
@@ -130,8 +162,6 @@ func (t *configTab) updateWorkspace(msg tea.KeyMsg, svc *Service) (tabModel, tea
 		return t, t.saveSettings(svc)
 	case "r":
 		return t.updateList(msg, svc)
-	case "esc":
-		t.setSection(settingsModels)
 	case "a":
 		if t.section == settingsConnections {
 			return t, t.openConnectionEditor("")
@@ -225,7 +255,7 @@ func (t *configTab) viewModelRoles(width, height int) string {
 			if t.advancedModels {
 				label = "▾ Hide advanced model roles"
 			}
-			lines = append(lines, renderSelectableRow(label, i == t.roleCursor), "", "")
+			lines = append(lines, renderSelectableRow(label, i == t.roleCursor && !t.sidebarFocused), "", "")
 			continue
 		}
 		role := roles[i]
@@ -241,7 +271,7 @@ func (t *configTab) viewModelRoles(width, height int) string {
 				value = "Follows the model actually used for execution"
 			}
 		}
-		lines = append(lines, renderSelectableRow(label, i == t.roleCursor), "  "+styleMuted.Render(value), "")
+		lines = append(lines, renderSelectableRow(label, i == t.roleCursor && !t.sidebarFocused), "  "+styleMuted.Render(value), "")
 	}
 	if hint := scrollHints(start, end, len(roles)+1); hint != "" {
 		lines = append(lines, hint)
@@ -259,6 +289,8 @@ func modelRoleDescription(role config.ModelRole) string {
 		return "Default model for conversation, planning, and execution."
 	case config.RoleSafetyJudge:
 		return "Advisory reviews for security controls set to LLM review."
+	case config.RoleSafetyAdvisor:
+		return "Explains pending actions and recommends approve or reject in LLM advisor mode; you decide."
 	case config.RoleClassifier:
 		return "Classifies tasks while LLM judge mode is active."
 	case config.RoleVerifier:
@@ -295,7 +327,7 @@ func (t *configTab) viewConnections(width, height int) string {
 	start, end := listWindow(t.connectionCursor, len(ids)+1, slots)
 	for i := start; i < end; i++ {
 		if i == len(ids) {
-			lines = append(lines, renderSelectableRow("+ Add connection", i == t.connectionCursor), "", "")
+			lines = append(lines, renderSelectableRow("+ Add connection", i == t.connectionCursor && !t.sidebarFocused), "", "")
 			continue
 		}
 		id := ids[i]
@@ -314,7 +346,7 @@ func (t *configTab) viewConnections(width, height int) string {
 		if roles := t.connectionRoles(id); len(roles) != 0 {
 			uses = "Used by " + strings.Join(roles, ", ")
 		}
-		lines = append(lines, renderSelectableRow(connection.DisplayName(id)+" · "+id, i == t.connectionCursor), "  "+styleMuted.Render(detail), "  "+styleMuted.Render(uses))
+		lines = append(lines, renderSelectableRow(connection.DisplayName(id)+" · "+id, i == t.connectionCursor && !t.sidebarFocused), "  "+styleMuted.Render(detail), "  "+styleMuted.Render(uses))
 	}
 	if hint := scrollHints(start, end, len(ids)+1); hint != "" {
 		lines = append(lines, hint)
@@ -335,7 +367,11 @@ func (t *configTab) viewWorkspace(width, height int) string {
 		var sections []string
 		for i, name := range settingsSections {
 			if settingsSection(i) == t.section {
-				name = styleAccent.Render("▸ " + name)
+				if t.sidebarFocused {
+					name = styleSelectedRow.Render("▸ " + name)
+				} else {
+					name = styleBright.Render("• " + name)
+				}
 			}
 			sections = append(sections, name)
 		}
@@ -344,9 +380,20 @@ func (t *configTab) viewWorkspace(width, height int) string {
 	sideWidth := 18
 	var nav []string
 	for i, name := range settingsSections {
-		nav = append(nav, "  "+renderSelectableRow(name, settingsSection(i) == t.section), "")
+		selected := settingsSection(i) == t.section
+		if selected && !t.sidebarFocused {
+			nav = append(nav, "  "+styleBright.Render("• "+name), "")
+		} else {
+			nav = append(nav, "  "+renderSelectableRow(name, selected), "")
+		}
 	}
-	nav = append(nav, "  [/] section")
+	if t.sidebarFocused {
+		nav = append(nav, "  ↑↓ section", "  →/Enter content")
+	} else if t.securityOpen {
+		nav = append(nav, "  Tab sections")
+	} else {
+		nav = append(nav, "  ←/Tab sections")
+	}
 	side := lipgloss.NewStyle().Width(sideWidth).Height(height).Render(strings.Join(nav, "\n"))
 	divider := strings.TrimSuffix(strings.Repeat(styleMuted.Render("│")+"\n", height), "\n")
 	content := t.viewSettingsContent(width-sideWidth-1, height)

@@ -20,6 +20,7 @@ import (
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/router"
 	"github.com/coolcake/cvkeharness/state"
+	"github.com/coolcake/cvkeharness/tools"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -133,7 +134,7 @@ var runCmd = &cobra.Command{
 
 		outcomeCh := make(chan runOutcome, 1)
 		go func() {
-			result, runErr := a.Run(runCtx, task)
+			result, runErr := a.Run(tools.WithDirectEndpointMessage(runCtx, task), task)
 			outcomeCh <- runOutcome{result: result, err: runErr}
 		}()
 

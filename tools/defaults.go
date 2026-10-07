@@ -18,6 +18,8 @@ type DefaultRegistryOptions struct {
 	Store                *state.Store
 	Memory               *memory.Manager
 	Judge                provider.Provider
+	Advisor              provider.Provider
+	AdvisorModel         string
 	SafetyMode           string
 	SafetyModel          string
 	PrimaryModel         string
@@ -76,13 +78,19 @@ func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, erro
 		humanApprover = NewUserPromptApprover(os.Stdin, os.Stdout)
 	}
 	llmApprover := NewLLMJudgeApproverWithPromptDumper(opts.Judge, opts.SafetyModel, opts.PromptDumper)
+	if opts.SafetyMode == SafetyModeLLMAdvisor || (opts.SecurityPolicy != nil && opts.SecurityPolicy.Profile == securitypolicy.ProfileLLMAdvisor) {
+		humanApprover = NewLLMAdvisorApprover(opts.Advisor, opts.AdvisorModel, humanApprover, opts.PromptDumper)
+		// The advisor supplies recommendations even for LLM-review controls;
+		// the old binary judge must not preempt the human's decision.
+		llmApprover = nil
+	}
 	if opts.SecurityPolicy != nil {
 		registry.ConfigureSecurityWithStore(*opts.SecurityPolicy, humanApprover, llmApprover, opts.Store)
 	}
 	switch opts.SafetyMode {
 	case "", SafetyModeLLMJudge:
 		approver = llmApprover
-	case SafetyModeUserConfirm:
+	case SafetyModeUserConfirm, SafetyModeLLMAdvisor:
 		approver = humanApprover
 	case SafetyModeUserConfirmAll:
 		approver = humanApprover
@@ -90,6 +98,7 @@ func NewDefaultRegistryFromOptions(opts DefaultRegistryOptions) (*Registry, erro
 
 	if opts.Memory != nil {
 		registry.Register(NewMemoryRecordFindingTool(opts.Memory))
+		registry.Register(NewMemoryRememberTargetTool(opts.Memory))
 	}
 	if opts.Store != nil && opts.Store.Available() {
 		registry.Register(NewScheduleManageTool(opts.Store))

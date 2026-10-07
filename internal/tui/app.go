@@ -103,12 +103,6 @@ type tabActivator interface {
 	Activate()
 }
 
-// horizontalTabNavigator identifies consuming states where left and right are
-// still available for global tab navigation.
-type horizontalTabNavigator interface {
-	HorizontalTabNavigation() bool
-}
-
 // ── root model ──────────────────────────────────────────────────────
 
 type model struct {
@@ -117,6 +111,7 @@ type model struct {
 	width             int
 	height            int
 	activeTab         int
+	topBarFocused     bool
 	tabs              [tabCount]tabModel
 	showHelp          bool
 	helpScroll        int
@@ -192,6 +187,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, navigationInputCmd(cmd, m.navigationEpoch)
 	case navigateMsg:
+		m.topBarFocused = false
 		if msg.run != nil {
 			t := m.tabs[tabRuns].(*runsTab)
 			t.selected = msg.run
@@ -222,8 +218,13 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		if msg.Y == 0 && msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease && !m.confirmQuit && !m.showHelp && !m.navigation.open {
 			if idx := m.clickedTab(msg.X); idx >= 0 {
-				return m, m.switchTab(idx)
+				cmd := m.switchTab(idx)
+				return m, tea.Batch(cmd, m.focusWorkspace())
 			}
+		}
+		// Content stays read-only until the workspace is explicitly focused.
+		if m.topBarFocused {
+			return m, nil
 		}
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -243,6 +244,7 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				editor := m.tabs[tabConfig].(*configTab)
 				if editor.hasPendingEdit() {
 					m.confirmQuit = false
+					m.topBarFocused = false
 					cmd := m.switchTab(tabConfig)
 					return m, cmd
 				}
@@ -292,55 +294,46 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Tab and shift+tab are the universal escape from an input-focused tab.
-		// Text editors retain left/right for cursor movement while focused.
-		switch {
-		case key.Matches(msg, keys.Tab):
-			return m, m.switchTab((m.activeTab + 1) % tabCount)
-		case key.Matches(msg, keys.ShiftTab):
-			return m, m.switchTab((m.activeTab - 1 + tabCount) % tabCount)
+		if !m.topBarFocused && key.Matches(msg, keys.Back) && !m.workspaceHandlesEscape() {
+			m.blurWorkspace()
+			m.topBarFocused = true
+			return m, nil
 		}
 
-		// A consuming tab may explicitly return horizontal arrows to global
-		// navigation, for example while Chat is in its non-editing mode.
-		if m.tabs[m.activeTab].Consuming() {
-			if nav, ok := m.tabs[m.activeTab].(horizontalTabNavigator); ok && nav.HorizontalTabNavigation() {
-				switch {
-				case key.Matches(msg, keys.Right):
-					return m, m.switchTab((m.activeTab + 1) % tabCount)
-				case key.Matches(msg, keys.Left):
-					return m, m.switchTab((m.activeTab - 1 + tabCount) % tabCount)
+		if m.topBarFocused || !m.tabs[m.activeTab].Consuming() {
+			switch {
+			case key.Matches(msg, keys.Quit):
+				if cfg, ok := m.tabs[tabConfig].(*configTab); ok && (cfg.dirty || cfg.hasPendingEdit()) {
+					m.confirmQuit = true
+					m.quitError = ""
+					return m, nil
 				}
-			}
-			tab, cmd := m.tabs[m.activeTab].Update(msg, m.svc, m.contentWidth(), m.contentHeight())
-			m.tabs[m.activeTab] = tab
-			return m, cmd
-		}
-
-		switch {
-		case key.Matches(msg, keys.Quit):
-			if cfg, ok := m.tabs[tabConfig].(*configTab); ok && (cfg.dirty || cfg.hasPendingEdit()) {
-				m.confirmQuit = true
-				m.quitError = ""
+				return m, tea.Quit
+			case key.Matches(msg, keys.Help):
+				m.showHelp = true
 				return m, nil
 			}
-			return m, tea.Quit
-		case key.Matches(msg, keys.Right):
-			return m, m.switchTab((m.activeTab + 1) % tabCount)
-		case key.Matches(msg, keys.Left):
-			return m, m.switchTab((m.activeTab - 1 + tabCount) % tabCount)
-		case key.Matches(msg, keys.Tab1):
-			return m, m.switchTab(tabOverview)
-		case key.Matches(msg, keys.Tab2):
-			return m, m.switchTab(tabJobs)
-		case key.Matches(msg, keys.Tab3):
-			return m, m.switchTab(tabRuns)
-		case key.Matches(msg, keys.Tab4):
-			return m, m.switchTab(tabChat)
-		case key.Matches(msg, keys.Tab5):
-			return m, m.switchTab(tabConfig)
-		case key.Matches(msg, keys.Help):
-			m.showHelp = !m.showHelp
+		}
+		if m.topBarFocused {
+			switch {
+			case key.Matches(msg, keys.Enter):
+				return m, m.focusWorkspace()
+			case key.Matches(msg, keys.Right), key.Matches(msg, keys.Tab):
+				return m, m.switchTab((m.activeTab + 1) % tabCount)
+			case key.Matches(msg, keys.Left), key.Matches(msg, keys.ShiftTab):
+				return m, m.switchTab((m.activeTab - 1 + tabCount) % tabCount)
+			case key.Matches(msg, keys.Tab1):
+				return m, m.switchTab(tabOverview)
+			case key.Matches(msg, keys.Tab2):
+				return m, m.switchTab(tabJobs)
+			case key.Matches(msg, keys.Tab3):
+				return m, m.switchTab(tabRuns)
+			case key.Matches(msg, keys.Tab4):
+				return m, m.switchTab(tabChat)
+			case key.Matches(msg, keys.Tab5):
+				return m, m.switchTab(tabConfig)
+			}
+			// Never forward selection keys or shortcuts into an unfocused pane.
 			return m, nil
 		}
 
@@ -373,6 +366,11 @@ func (m model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	tab, cmd := m.tabs[owner].Update(msg, m.svc, m.contentWidth(), m.contentHeight())
 	m.tabs[owner] = tab
+	if m.topBarFocused || owner != m.activeTab {
+		if chat, ok := tab.(*chatTab); ok {
+			chat.composer.Blur()
+		}
+	}
 	if owner != m.activeTab {
 		switch msg.(type) {
 		case chatTurnDoneMsg, chatSessionReadyMsg, jobActionMsg, configSavedMsg:
@@ -486,14 +484,20 @@ func (m model) tabSegments() []string {
 		}
 		label := num + " " + name + badge
 		if i == m.activeTab {
-			label = "▸ " + label
+			pointer := "• "
+			if m.topBarFocused {
+				pointer = "▸ "
+			}
+			label = pointer + label
 		}
 		// Compact padding preserves badges at 80 columns.
 		if m.width >= 100 {
 			label = " " + label + " "
 		}
-		if i == m.activeTab {
+		if i == m.activeTab && m.topBarFocused {
 			parts = append(parts, styleActiveTab.Padding(0, 1).Render(label))
+		} else if i == m.activeTab {
+			parts = append(parts, styleBright.Padding(0, 1).Render(label))
 		} else {
 			parts = append(parts, styleTab.Padding(0, 1).Render(label))
 		}
@@ -532,20 +536,20 @@ func (m model) renderStatusBar() string {
 		quitKey = "ctrl+c"
 	}
 	hints := []string{}
-	navigationHint := renderKeyHint("←→", "switch")
-	if consuming {
-		navigationHint = renderKeyHint("tab", "switch")
-		if nav, ok := m.tabs[m.activeTab].(horizontalTabNavigator); ok && nav.HorizontalTabNavigation() {
-			navigationHint = renderKeyHint("←→", "switch")
-		}
-	}
+	navigationHint := renderKeyHint("esc", "top bar")
 	// Prioritize navigation and local completion/recovery actions over quit.
 	candidates := []string{navigationHint}
 	tabHints := m.tabs[m.activeTab].StatusHints()
-	if m.activeTab == tabChat {
+	if m.topBarFocused {
+		candidates = []string{renderKeyHint("←→", "select tab"), renderKeyHint("enter", "focus"), renderKeyHint("1-5", "select"), renderKeyHint("?", "help")}
+		quitKey = "q"
+	} else if m.workspaceHandlesEscape() {
+		// Nested editors and details own Esc until they close.
+		candidates = append([]string(nil), tabHints...)
+	} else if m.activeTab == tabChat {
 		// Chat has two reading surfaces. Their focus/inspection controls must
 		// remain discoverable before generic navigation consumes the footer.
-		candidates = append(append([]string(nil), tabHints...), navigationHint)
+		candidates = append(candidates, tabHints...)
 		helpKey := "?"
 		if consuming {
 			helpKey = "f1"
@@ -596,12 +600,11 @@ func (m model) renderHelp() string {
 				{"alt+← / alt+→", "Previous / next visited workspace"},
 				{"f1", "Help from any input mode"},
 				{"click tab", "Open a workspace with the mouse"},
-				{"tab / shift+tab", "Cycle tabs from any input mode"},
-				{"←/→", "Cycle tabs outside text editing"},
-				{"1-5", "Jump to tab directly"},
+				{"esc", "Close a nested view, otherwise focus the top bar"},
+				{"←/→ · tab/shift+tab", "Select a tab while the top bar is focused"},
+				{"1-5", "Select a tab while the top bar is focused"},
 				{"↑/k  ↓/j", "Move cursor in lists"},
-				{"enter", "Expand / select item"},
-				{"esc", "Go back / collapse detail"},
+				{"enter", "Focus selected workspace / select an item inside it"},
 			},
 		},
 		{
@@ -618,10 +621,12 @@ func (m model) renderHelp() string {
 			"Chat Tab",
 			[][2]string{
 				{"enter", "Compose/send, or inspect a tool in Activity"},
+				{"tab / shift+tab", "Toggle typing / reading the conversation"},
 				{"/", "Open chat command suggestions"},
 				{"/new", "Start a fresh chat (/clear remains an alias)"},
 				{"ctrl+g", "Show full session context"},
-				{"esc", "Back from Activity, leave input, or interrupt work"},
+				{"esc", "Back from Activity / focus the top bar"},
+				{"ctrl+x", "Interrupt the active chat turn"},
 				{"ctrl+h", "Toggle live chat and saved conversations"},
 				{"↑/↓ · PgUp/PgDn", "Scroll the focused pane without selecting tools"},
 				{"ctrl+t", "Open Activity for the visible turn; return to chat"},
@@ -645,6 +650,8 @@ func (m model) renderHelp() string {
 			"Settings Tab",
 			[][2]string{
 				{"[ / ]", "Models / Connections / Security / Runtime"},
+				{"← · ↑/↓ · →/enter", "Focus sections, choose one, then focus its content"},
+				{"tab / shift+tab", "Toggle section/content focus; also works in Security"},
 				{"enter", "Edit or toggle the selected setting"},
 				{"a", "Advanced roles / add a connection"},
 				{"ctrl+k / ctrl+r", "Picker connection / reload catalog"},

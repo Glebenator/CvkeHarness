@@ -119,6 +119,7 @@ func (m model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.showHelp = false
+		m.topBarFocused = false
 		switch action.action {
 		case "job":
 			tab := m.tabs[tabJobs].(*jobsTab)
@@ -137,7 +138,8 @@ func (m model) updateNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			cmd := m.switchTab(tabRuns)
 			return m, tea.Batch(cmd, tab.search.Focus())
 		}
-		return m, m.switchTab(action.tab)
+		cmd := m.switchTab(action.tab)
+		return m, tea.Batch(cmd, m.focusWorkspace())
 	}
 	var cmd tea.Cmd
 	m.navigation.input, cmd = m.navigation.input.Update(msg)
@@ -166,12 +168,46 @@ func (m model) renderNavigation() string {
 }
 
 func (m *model) activateTab(idx int) tea.Cmd {
+	m.blurWorkspace()
 	m.activeTab = idx
 	m.unread[idx] = false
-	if activator, ok := m.tabs[idx].(tabActivator); ok {
+	if activator, ok := m.tabs[idx].(tabActivator); ok && !m.topBarFocused {
 		activator.Activate()
 	}
 	return m.tabs[idx].Init(m.svc)
+}
+
+// Nested surfaces get the first Escape. At the workspace level Escape belongs
+// to the root, regardless of whether a text input or running task is active.
+func (m model) workspaceHandlesEscape() bool {
+	switch tab := m.tabs[m.activeTab].(type) {
+	case *overviewTab:
+		return tab.detail
+	case *jobsTab:
+		return tab.mode != jobsModeList
+	case *runsTab:
+		return tab.searching || tab.expanded
+	case *configTab:
+		return tab.editing || tab.modelPicker != nil || tab.connectionEditor != nil || tab.pendingProfile != "" || tab.resetAllPending
+	case *chatTab:
+		return tab.approvalDialogOpen() || tab.history || tab.activity.focused || tab.commandOpen || (!tab.composerFocused && tab.lastError != "")
+	}
+	return false
+}
+
+func (m *model) blurWorkspace() {
+	if chat, ok := m.tabs[m.activeTab].(*chatTab); ok {
+		chat.composer.Blur()
+	}
+}
+
+func (m *model) focusWorkspace() tea.Cmd {
+	m.topBarFocused = false
+	if chat, ok := m.tabs[m.activeTab].(*chatTab); ok && !chat.history && !chat.activity.focused && !chat.running && !chat.starting && !chat.approvalInFlight && chat.pendingApproval == nil {
+		chat.composerFocused = true
+		return chat.composer.Focus()
+	}
+	return nil
 }
 
 func (m *model) navigateHistory(delta int) tea.Cmd {
@@ -180,7 +216,8 @@ func (m *model) navigateHistory(delta int) tea.Cmd {
 		return nil
 	}
 	m.navigationIndex = next
-	return m.activateTab(m.navigationHistory[next])
+	cmd := m.activateTab(m.navigationHistory[next])
+	return tea.Batch(cmd, m.focusWorkspace())
 }
 
 func (m model) clickedTab(x int) int {

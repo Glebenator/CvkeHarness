@@ -665,8 +665,9 @@ func TestBlockedChatShowsPolicyReasonAndInlineApprovalAction(t *testing.T) {
 	}
 	tab.resize(80, 30)
 	tab.viewport.GotoBottom()
-	view := tab.viewport.View()
-	for _, expected := range []string{"Policy reason:", "untrusted executable docker is ask", "commands.unknown", "approve once + continue"} {
+	tab.pendingApproval.details = true
+	view := tab.View(80, 30)
+	for _, expected := range []string{"POLICY DETAILS", "untrusted executable docker is ask", "commands.unknown", "approve once + continue"} {
 		if !strings.Contains(view, expected) {
 			t.Fatalf("approval prompt missing %q:\n%s", expected, view)
 		}

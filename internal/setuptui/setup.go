@@ -311,7 +311,7 @@ func (m setupModel) stepView() string {
 	case stepSecurityControls:
 		return m.viewSecurityControls()
 	case stepJudge:
-		return line("Press Enter to choose Safety judge using the shared model picker.")
+		return line("Press Enter to choose " + modelui.RoleLabel(m.safetyRole()) + " using the shared model picker.")
 	case stepScan:
 		return m.viewScan()
 	case stepDependencies:
@@ -511,7 +511,7 @@ func (m setupModel) viewReview() string {
 	lines := []string{
 		"Primary: " + m.modelRoleSummary(config.RolePrimary),
 		"Security: " + securitySummary(m.cfg),
-		"Safety judge: " + m.modelRoleSummary(config.RoleSafetyJudge),
+		modelui.RoleLabel(m.safetyRole()) + ": " + m.modelRoleSummary(m.safetyRole()),
 		"Web search: " + boolText(m.cfg.WebSearch.Enabled),
 	}
 	if m.installPlan.Selected {
@@ -573,7 +573,7 @@ func (m setupModel) activate() (setupModel, tea.Cmd) {
 		return m.beginConnectionEditor(m.connectionID)
 	case stepModel, stepJudge:
 		if m.step == stepJudge {
-			return m.beginModelPicker(config.RoleSafetyJudge, "")
+			return m.beginModelPicker(m.safetyRole(), "")
 		}
 		return m.beginModelPicker(config.RolePrimary, m.connectionID)
 	case stepSafety:
@@ -874,15 +874,15 @@ func (m setupModel) nextStep() (setupModel, tea.Cmd) {
 	switch {
 	case m.step == stepSafety && !m.securityCustomize:
 		m.step = stepJudge
-		if m.cfg.SafetyMode != "llm_judge" {
+		if !m.usesSafetyModel() {
 			m.step = stepScan
 		}
 		m.cursor = m.preferredCursor()
 		if m.step == stepJudge {
-			return m.beginModelPicker(config.RoleSafetyJudge, "")
+			return m.beginModelPicker(m.safetyRole(), "")
 		}
 		return m, nil
-	case m.step == stepSecurityControls && m.cfg.SafetyMode != "llm_judge":
+	case m.step == stepSecurityControls && !m.usesSafetyModel():
 		m.step = stepScan
 		m.cursor = 0
 		return m, nil
@@ -906,7 +906,7 @@ func (m setupModel) nextStep() (setupModel, tea.Cmd) {
 			return m.beginModelPicker(config.RolePrimary, m.connectionID)
 		}
 		if m.step == stepJudge {
-			return m.beginModelPicker(config.RoleSafetyJudge, "")
+			return m.beginModelPicker(m.safetyRole(), "")
 		}
 	}
 	return m, nil
@@ -917,7 +917,7 @@ func (m setupModel) prevStep() (setupModel, tea.Cmd) {
 		switch {
 		case m.step == stepJudge && !m.securityCustomize:
 			m.step = stepSafety
-		case m.step == stepScan && m.cfg.SafetyMode != "llm_judge":
+		case m.step == stepScan && !m.usesSafetyModel():
 			m.step = stepSafety
 			if m.securityCustomize {
 				m.step = stepSecurityControls
@@ -936,7 +936,7 @@ func (m setupModel) prevStep() (setupModel, tea.Cmd) {
 			return m.beginModelPicker(config.RolePrimary, m.connectionID)
 		}
 		if m.step == stepJudge {
-			return m.beginModelPicker(config.RoleSafetyJudge, "")
+			return m.beginModelPicker(m.safetyRole(), "")
 		}
 	}
 	return m, nil

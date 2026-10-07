@@ -14,6 +14,7 @@ import (
 	"github.com/coolcake/cvkeharness/memory"
 	"github.com/coolcake/cvkeharness/provider"
 	"github.com/coolcake/cvkeharness/recovery"
+	"github.com/coolcake/cvkeharness/securitypolicy"
 	"github.com/coolcake/cvkeharness/state"
 	"github.com/coolcake/cvkeharness/tools"
 )
@@ -145,11 +146,21 @@ func defaultRegistryFromConfig(cfg *config.Config, store *state.Store, mem *memo
 	if err != nil {
 		return nil, err
 	}
+	var advisor provider.Provider
+	var advisorModel config.ResolvedModel
+	if cfg.SafetyMode == tools.SafetyModeLLMAdvisor || securityPolicy.Profile == securitypolicy.ProfileLLMAdvisor {
+		advisor, advisorModel, err = modelruntime.ResolveRole(cfg, config.RoleSafetyAdvisor)
+		if err != nil {
+			return nil, fmt.Errorf("resolve safety advisor: %w", err)
+		}
+	}
 	return tools.NewDefaultRegistryFromOptions(tools.DefaultRegistryOptions{
 		AllowedCommands:      cfg.AllowedCommands,
 		Store:                store,
 		Memory:               mem,
 		Judge:                judge,
+		Advisor:              advisor,
+		AdvisorModel:         advisorModel.Model,
 		SafetyMode:           cfg.SafetyMode,
 		SafetyModel:          judgeModel.Model,
 		PrimaryModel:         cfg.PrimaryModel(),

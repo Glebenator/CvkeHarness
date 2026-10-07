@@ -27,13 +27,14 @@ func (c Connection) DisplayName(id string) string {
 type ModelRole string
 
 const (
-	RolePrimary     ModelRole = "primary"
-	RoleSafetyJudge ModelRole = "safety_judge"
-	RoleClassifier  ModelRole = "classifier"
-	RoleVerifier    ModelRole = "verifier"
-	RolePlanning    ModelRole = "planning"
-	RoleExecution   ModelRole = "execution"
-	RoleCuration    ModelRole = "curation"
+	RolePrimary       ModelRole = "primary"
+	RoleSafetyJudge   ModelRole = "safety_judge"
+	RoleSafetyAdvisor ModelRole = "safety_advisor"
+	RoleClassifier    ModelRole = "classifier"
+	RoleVerifier      ModelRole = "verifier"
+	RolePlanning      ModelRole = "planning"
+	RoleExecution     ModelRole = "execution"
+	RoleCuration      ModelRole = "curation"
 )
 
 // ModelBinding stores the provider-native model ID without parsing its slashes.
@@ -47,13 +48,14 @@ type ModelBinding struct {
 func (b ModelBinding) IsZero() bool { return b.Connection == "" && b.Model == "" && b.Inherit == "" }
 
 type ModelRoles struct {
-	Primary     ModelBinding `yaml:"primary,omitempty"`
-	SafetyJudge ModelBinding `yaml:"safety_judge,omitempty"`
-	Classifier  ModelBinding `yaml:"classifier,omitempty"`
-	Verifier    ModelBinding `yaml:"verifier,omitempty"`
-	Planning    ModelBinding `yaml:"planning,omitempty"`
-	Execution   ModelBinding `yaml:"execution,omitempty"`
-	Curation    ModelBinding `yaml:"curation,omitempty"`
+	Primary       ModelBinding `yaml:"primary,omitempty"`
+	SafetyJudge   ModelBinding `yaml:"safety_judge,omitempty"`
+	SafetyAdvisor ModelBinding `yaml:"safety_advisor,omitempty"`
+	Classifier    ModelBinding `yaml:"classifier,omitempty"`
+	Verifier      ModelBinding `yaml:"verifier,omitempty"`
+	Planning      ModelBinding `yaml:"planning,omitempty"`
+	Execution     ModelBinding `yaml:"execution,omitempty"`
+	Curation      ModelBinding `yaml:"curation,omitempty"`
 }
 
 type ResolvedModel struct {
@@ -67,7 +69,7 @@ type ResolvedModel struct {
 }
 
 func ModelRoleList() []ModelRole {
-	return []ModelRole{RolePrimary, RoleSafetyJudge, RoleClassifier, RoleVerifier, RolePlanning, RoleExecution, RoleCuration}
+	return []ModelRole{RolePrimary, RoleSafetyJudge, RoleSafetyAdvisor, RoleClassifier, RoleVerifier, RolePlanning, RoleExecution, RoleCuration}
 }
 
 func (c *Config) explicitRole(role ModelRole) ModelBinding {
@@ -76,6 +78,8 @@ func (c *Config) explicitRole(role ModelRole) ModelBinding {
 		return c.Models.Primary
 	case RoleSafetyJudge:
 		return c.Models.SafetyJudge
+	case RoleSafetyAdvisor:
+		return c.Models.SafetyAdvisor
 	case RoleClassifier:
 		return c.Models.Classifier
 	case RoleVerifier:
@@ -113,6 +117,8 @@ func (c *Config) RoleBinding(role ModelRole) ModelBinding {
 		return ModelBinding{Inherit: RolePrimary}
 	case RoleClassifier:
 		return ModelBinding{Inherit: RoleSafetyJudge}
+	case RoleSafetyAdvisor:
+		return ModelBinding{Inherit: RolePrimary}
 	case RoleVerifier:
 		return ModelBinding{Inherit: RoleExecution}
 	case RolePlanning, RoleExecution, RoleCuration:
@@ -140,6 +146,8 @@ func (c *Config) SetRoleBinding(role ModelRole, binding ModelBinding) {
 		c.Models.Primary = binding
 	case RoleSafetyJudge:
 		c.Models.SafetyJudge = binding
+	case RoleSafetyAdvisor:
+		c.Models.SafetyAdvisor = binding
 	case RoleClassifier:
 		c.Models.Classifier = binding
 	case RoleVerifier:

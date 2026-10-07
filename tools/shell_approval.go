@@ -17,6 +17,7 @@ import (
 
 const (
 	SafetyModeLLMJudge       = "llm_judge"
+	SafetyModeLLMAdvisor     = "llm_advisor"
 	SafetyModeUserConfirm    = "user_confirm"
 	SafetyModeUserConfirmAll = "user_confirm_all"
 	SafetyModeUnrestricted   = "unrestricted"
@@ -31,6 +32,7 @@ type ShellApprovalRequest struct {
 	ActionPayload   string
 	GrantDigest     string
 	Grant           state.SecurityActionGrant
+	Advice          *CommandAdvice
 }
 
 // ShellApprovalDecision captures how a gated command was handled.
@@ -55,6 +57,9 @@ func (e ApprovalRequiredError) Error() string {
 	message := "user approval required before executing shell command: " + secrets.Mask(strings.TrimSpace(e.Request.Command))
 	if reason := strings.TrimSpace(e.Request.ValidationError); reason != "" {
 		message += "\nPolicy reason: " + reason
+	}
+	if e.Request.Advice != nil {
+		message += "\n" + strings.Join(e.Request.Advice.Lines(), "\n")
 	}
 	return message
 }
@@ -188,6 +193,9 @@ func (a *UserPromptApprover) Approve(_ context.Context, req ShellApprovalRequest
 			line += " → " + effect.Target
 		}
 		details = append(details, line)
+	}
+	if req.Advice != nil {
+		details = append(details, req.Advice.Lines()...)
 	}
 	idx, err := termui.Select(termui.SelectOptions{
 		Title:   "Action requires approval",

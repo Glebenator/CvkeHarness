@@ -673,7 +673,7 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		}
 		approvalMode = "profile:" + string(s.securityPolicy.Profile)
 		if assessment.Decision == securitypolicy.DecisionDeny {
-			return "", fmt.Errorf("security violation: %s", assessment.Reason)
+			return "", PrerequisiteError{Reason: fmt.Sprintf("security violation: %s", assessment.Reason)}
 		}
 		if (assessment.Decision == securitypolicy.DecisionAsk || assessment.Decision == securitypolicy.DecisionLLMReview) && s.approvalStore != nil && s.approvalStore.Available() {
 			grant, _, grantErr := shellSecurityGrantBinding(cmdStr, *s.securityPolicy)
@@ -742,7 +742,7 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 				return "", approvalErr
 			}
 			if !decision.Approved {
-				return "", fmt.Errorf("security violation: approval gate did not approve command")
+				return "", PrerequisiteError{Reason: "security violation: approval gate did not approve command"}
 			}
 			approvalMode = decision.Mode
 			historyNote = strings.TrimSpace(decision.HistoryNote)
@@ -787,6 +787,9 @@ func (s *ShellTool) Execute(ctx context.Context, args json.RawMessage) (resultSt
 		})
 		if approvalErr != nil {
 			return "", approvalErr
+		}
+		if !decision.Approved {
+			return "", PrerequisiteError{Reason: "security violation: approval gate did not approve command"}
 		}
 		approvalMode = decision.Mode
 		historyNote = strings.TrimSpace(decision.HistoryNote)

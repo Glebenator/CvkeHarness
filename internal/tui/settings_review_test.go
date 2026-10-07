@@ -20,7 +20,9 @@ func TestSettingsReviewUnfinishedConnectionEditSurvivesQuitFromOtherTab(t *testi
 	if !tab.connectionEditor.Dirty() {
 		t.Fatal("unfinished field edit was not recognized")
 	}
-	m = navigationKey(m, tea.KeyMsg{Type: tea.KeyTab})
+	m = navigationKey(m, tea.KeyMsg{Type: tea.KeyCtrlO})
+	m = navigationText(m, "Overview")
+	m = navigationKey(m, tea.KeyMsg{Type: tea.KeyEnter})
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 	m = updated.(model)
 	if cmd != nil {

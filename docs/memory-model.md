@@ -37,6 +37,31 @@ Import validates target scope, environment, status, trust, expiry, playbook succ
 
 On first startup after an upgrade, if canonical operational tables are empty and legacy managed Markdown contains records, CvkeHarness validates and migrates those records once as `candidate`, `untrusted`, `source=legacy_markdown_migration`. It snapshots the legacy views, refuses known secret markers or malformed scope, and never activates migrated knowledge automatically. After canonical state exists, missing or manually changed generated views are snapshotted and repaired from SQLite rather than silently imported.
 
+## Conversational server addresses
+
+Interactive chat saves complete declarations such as `my home server is 192.168.50.69` before executing a task. The words `remember` and `save` are optional. A standalone declaration receives an acknowledgment without probing the server. If it answers the immediately pending request for that server's address, chat saves it and continues that request through normal command policy.
+
+Settings → Runtime → Memory Capture controls capture (`memory_capture` in YAML):
+
+- `declarations` (default): accept ordinary and explicit declarations.
+- `explicit_only`: require `remember` or `save`.
+- `off`: use the supplied address only in the current conversation.
+
+Capture still uses the memory tool's existing `filesystem.append` allow/ask/deny policy. Saving an address does not grant permission to connect. An approval can resume the exact pending write within the active chat.
+
+SQLite stores these operator declarations separately from operational knowledge. The runtime reports `saved`, `unchanged`, `needs_clarification`, or `failed` with a reason. A saved address survives an unsuccessful disk check; the completion verifier evaluates the remaining task with its original request and target clarification. Missing or ambiguous server names require clarification and do not select the local runtime host.
+
+Questions, negation, compound requests, and visibly quoted examples are not automatically captured. The TUI receives a single text string, so an unmarked pasted declaration is indistinguishable from typed input. Background tasks and tool output cannot create direct-input authority. Pending target clarification is kept only in the active conversation and ends on an unrelated request or cancellation.
+
+Inspect and forget declarations with:
+
+```bash
+cvkeharness memory endpoints
+cvkeharness memory forget-endpoint "home server"
+```
+
+Conflicting declarations do not silently overwrite an address. To replace one today, forget its saved name and make a new declaration. Conversational corrections, history, and parser-independent record validation remain follow-up work.
+
 ## Target identity
 
 Each live target has:

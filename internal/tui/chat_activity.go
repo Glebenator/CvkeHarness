@@ -578,3 +578,39 @@ func activitySafeText(text string) string {
 func activityPhysicalLines(piece string, width int) []string {
 	return strings.Split(wrapDisplay(piece, maxInt(width, 1)), "\n")
 }
+
+// Keep the passive sidebar brief; focused Activity retains the full evidence.
+func (t *chatTab) taskProgressView() string {
+	width := maxInt(t.activity.width-2, 1)
+	lines := []string{styleSectionTitle.Render("TASK PROGRESS"), ""}
+	add := func(text string) { lines = append(lines, activityPhysicalLines(text, width)...) }
+	prompt := activityPhysicalLines(activitySafeText(t.activityPrompt(t.activeTurn)), width)
+	if len(prompt) > 3 {
+		prompt = append(prompt[:2], ansi.Truncate(prompt[2], width, "…"))
+	}
+	lines = append(lines, prompt...)
+	lines = append(lines, "", renderNamedStatus(t.status))
+	indices := t.activityToolIndices(t.activeTurn)
+	done := 0
+	for _, index := range indices {
+		if t.toolCalls[index].status == "SUCCEEDED" {
+			done++
+		}
+	}
+	add(fmt.Sprintf("%d of %d tool calls completed", done, len(indices)))
+	if t.pendingApproval != nil {
+		add("Next: review the command")
+	} else if v, ok := t.verifierActivity[t.activeTurn]; ok {
+		add("Verification: " + verificationActivityLabel(v.VerificationActivity))
+		if len(v.MissingActions) > 0 {
+			next := activityPhysicalLines(activitySafeText("Next: "+v.MissingActions[0]), width)
+			if len(next) > 3 {
+				next = next[:3]
+				next[2] = ansi.Truncate(next[2], width-1, "") + "…"
+			}
+			lines = append(lines, next...)
+		}
+	}
+	lines = append(lines, "", styleMuted.Render("Ctrl+T Inspect activity"))
+	return clampLines(strings.Join(lines, "\n"), t.activity.height)
+}

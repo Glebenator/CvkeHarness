@@ -140,6 +140,11 @@ func (m *Manager) Show(ctx context.Context) (string, error) {
 	}
 
 	var sections []string
+	endpoints, err := m.ShowUserEndpoints(ctx)
+	if err != nil {
+		return "", err
+	}
+	sections = append(sections, endpoints)
 	for _, name := range allManagedFiles() {
 		data, err := os.ReadFile(m.managedPath(name))
 		if err != nil {

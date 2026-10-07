@@ -454,6 +454,7 @@ type consoleChatStep struct {
 	input   string
 	key     string
 	waitFor string
+	paste   bool
 }
 
 func runConsoleChatJourney(t *testing.T, home string, steps []consoleChatStep) string {
@@ -512,7 +513,13 @@ func runConsoleChatJourneyAtWidth(t *testing.T, home string, width uint16, steps
 		}
 		// Enter focuses the composer when it is blurred and is a no-op when an
 		// already-focused empty composer is ready for the next step.
-		if _, err := terminal.Write([]byte("\r" + step.input + "\r")); err != nil {
+		input := step.input
+		if step.paste {
+			// Deliver the declaration as one textarea insertion; a burst of
+			// individual key events can interleave asynchronous cursor updates.
+			input = "\x1b[200~" + input + "\x1b[201~"
+		}
+		if _, err := terminal.Write([]byte("\r" + input + "\r")); err != nil {
 			abort("write console chat input: " + err.Error())
 		}
 		if !waitForOutput(buffer, step.waitFor, 10*time.Second) {
@@ -665,7 +672,7 @@ func runChatApprovalDecision(t *testing.T, home, prompt, finalOutput string, app
 			abort("chat did not render the post-approval response")
 		}
 	} else {
-		if _, err := terminal.Write([]byte("\x1b")); err != nil {
+		if _, err := terminal.Write([]byte("\x18")); err != nil {
 			abort("interrupt unapproved turn: " + err.Error())
 		}
 		if !waitForOutput(buffer, "INTERRUPTED", 5*time.Second) {

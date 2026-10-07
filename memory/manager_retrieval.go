@@ -58,6 +58,8 @@ func (m *Manager) RetrievePlan(ctx context.Context, input core.RetrievalContext)
 		if resolution.PrimaryName == "" {
 			resolution.PrimaryName = resolved.PrimaryName
 		}
+		resolution.Ambiguous = resolved.Ambiguous
+		resolution.Environment = resolved.Environment
 	}
 
 	mem, err := m.loadState(ctx)
@@ -80,6 +82,14 @@ func (m *Manager) RetrievePlan(ctx context.Context, input core.RetrievalContext)
 		Guidance:           formatGuidanceContext(m.dir, string(guidanceBytes)),
 		RuntimeHostSummary: renderRuntimeHostSummary(mem, resolution.RuntimeHostID),
 		TargetSummary:      renderTargetSummary(mem, resolution),
+	}
+	if declaration, ok := ParseEndpointDeclaration(input.Task); ok {
+		for _, name := range input.ToolNames {
+			if name == "memory_remember_target" {
+				result.Guidance += fmt.Sprintf("\n\nDirect user endpoint declaration: name=%q endpoint=%q. Use memory_remember_target with these exact values to save it for future conversations. Report success only after its verified save receipt. This saves the user's endpoint label; live identity verification and command approvals remain separate.", declaration.Name, declaration.Endpoint)
+				break
+			}
+		}
 	}
 	if !resolution.Ambiguous && resolution.TargetID != "" {
 		result.CautionBrief = renderCautionBrief(mem, caution)
@@ -192,7 +202,32 @@ func (m *Manager) ResolveTarget(ctx context.Context, input TargetResolutionInput
 		hint = firstProseTargetHint(input.Task)
 	}
 	if hint == nil {
-		return resolution, nil
+		var ambiguous bool
+		var err error
+		hint, ambiguous, err = m.endpointHint(ctx, input.Task)
+		if err != nil {
+			return TargetResolution{}, err
+		}
+		if ambiguous {
+			return TargetResolution{RuntimeHostID: mem.RuntimeHostID, Environment: state.EnvironmentUnknown, Ambiguous: true}, nil
+		}
+		if hint == nil {
+			if input.PreviousTargetID != "" && refersToPreviousTarget(input.Task) {
+				for _, record := range mem.Targets {
+					if record.Target.ID == input.PreviousTargetID && record.Target.ID != mem.RuntimeHostID {
+						target := record.Target
+						if input.Environment != "" && !strings.EqualFold(input.Environment, target.Environment) {
+							return TargetResolution{RuntimeHostID: mem.RuntimeHostID, Ambiguous: true, Environment: input.Environment}, nil
+						}
+						return TargetResolution{RuntimeHostID: mem.RuntimeHostID, TargetID: target.ID, TargetKind: target.Kind, Environment: target.Environment, PrimaryName: target.PrimaryName}, nil
+					}
+				}
+			}
+			if name := RemoteEndpointName(input.Task); name != "" {
+				return TargetResolution{RuntimeHostID: mem.RuntimeHostID, Environment: state.EnvironmentUnknown, Ambiguous: true, UnresolvedName: name}, nil
+			}
+			return resolution, nil
+		}
 	}
 
 	requestedEnvironment := strings.ToLower(strings.TrimSpace(input.Environment))

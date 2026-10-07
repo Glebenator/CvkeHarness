@@ -19,6 +19,8 @@ type Profile string
 const (
 	ProfileExtraStrict Profile = "extra_strict"
 	ProfileReasonable  Profile = "reasonable"
+	ProfileLLMAdvisor  Profile = "llm_advisor"
+	ProfileLLMJudge    Profile = "llm_judge"
 	ProfileLessStrict  Profile = "less_strict"
 	ProfileMinimal     Profile = "minimal"
 	ProfileYOLO        Profile = "yolo"
@@ -139,7 +141,7 @@ func Catalog() []Setting {
 }
 
 func Profiles() []Bundle {
-	ids := []Profile{ProfileExtraStrict, ProfileReasonable, ProfileLessStrict, ProfileMinimal, ProfileYOLO}
+	ids := []Profile{ProfileExtraStrict, ProfileReasonable, ProfileLLMAdvisor, ProfileLLMJudge, ProfileLessStrict, ProfileMinimal, ProfileYOLO}
 	out := make([]Bundle, 0, len(ids))
 	for _, id := range ids {
 		bundle, _ := BundleFor(id)
@@ -156,6 +158,8 @@ func BundleFor(profile Profile) (Bundle, bool) {
 	labels := map[Profile][2]string{
 		ProfileExtraStrict: {"Extra strict", "Known reads run; opaque and destructive actions are denied"},
 		ProfileReasonable:  {"Reasonable", "Reads run; mutations ask; credentials and raw devices stay blocked"},
+		ProfileLLMAdvisor:  {"LLM advisor", "Reasonable policy with plain-language explanations and approve/reject advice; you decide"},
+		ProfileLLMJudge:    {"LLM judge", "Known reads run; most other actions need judge review then human approval; credentials and raw devices stay blocked"},
 		ProfileLessStrict:  {"Less strict", "Routine recoverable changes run; destructive and remote changes still ask"},
 		ProfileMinimal:     {"Minimal", "Most actions run; critical paths and credentials still interrupt"},
 		ProfileYOLO:        {"YOLO", "No CvkeHarness approval gates; operating-system protections still apply"},

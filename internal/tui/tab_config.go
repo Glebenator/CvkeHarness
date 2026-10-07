@@ -67,6 +67,7 @@ type configTab struct {
 	modelPicker       *modelui.Picker
 	connectionEditor  *modelui.ConnectionEditor
 	section           settingsSection
+	sidebarFocused    bool
 	roleCursor        int
 	connectionCursor  int
 	advancedModels    bool
@@ -118,7 +119,7 @@ func (t *configTab) Init(svc *Service) tea.Cmd {
 }
 
 func (t *configTab) Consuming() bool {
-	return t.editing || t.modelPicker != nil || t.connectionEditor != nil || t.securityOpen
+	return t.editing || t.modelPicker != nil || t.connectionEditor != nil || (t.securityOpen && !t.sidebarFocused)
 }
 
 func (t *configTab) StatusHints() []string {
@@ -134,14 +135,20 @@ func (t *configTab) StatusHints() []string {
 			renderKeyHint("esc", "cancel"),
 		}
 	}
+	if t.sidebarFocused {
+		return t.workspaceHints()
+	}
 	if t.securityOpen {
 		hints := []string{
 			renderKeyHint("s", "save"),
-			renderKeyHint("esc", "back"),
+			renderKeyHint("tab", "sections"),
 			renderKeyHint("↑↓", "move"),
 			renderKeyHint("←→", "change"),
 			renderKeyHint("r", "reset"),
 			renderKeyHint("R", "reset all"),
+		}
+		if t.pendingProfile != "" || t.resetAllPending {
+			hints = append([]string{renderKeyHint("esc", "cancel confirmation")}, hints...)
 		}
 		if t.dirty {
 			hints = append(hints, styleWarning.Render("unsaved"))
@@ -152,7 +159,7 @@ func (t *configTab) StatusHints() []string {
 		return t.workspaceHints()
 	}
 	hints := []string{
-		renderKeyHint("[/]", "section"),
+		renderKeyHint("←", "sections"),
 		renderKeyHint("↑↓", "move"),
 		renderKeyHint("enter", "edit"),
 		renderKeyHint("s", "save"),
@@ -208,10 +215,6 @@ func (t *configTab) Update(msg tea.Msg, svc *Service, width, height int) (tabMod
 			return t, cmd
 		}
 		if t.securityOpen {
-			if msg.String() == "esc" && t.pendingProfile == "" && !t.resetAllPending {
-				t.setSection(settingsModels)
-				return t, nil
-			}
 			return t.updateSecurity(msg, svc)
 		}
 		if t.section != settingsRuntime {
@@ -255,10 +258,9 @@ func (t *configTab) updateSecurity(msg tea.KeyMsg, svc *Service) (tabModel, tea.
 	count := len(catalog) + 1
 	switch {
 	case key.Matches(msg, keys.Back):
-		t.securityOpen = false
 		t.pendingProfile = ""
 		t.resetAllPending = false
-		t.message = "Security editor closed; press s to save pending changes"
+		t.message = "Cancelled confirmation; pending settings are unchanged"
 	case key.Matches(msg, keys.Down):
 		t.securityCursor = (t.securityCursor + 1) % count
 		t.pendingProfile = ""
@@ -350,7 +352,10 @@ func nextSecurityProfile(current securitypolicy.Profile, delta int) securitypoli
 	profiles := securitypolicy.Profiles()
 	for index, profile := range profiles {
 		if profile.ID == current {
-			return profiles[(index+delta+len(profiles))%len(profiles)].ID
+			// Profiles run from strict to permissive; advisor has the same
+			// policy as Reasonable, with an additional explanation step.
+			next := max(0, min(index-delta, len(profiles)-1))
+			return profiles[next].ID
 		}
 	}
 	return securitypolicy.ProfileReasonable
@@ -508,7 +513,7 @@ func (t *configTab) viewSettings(width, height int) string {
 
 	for i := start; i < end; i++ {
 		b.WriteString("  ")
-		b.WriteString(truncate(t.renderFieldRow(i, col, i == t.cursor), width-4))
+		b.WriteString(truncate(t.renderFieldRow(i, col, i == t.cursor && !t.sidebarFocused), width-4))
 		b.WriteString("\n")
 	}
 	if hint := scrollHints(start, end, len(t.fields)); hint != "" {
@@ -568,7 +573,7 @@ func (t *configTab) viewSecurity(width, height int) string {
 	}
 	start, end := listWindow(t.securityCursor, total, listHeight)
 	for index := start; index < end; index++ {
-		selected := index == t.securityCursor
+		selected := index == t.securityCursor && !t.sidebarFocused
 		var area, label, value, origin string
 		if index == 0 {
 			area, label, value, origin = "Preset", "Security profile", string(t.cfg.Security.Profile), "selected"
@@ -719,6 +724,19 @@ func configFields() []configField {
 					c.PromptDumpRetentionDays = parsed
 				}
 			},
+		},
+		{
+			Label:       "Memory Capture",
+			Description: "Remember server declarations; write permissions still apply",
+			Kind:        configFieldSelect,
+			Options:     []string{"declarations", "explicit_only", "off"},
+			Get: func(c *config.Config) string {
+				if c.MemoryCapture == "" {
+					return "declarations"
+				}
+				return c.MemoryCapture
+			},
+			Set: func(c *config.Config, v string) { c.MemoryCapture = v },
 		},
 		{
 			Label:       "Memory Dir",

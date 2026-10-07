@@ -120,7 +120,7 @@ func TestJobFooterKeepsContinueBackAndCloseAt80Columns(t *testing.T) {
 	tab.initCreateInputs()
 	tab.mode = jobsModeCreate
 	bar := m.renderStatusBar()
-	for _, want := range []string{"enter", "ctrl+b", "esc", "tab"} {
+	for _, want := range []string{"enter", "ctrl+b", "esc"} {
 		if !strings.Contains(bar, want) {
 			t.Fatalf("footer lost %s: %s", want, bar)
 		}

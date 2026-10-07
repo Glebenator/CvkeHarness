@@ -34,6 +34,8 @@ composer it inserts a space normally.
 | Follow the latest turn in Activity | F, or click Follow latest |
 | Jump conversation to latest and resume following Activity | Ctrl+End |
 | Focus the composer from the conversation | Enter, or click the composer |
+| Toggle composing / reading without leaving Chat | Tab / Shift+Tab |
+| Focus top bar, select workspace, focus its content | Esc, Left/Right, Enter |
 
 Reading earlier conversation content pauses automatic following. Runtime events
 and turn completion preserve that position. Output inspection also preserves
@@ -44,9 +46,15 @@ close its inspector.
 
 Pending approval keeps its exact action, policy reason, and approval controls in
 the conversation. Activity can be inspected without interrupting the pending
-work: Esc first returns through the inspection views. With conversation focus,
-Esc retains its existing interrupt behavior. A successful approval receipt stays
-visible in the header until the next turn.
+work: Esc first returns through the inspection views. Ctrl+X interrupts the
+active turn while Chat is focused. Esc closes Activity or command suggestions
+first, then focuses the top bar without interrupting work. A successful approval
+receipt stays visible in the header until the next turn.
 
 Ctrl+G continues to expose full session context; Ctrl+H opens saved conversation
-history. Tab and Shift+Tab retain their global workspace navigation behavior.
+history. Tab and Shift+Tab toggle composing and reading while idle in Chat;
+workspace selection is available after Esc focuses the top bar.
+
+Approval review opens a centered dialog with the exact command first, under **COMMAND TO APPROVE**, in bold on a highlighted background. Advisor explanations appear underneath in regular-weight text. The complete command wraps without abbreviation; long reviews scroll with arrows, Page Up/Down, Home/End, or the mouse wheel. Secrets remain masked. `a` approves the exact action once; Esc returns without approving, and `a` then reopens review. `d` reveals policy reasons and effects. Historical Activity keeps its own focus and cannot approve a hidden current request.
+
+The passive right sidebar is a compact task-progress summary, capped at 42 columns. Ctrl+T opens the detailed activity evidence.

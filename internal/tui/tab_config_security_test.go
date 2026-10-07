@@ -90,6 +90,47 @@ func TestConfigSecurityProfileRequiresConfirmationAndYOLOCopy(t *testing.T) {
 	}
 }
 
+func TestConfigSecurityProfileNavigationStopsAtStrictnessBounds(t *testing.T) {
+	t.Parallel()
+	tab := newConfigTab().(*configTab)
+	tab.cfg = config.DefaultConfig()
+	tab.cfg.Normalize()
+	svc := NewService(tab.cfg, nil, nil, nil, nil)
+	original := tab.cfg.Security.Profile
+	tab.pendingProfile = securitypolicy.ProfileYOLO
+	for _, want := range []securitypolicy.Profile{
+		securitypolicy.ProfileMinimal,
+		securitypolicy.ProfileLessStrict,
+		securitypolicy.ProfileLLMJudge,
+		securitypolicy.ProfileLLMAdvisor,
+		securitypolicy.ProfileReasonable,
+		securitypolicy.ProfileExtraStrict,
+		securitypolicy.ProfileExtraStrict,
+	} {
+		tab.updateSecurity(tea.KeyMsg{Type: tea.KeyRight}, svc)
+		if tab.pendingProfile != want {
+			t.Fatalf("right selected %q, want %q", tab.pendingProfile, want)
+		}
+	}
+	for _, want := range []securitypolicy.Profile{
+		securitypolicy.ProfileReasonable,
+		securitypolicy.ProfileLLMAdvisor,
+		securitypolicy.ProfileLLMJudge,
+		securitypolicy.ProfileLessStrict,
+		securitypolicy.ProfileMinimal,
+		securitypolicy.ProfileYOLO,
+		securitypolicy.ProfileYOLO,
+	} {
+		tab.updateSecurity(tea.KeyMsg{Type: tea.KeyLeft}, svc)
+		if tab.pendingProfile != want {
+			t.Fatalf("left selected %q, want %q", tab.pendingProfile, want)
+		}
+	}
+	if tab.cfg.Security.Profile != original || tab.dirty {
+		t.Fatal("navigation applied a profile without confirmation")
+	}
+}
+
 func TestConfigSecurityEditorDoesNotOverflowRepresentativeWidths(t *testing.T) {
 	t.Parallel()
 	for _, width := range []int{80, 100, 120} {

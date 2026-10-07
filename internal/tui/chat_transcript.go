@@ -63,7 +63,7 @@ func (t *chatTab) refreshViewport() {
 	if t.pendingApproval != nil {
 		t.appendApprovalPrompt(&lines, t.pendingApproval, maxInt(t.viewport.Width-4, 18))
 	}
-	if t.running {
+	if t.running && t.pendingApproval == nil {
 		lines = append(lines, "", "  "+renderNamedStatus(t.status))
 		for _, line := range wrapText(t.statusDetail, maxInt(t.viewport.Width-4, 18)) {
 			lines = append(lines, "  "+styleMuted.Render(line))
@@ -150,6 +150,10 @@ func (t *chatTab) visibleChatTurn() int {
 }
 
 func (t *chatTab) updateMouse(msg tea.MouseMsg) (tabModel, tea.Cmd) {
+	if t.approvalDialogOpen() {
+		t.pendingApproval.offset = maxInt(0, t.pendingApproval.offset+verticalMouseWheelDirection(msg)*3)
+		return t, nil
+	}
 	// A narrow Activity view can close on mouse-down. Its matching release
 	// still belongs to that click, not the conversation newly revealed below.
 	if msg.Action == tea.MouseActionRelease && t.swallowMouseRelease {

@@ -25,13 +25,18 @@ type ChatConversation struct {
 	agent              *Agent
 	selection          core.RoutingSelection
 	history            *ChatState
+	previousUser       string
+	pendingEndpoint    *pendingEndpointRequest
 	previousActionable classificationContext
+	previousTargetID   string
 	approvalMu         sync.Mutex
 	approvalWaiters    map[string]chan struct{}
 }
 
 // ChatTurnResult contains one assistant turn plus transcript and stats.
 type ChatTurnResult struct {
+	MemoryCapture     *memory.EndpointCapture
+	AwaitingTarget    bool
 	Output            string
 	TaskState         state.TaskState
 	TaskClass         core.TaskClass
@@ -50,6 +55,7 @@ type ChatTurnResult struct {
 	ApprovalSummary   string
 	ApprovalReason    string
 	ApprovalEffects   []tools.ShellEffect
+	ApprovalAdvice    *tools.CommandAdvice
 }
 
 // ChatTool describes one capability registered for the current chat runtime.
@@ -138,6 +144,7 @@ func (c *ChatConversation) awaitApproval(ctx context.Context, workID string, req
 		Command:         secrets.Mask(strings.TrimSpace(request.Command)),
 		ApprovalReason:  secrets.Mask(strings.TrimSpace(request.ValidationError)),
 		ApprovalEffects: append([]tools.ShellEffect(nil), request.Effects...),
+		ApprovalAdvice:  request.Advice,
 	})
 	select {
 	case <-ctx.Done():
@@ -171,10 +178,37 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 	ctx = c.agent.withRunTelemetry(ctx)
 	ctx = tools.WithEventObserver(ctx, c.agent.opts.EventObserver)
 
-	classification := c.agent.classifyTask(ctx, prompt, c.previousActionable)
+	request := &chatRequestContext{CurrentUserMessage: prompt, PreviousUserMessage: c.previousUser}
+	ctx = context.WithValue(ctx, chatRequestKey{}, request)
+	c.previousUser = prompt
+	classificationPrompt := prompt
+	d, isDeclaration := memory.ParseEndpointDeclaration(prompt)
+	if isDeclaration && c.pendingEndpoint != nil && d.Name == c.pendingEndpoint.Name {
+		classificationPrompt = c.pendingEndpoint.Request
+	}
+	var classification taskClassification
+	if isDeclaration {
+		// A direct declaration must reach capture without depending on a model,
+		// including the optional task classifier.
+		class := contextualDeterministicClassification(classificationPrompt, c.previousActionable)
+		classification = taskClassification{Class: class, Actionable: actionableTaskClass(class), Source: "deterministic"}
+		c.agent.emitClassification(ctx, classification)
+	} else {
+		classification = c.agent.classifyTask(ctx, classificationPrompt, c.previousActionable)
+	}
 	taskClass := classification.Class
 	phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, execErr := c.runChatTurn(ctx, prompt, taskClass)
+	if targetResolution.Ambiguous || targetResolution.TargetID == targetResolution.RuntimeHostID {
+		c.previousTargetID = ""
+	} else if targetResolution.TargetID != "" {
+		c.previousTargetID = targetResolution.TargetID
+	}
+	if request.Memory != nil && !strings.Contains(output, request.Memory.Summary()) {
+		output = request.Memory.Summary() + "\n\n" + output
+	}
 	result := ChatTurnResult{
+		MemoryCapture:     request.Memory,
+		AwaitingTarget:    request.AwaitingTarget,
 		Output:            output,
 		TaskState:         taskStateForError(execErr),
 		TaskClass:         taskClass,
@@ -188,9 +222,12 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 		Verification:      verification,
 		ExecutionErr:      execErr,
 	}
+	if request.AwaitingTarget {
+		result.TaskState = state.TaskStateBlockedWaitingUser
+	}
 	if classification.Actionable || len(toolOutcomes) > 0 {
 		c.previousActionable = classificationContext{
-			PreviousActionablePrompt: prompt,
+			PreviousActionablePrompt: classificationPrompt,
 			PreviousActionableClass:  taskClass,
 			PreviousToolNames:        uniqueObservedToolNames(observedCalls),
 		}
@@ -201,6 +238,7 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 			result.BlockedWorkID = blocked.WorkID()
 			result.ApprovalSummary = blocked.request.Command
 			result.ApprovalReason = blocked.request.ValidationError
+			result.ApprovalAdvice = blocked.request.Advice
 			result.ApprovalEffects = append([]tools.ShellEffect(nil), blocked.request.Effects...)
 		}
 		_ = telemetry.Record(telemetry.WithFields(ctx, telemetry.Fields{TaskState: string(state.TaskStateBlockedWaitingUser)}), telemetry.Event{
@@ -245,13 +283,70 @@ func (c *ChatConversation) Turn(ctx context.Context, prompt string) (ChatTurnRes
 }
 
 func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskClass core.TaskClass) (state.PhaseRecord, state.PhaseRecord, CompletionVerification, []state.ToolOutcome, []memory.ObservedToolCall, memory.TargetResolution, []provider.Message, string, error) {
+	ctx = tools.WithDirectEndpointMessage(ctx, prompt)
+	ctx = newCaptureContext(ctx, c.agent.opts.MemoryCapture)
+	request, _ := ctx.Value(chatRequestKey{}).(*chatRequestContext)
+	if request == nil {
+		request = &chatRequestContext{CurrentUserMessage: prompt}
+		ctx = context.WithValue(ctx, chatRequestKey{}, request)
+	}
+	declaration, isDeclaration := memory.ParseEndpointDeclaration(prompt)
+	taskPrompt := prompt
+	if c.pendingEndpoint != nil && isDeclaration && c.pendingEndpoint.Name == declaration.Name {
+		request.PendingRequest = c.pendingEndpoint.Request
+		request.TargetName = c.pendingEndpoint.Name
+		request.Clarification = c.pendingEndpoint.Clarification
+		taskPrompt = request.PendingRequest + "\nOperator target clarification: " + prompt
+	}
+	c.pendingEndpoint = nil
+	if isDeclaration && captureAllowed(c.agent.opts.MemoryCapture, prompt) {
+		var captureErr error
+		request.Memory, captureErr = c.captureEndpoint(ctx, prompt, taskClass, declaration)
+		tools.EmitEvent(ctx, tools.Event{Type: tools.EventMemoryCaptured, MemoryCapture: request.Memory, Success: request.Memory.Saved()})
+		ctx = tools.WithEndpointCapture(ctx, "", c.agent.opts.MemoryCapture, request.Memory)
+		if captureErr != nil {
+			return state.PhaseRecord{}, state.PhaseRecord{}, CompletionVerification{}, nil, nil, memory.TargetResolution{}, nil, "", captureErr
+		}
+		if request.Memory.Status == "needs_clarification" || (request.Memory.Status == "failed" && memory.ExplicitEndpointRequest(prompt)) {
+			return state.PhaseRecord{}, state.PhaseRecord{}, CompletionVerification{}, nil, nil, memory.TargetResolution{}, finishChatMessage(c, prompt, request.Memory.Summary()), request.Memory.Summary(), captureFailure(request.Memory)
+		}
+	}
 	logger := log.FromContext(ctx)
-	targetResolution := c.agent.resolveTarget(ctx, memory.TargetResolutionInput{Task: prompt})
+	targetResolution := c.agent.resolveTarget(ctx, memory.TargetResolutionInput{Task: taskPrompt, PreviousTargetID: c.previousTargetID})
 	emitChatTarget(ctx, targetResolution)
-	toolDefs := c.agent.toolDefinitionsForTask(taskClass, prompt)
+	if isDeclaration && request.PendingRequest == "" {
+		output := "Using the supplied address in this conversation."
+		if request.Memory != nil {
+			output = request.Memory.Summary()
+		}
+		return state.PhaseRecord{Success: true}, state.PhaseRecord{}, CompletionVerification{Status: verificationSatisfied, Reason: "declaration handled by runtime"}, nil, nil, targetResolution, finishChatMessage(c, prompt, output), output, nil
+	}
+	if targetResolution.Ambiguous {
+		name := targetResolution.UnresolvedName
+		if name == "" {
+			name = memory.RemoteEndpointName(prompt)
+		}
+		output := "Which remote server should I use? Please provide its name and address."
+		if name != "" {
+			output = "What is the address of your " + name + "?"
+			c.pendingEndpoint = &pendingEndpointRequest{Request: prompt, Name: name, Clarification: output}
+		}
+		request.AwaitingTarget = true
+		return state.PhaseRecord{}, state.PhaseRecord{}, CompletionVerification{Status: verificationUncertain, Reason: "remote target needs clarification"}, nil, nil, targetResolution, finishChatMessage(c, prompt, output), output, nil
+	}
+	toolDefs := c.agent.toolDefinitionsForTask(taskClass, taskPrompt)
+	if request.Memory != nil {
+		filtered := toolDefs[:0]
+		for _, def := range toolDefs {
+			if def.Function.Name != "memory_remember_target" && def.Function.Name != "memory_record_finding" {
+				filtered = append(filtered, def)
+			}
+		}
+		toolDefs = filtered
+	}
 	toolNames := toolNamesFromDefs(toolDefs)
 	retrieved, err := c.agent.retrieveMemory(ctx, core.RetrievalContext{
-		Task:          prompt,
+		Task:          taskPrompt,
 		TaskClass:     taskClass,
 		Phase:         core.PhaseChat,
 		ActiveModel:   c.selection.Requested,
@@ -275,6 +370,13 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 	transcript := []provider.Message{userMessage}
 
 	volatileMessages := c.history.Messages()
+	if request.PendingRequest != "" {
+		retrieved.Guidance += "\nContinue the pending operator request: " + request.PendingRequest + "\nThe current message supplies its target; normal execution policy still applies."
+	}
+	if request.Memory != nil {
+		data, _ := json.Marshal(request.Memory)
+		retrieved.Guidance += "\nRuntime memory result (final; do not repeat the write): " + string(data)
+	}
 	plan := buildPromptPlan(retrieved, "", volatileMessages, toolDefs)
 	turnChat := NewChatState(append(append([]provider.Message(nil), plan.SystemMessages...), volatileMessages...)...)
 
@@ -386,6 +488,14 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseStopped, true)
 				return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, fmt.Errorf("completion verification failed: %w", err)
 			}
+			verification = enforceMemoryVerification(verification, request.Memory)
+			latestVerification = verification
+			if verification.StopReason == tools.VerificationStopNoProgress {
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseStopped, true)
+				c.history.Add(resp.Message)
+				transcript = append(transcript, resp.Message)
+				return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, incompleteTaskError{verification: verification}
+			}
 			if verification.satisfied() {
 				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseCompleted, true)
 				logger.Info("chat turn finished after verification")
@@ -393,6 +503,13 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				transcript = append(transcript, resp.Message)
 				phaseRecord.Success = true
 				return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, nil
+			}
+			if requiredPrerequisiteRejected(verification, observedCalls) {
+				verification.StopReason = tools.VerificationStopCapabilityUnavailable
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseStopped, true)
+				c.history.Add(resp.Message)
+				transcript = append(transcript, resp.Message)
+				return phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, transcript, output, incompleteTaskError{verification: verification}
 			}
 			fingerprint := repairFingerprint(output, toolNames, len(observedCalls), verification)
 			noProgress := lastRepairFingerprint != "" && fingerprint == lastRepairFingerprint
@@ -405,7 +522,7 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 				repairContext := c.previousActionable
 				repairContext.RepairInstruction = verification.repairPrompt()
 				reclassified := c.agent.classifyTask(iterCtx, prompt, repairContext)
-				newToolDefs := c.agent.toolDefinitionsForTask(reclassified.Class, prompt+"\n"+verification.repairPrompt())
+				newToolDefs := c.agent.toolDefinitionsForTask(reclassified.Class, taskPrompt+"\n"+verification.repairPrompt())
 				newToolNames := toolNamesFromDefs(newToolDefs)
 				capabilitiesChanged = core.ToolsetKey(newToolNames) != core.ToolsetKey(toolNames)
 				capabilityUnavailable := requiredCapabilityUnavailable(verification, newToolNames)
@@ -453,8 +570,9 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 			command := commandForToolCall(call)
 			if command != "" {
 				targetResolution = c.agent.resolveTarget(ctx, memory.TargetResolutionInput{
-					Task:    prompt,
-					Command: command,
+					Task:             prompt,
+					Command:          command,
+					PreviousTargetID: c.previousTargetID,
 				})
 			}
 			emitChatTarget(iterCtx, targetResolution)
@@ -598,14 +716,15 @@ func (c *ChatConversation) runChatTurn(ctx context.Context, prompt string, taskC
 
 			toolOutcomes = append(toolOutcomes, outcome)
 			observedCalls = append(observedCalls, memory.ObservedToolCall{
-				ToolName:     call.Function.Name,
-				Command:      command,
-				Result:       resultStr,
-				TargetID:     targetResolution.TargetID,
-				Success:      toolErr == nil,
-				PolicyDenied: outcome.PolicyDenied,
-				DenialClass:  outcome.DenialClass,
-				DurationMs:   durationMs,
+				ToolName:             call.Function.Name,
+				Command:              command,
+				Result:               resultStr,
+				TargetID:             targetResolution.TargetID,
+				Success:              toolErr == nil,
+				PolicyDenied:         outcome.PolicyDenied,
+				DenialClass:          outcome.DenialClass,
+				DurationMs:           durationMs,
+				PrerequisiteRejected: tools.IsPrerequisiteError(toolErr),
 			})
 			toolMessage := provider.Message{
 				Role:       "tool",

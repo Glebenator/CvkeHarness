@@ -36,6 +36,7 @@ type Config struct {
 	RoutingMode             string                    `yaml:"routing_mode,omitempty"`
 	ApprovedModels          []string                  `yaml:"approved_models,omitempty"`
 	FavoriteModels          []string                  `yaml:"favorite_models,omitempty"`
+	MemoryCapture           string                    `yaml:"memory_capture,omitempty"`
 	MemoryDir               string                    `yaml:"memory_dir,omitempty"`
 	StateDBPath             string                    `yaml:"state_db_path,omitempty"`
 	DebugPromptDumps        bool                      `yaml:"debug_prompt_dumps,omitempty"`
@@ -150,6 +151,9 @@ func NormalizeProviderModelID(provider, model string) string {
 
 // Normalize applies defaults and backward-compatible migrations in memory.
 func (c *Config) Normalize() {
+	if c.MemoryCapture == "" {
+		c.MemoryCapture = "declarations"
+	}
 	// Preserve support for older configs that only set `model`, but treat
 	// `default_model` as the canonical field going forward.
 	if c.DefaultModel == "" {
@@ -226,6 +230,12 @@ func (c *Config) Normalize() {
 // Validate rejects invalid security settings instead of silently falling back
 // to a weaker profile.
 func (c *Config) Validate() error {
+	switch c.MemoryCapture {
+	case "", "declarations", "explicit_only", "off":
+	default:
+		return fmt.Errorf("invalid memory_capture: %q", c.MemoryCapture)
+	}
+
 	if c.Security == nil {
 		return fmt.Errorf("security configuration is required")
 	}
@@ -407,6 +417,7 @@ func DefaultConfig() *Config {
 		LogLevel:                "off",
 		RoutingMode:             "auto_within_policy",
 		MemoryDir:               defaultHarnessPath(""),
+		MemoryCapture:           "declarations",
 		StateDBPath:             defaultHarnessPath("state.db"),
 		PromptDumpDir:           defaultHarnessPath("prompt_dumps"),
 		PromptDumpRetentionDays: 7,
@@ -437,6 +448,8 @@ func DefaultConfig() *Config {
 func (c *Config) migrateLegacySecurity() *securitypolicy.Selection {
 	selection := securitypolicy.DefaultSelection()
 	switch c.SafetyMode {
+	case "llm_advisor":
+		selection.Profile = securitypolicy.ProfileLLMAdvisor
 	case "user_confirm_all":
 		selection.Profile = securitypolicy.ProfileExtraStrict
 		// Legacy user_confirm_all meant every valid action could be reviewed by
@@ -480,6 +493,8 @@ func (c *Config) projectLegacySecurity() {
 		return
 	}
 	switch effective.Profile {
+	case securitypolicy.ProfileLLMAdvisor:
+		c.SafetyMode = "llm_advisor"
 	case securitypolicy.ProfileExtraStrict:
 		c.SafetyMode = "user_confirm_all"
 	case securitypolicy.ProfileYOLO:

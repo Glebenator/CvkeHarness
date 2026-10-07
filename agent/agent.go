@@ -78,6 +78,7 @@ type Options struct {
 	RoutingConfig      core.RoutingConfig
 	Router             Router
 	MemoryRetriever    MemoryRetriever
+	MemoryCapture      string
 	MemoryCurator      MemoryCurator
 	RunRecorder        RunRecorder
 	BlockedWorkStore   BlockedWorkStore
@@ -460,6 +461,11 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 				phaseRecord.Success = true
 				return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, nil
 			}
+			if requiredPrerequisiteRejected(verification, observedCalls) {
+				verification.StopReason = tools.VerificationStopCapabilityUnavailable
+				emitVerificationActivity(iterCtx, verification, tools.VerificationPhaseStopped, true)
+				return output, phaseRecord, verificationRecord, verification, toolOutcomes, observedCalls, targetResolution, incompleteTaskError{verification: verification}
+			}
 			fingerprint := repairFingerprint(output, toolNames, len(observedCalls), verification)
 			noProgress := lastRepairFingerprint != "" && fingerprint == lastRepairFingerprint
 			if repairAttempts < repairLimit && iter < a.opts.MaxIterations && !noProgress {
@@ -574,18 +580,20 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 						Command:         secrets.Mask(strings.TrimSpace(approvalErr.Request.Command)),
 						ApprovalReason:  secrets.Mask(strings.TrimSpace(approvalErr.Request.ValidationError)),
 						ApprovalEffects: redactedApprovalEffects(approvalErr.Request.Effects),
+						ApprovalAdvice:  approvalErr.Request.Advice,
 					})
 					outcome.OutputInline, outcome.OutputOriginalBytes, outcome.OutputStoredBytes, outcome.OutputTruncated, outcome.OutputDigest = state.SummarizeToolOutput(resultStr)
 					toolOutcomes = append(toolOutcomes, outcome)
 					observedCalls = append(observedCalls, memory.ObservedToolCall{
-						ToolName:     call.Function.Name,
-						Command:      command,
-						Result:       resultStr,
-						TargetID:     targetResolution.TargetID,
-						Success:      false,
-						PolicyDenied: outcome.PolicyDenied,
-						DenialClass:  outcome.DenialClass,
-						DurationMs:   durationMs,
+						ToolName:             call.Function.Name,
+						Command:              command,
+						Result:               resultStr,
+						TargetID:             targetResolution.TargetID,
+						Success:              false,
+						PolicyDenied:         outcome.PolicyDenied,
+						DenialClass:          outcome.DenialClass,
+						DurationMs:           durationMs,
+						PrerequisiteRejected: tools.IsPrerequisiteError(toolErr),
 					})
 					_ = telemetry.Record(telemetry.WithFields(iterCtx, telemetry.Fields{TaskState: string(state.TaskStateBlockedWaitingUser)}), telemetry.Event{
 						Type:      telemetry.EventTaskBlocked,
@@ -653,14 +661,15 @@ func (a *Agent) runExecutionPhase(ctx context.Context, prompt string, taskClass 
 			})
 			toolOutcomes = append(toolOutcomes, outcome)
 			observedCalls = append(observedCalls, memory.ObservedToolCall{
-				ToolName:     call.Function.Name,
-				Command:      command,
-				Result:       resultStr,
-				TargetID:     targetResolution.TargetID,
-				Success:      toolErr == nil,
-				PolicyDenied: outcome.PolicyDenied,
-				DenialClass:  outcome.DenialClass,
-				DurationMs:   durationMs,
+				ToolName:             call.Function.Name,
+				Command:              command,
+				Result:               resultStr,
+				TargetID:             targetResolution.TargetID,
+				Success:              toolErr == nil,
+				PolicyDenied:         outcome.PolicyDenied,
+				DenialClass:          outcome.DenialClass,
+				DurationMs:           durationMs,
+				PrerequisiteRejected: tools.IsPrerequisiteError(toolErr),
 			})
 			chat.AddToolResult(call.ID, resultStr)
 		}
@@ -1077,7 +1086,7 @@ func (a *Agent) resolveTarget(ctx context.Context, input memory.TargetResolution
 	}
 	resolution, err := resolver.ResolveTarget(ctx, input)
 	if err != nil {
-		return memory.TargetResolution{}
+		return memory.TargetResolution{Ambiguous: true, UnresolvedName: memory.RemoteEndpointName(input.Task)}
 	}
 	return resolution
 }
