@@ -661,6 +661,12 @@ func runChatApprovalDecision(t *testing.T, home, prompt, finalOutput string, app
 	if !waitForOutput(buffer, "approve once + continue", 5*time.Second) {
 		abort("manual approval prompt did not appear")
 	}
+	if _, err := terminal.Write([]byte("d")); err != nil {
+		abort("show approval policy details: " + err.Error())
+	}
+	if !waitForOutput(buffer, "POLICY DETAILS", 5*time.Second) {
+		abort("approval dialog did not expose its policy details")
+	}
 	if approve {
 		if _, err := terminal.Write([]byte("a")); err != nil {
 			abort("approve once and continue: " + err.Error())
