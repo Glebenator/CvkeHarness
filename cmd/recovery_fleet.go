@@ -7,10 +7,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/recovery"
-	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/recovery"
+	"github.com/glebenator/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/tools"
 	"github.com/spf13/cobra"
 )
 

@@ -13,7 +13,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/coolcake/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/core"
 )
 
 // Store persists run/routing/memory metadata. It gracefully degrades to no-op

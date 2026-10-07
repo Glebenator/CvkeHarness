@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/coolcake/cvkeharness/cmd"
+	"github.com/glebenator/cvkeharness/cmd"
 )
 
 func main() {

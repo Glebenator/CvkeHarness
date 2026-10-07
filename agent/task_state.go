@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 type scheduledJobContextKey struct{}

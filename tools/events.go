@@ -2,10 +2,10 @@ package tools
 
 import (
 	"context"
-	"github.com/coolcake/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/memory"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
 )
 
 // EventType identifies a structured runtime event that may be rendered to the

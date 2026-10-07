@@ -1,7 +1,7 @@
 package setupflow
 
 import (
-	"github.com/coolcake/cvkeharness/internal/modelcatalog"
+	"github.com/glebenator/cvkeharness/internal/modelcatalog"
 	"time"
 )
 

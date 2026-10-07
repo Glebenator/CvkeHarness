@@ -3,9 +3,9 @@ package modelruntime
 
 import (
 	"fmt"
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 func NewClient(connection config.Connection) (provider.Provider, error) {
@@ -18,11 +18,6 @@ func NewClient(connection config.Connection) (provider.Provider, error) {
 			return provider.NewCodexWithAuthPath(connection.AuthFile), nil
 		}
 		return provider.NewCodexFromCLIAuth(), nil
-	case "antigravity":
-		if connection.AuthFile != "" {
-			return provider.NewAntigravityWithAuthPath(connection.AuthFile), nil
-		}
-		return provider.NewAntigravity(), nil
 	case "openrouter":
 		return provider.NewOpenRouterWithBaseURL(connection.APIKey, connection.BaseURL), nil
 	case "openai":

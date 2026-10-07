@@ -7,10 +7,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/coolcake/cvkeharness/agent"
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/agent"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 func chatActivityViewForTest(tab *chatTab, turn int) string {

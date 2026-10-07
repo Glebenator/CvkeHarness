@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/coolcake/cvkeharness/recovery"
+	"github.com/glebenator/cvkeharness/recovery"
 )
 
 type CalculateTool struct{}

@@ -4,11 +4,7 @@ CvkeHarness implements typed regular-file recovery, narrow Linux NGINX and
 managed SSH transactions, native Btrfs checkpoints, checked resource arithmetic,
 and bounded remote batches. Coverage is specific to these adapters. Arbitrary
 shell commands, application-consistent database restoration and general machine
-rollback are outside the guarantee. See [the acceptance ledger](recovery-implementation.md)
-for validation scope and recorded test results.
-
-For a first hands-on run, use the [HTML self-testing guide](recovery-testing-guide.html):
-exact commands, expected results, disposable-file exercises, and Docker/VM lab steps.
+rollback are outside the guarantee.
 
 ## Platform support
 

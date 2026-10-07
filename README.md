@@ -4,6 +4,9 @@ CvkeHarness is a provider-agnostic Go operations agent with two deliberate modes
 
 The runtime is phase-routed, approval-aware, and uses a target-aware operational memory model. It distinguishes the machine running the harness from the system being operated on, keeps operational knowledge behind an explicit review lifecycle, and injects only a compact retrieval brief for the exact active target.
 
+> [!WARNING]
+> CvkeHarness lets a language model propose and run shell commands on your machine and on SSH targets you point it at. Start with the default `reasonable` security profile (or `extra_strict`), review every approval prompt, and try it on disposable hosts first. The permissive profiles (`less_strict`, `minimal`, `yolo`) remove safeguards on purpose. See [security controls](docs/security-controls.md).
+
 ## What It Does
 
 - Runs a local agent loop with a compact layered system prompt and tool access
@@ -14,7 +17,7 @@ The runtime is phase-routed, approval-aware, and uses a target-aware operational
 - Distinguishes the runtime host from remote SSH targets
 - Retrieves target-specific playbooks, cautions, and findings with strict prompt budget caps
 - Fails closed for operational-memory retrieval when the state DB is unavailable
-- Offers typed file recovery, standalone NGINX transactions, guarded SSH port changes, native Btrfs checkpoints, and checked resource arithmetic; see the [recovery operating guide](docs/recovery.md) for supported scope and the [implementation ledger](docs/recovery-implementation.md) for test evidence and remaining work
+- Offers typed file recovery, standalone NGINX transactions, guarded SSH port changes, native Btrfs checkpoints, and checked resource arithmetic; see the [recovery operating guide](docs/recovery.md) for supported scope
 
 ## Runtime Model
 
@@ -115,7 +118,7 @@ The runtime writes memory through a controlled pipeline:
 - the candidate remains outside prompt retrieval until explicit promotion
 - it cannot create policy, permission, approval, playbooks, or cautions
 
-For a deeper walkthrough, see the [memory model](docs/memory-model.md) and [standalone operational-memory guide](docs/memory-guide.html).
+For a deeper walkthrough, see the [memory model](docs/memory-model.md).
 
 ## Human-Readable Files vs Structured State
 
@@ -161,9 +164,19 @@ Choose `Sign in with ChatGPT`. CvkeHarness reuses the official `~/.codex/auth.js
 
 The setup wizard also reads the Codex `~/.codex/models_cache.json` model cache (or the cache under `CODEX_HOME`). The primary and judge model pickers use that account-scoped catalog and distinguish recent from older cached choices. These are cached models, not a live availability check. If the cache is missing or empty, enter an exact model ID or run Codex to refresh the cache. Existing configured models remain selectable even when absent from the catalog.
 
+### Install
+
+```bash
+go install github.com/glebenator/cvkeharness@latest
+```
+
+This places `cvkeharness` in `$(go env GOPATH)/bin`. The examples below use `./cvkeharness` for a binary built from a clone; drop the `./` when using an installed binary.
+
 ### Build
 
 ```bash
+git clone https://github.com/Glebenator/CvkeHarness.git
+cd CvkeHarness
 go build -o cvkeharness .
 ```
 
@@ -356,7 +369,7 @@ Important fields:
   Retention window for debug prompt dumps. Dumps are pruned automatically and secret-looking values are redacted before persistence.
 - `routing_min_confidence`
 - `security`
-  Canonical security profile and per-setting overrides. `reasonable` is the default. See the [detailed HTML security guide](docs/security-controls.html) or the [concise Markdown reference](docs/security-controls.md).
+  Canonical security profile and per-setting overrides. `reasonable` is the default. See [security controls](docs/security-controls.md).
 - `safety_mode`
   Deprecated compatibility input. It is migrated into `security` when the new section is absent.
 - `safety_model`
@@ -443,6 +456,16 @@ The optional Tavily-backed web tools:
 - block `web_fetch` for localhost, private/link-local/metadata, bare internal, and configured blocked domains
 - are intended for public documentation, release notes, issue trackers, and error-message research, not target discovery or internal network probing
 
+## Documentation
+
+- [Security controls](docs/security-controls.md): profiles, per-setting overrides, and approval behavior
+- [Models and Settings](docs/models-settings.md): connections, model roles, and the Settings workspace
+- [LLM advisor](docs/llm-advisor.md): plain-language advice on actions that need approval
+- [Memory model](docs/memory-model.md): target-scoped operational memory and its review lifecycle
+- [Recovery](docs/recovery.md): recoverable file, NGINX, SSH, and Btrfs operations and their limits
+- [Scheduled jobs and cron](docs/scheduled-jobs-and-cron.md): internal jobs and user crontab management
+- [Chat and activity](docs/chat-activity.md): how Chat and per-turn Activity fit together
+
 ## Repository Layout
 
 ### Runtime and orchestration
@@ -474,7 +497,7 @@ The optional Tavily-backed web tools:
 - `safety/`
   Red-team harness and safety scorecard generation
 - `docs/`
-  Architecture docs, visual guides, and generated reports
+  Operator guides; `redteam`, `scorecard`, and the fuzz tool also write their reports here by default
 
 ## Key Code Paths
 
@@ -505,22 +528,15 @@ If you are reading the code for the first time, these are the best entry points:
 - `config/config.go`
   Config shape and defaults
 
-For a deeper walkthrough of the current runtime, see:
-
-- [docs/memory-model.md](docs/memory-model.md)
-- [docs/memory-guide.html](docs/memory-guide.html)
-- [docs/project-visual-guide.md](docs/project-visual-guide.md)
-- [docs/architecture.md](docs/architecture.md)
-
 ## Development
 
 ### Run tests
 
 ```bash
-GOCACHE=/tmp/cvke-go-build go test ./...
+go test ./...
 ```
 
-Using a local `GOCACHE` is helpful in sandboxed environments where the default Go build cache path is not writable.
+In sandboxed environments where the default Go build cache is not writable, set `GOCACHE` to a writable directory, for example `GOCACHE=/tmp/cvke-go-build go test ./...`.
 
 ### Run end-to-end user journeys
 
@@ -550,25 +566,6 @@ gofmt -w .
 - When changing routing behavior, preserve the approval boundary.
 - When retrieval is uncertain, prefer retrieving less, not more.
 
-## Generated Artifacts
-
-Start with the standalone [project guide](docs/project-guide.html) for a
-source-grounded walkthrough of the operator surfaces, architecture, agent loop,
-action authorization, operational memory, routing, scheduling, persistence,
-and validation.
-
-For a hands-on recovery check, follow the [step-by-step self-testing guide](docs/recovery-testing-guide.html).
-It starts with disposable files and expected refusals, then covers Console,
-Docker fault labs, genuine VM reboot tests, and the evidence to keep.
-
-The repository also includes generated safety artifacts under `docs/`:
-
-- `docs/redteam-report.md`
-- `docs/redteam-report.json`
-- `docs/safety-scorecard.md`
-- `docs/safety-scorecard.json`
-- `docs/safety-hardening-plan.md`
-
 ## Project Status
 
 The harness now supports routed execution plus target-aware operational memory, but it is still intentionally compact:
@@ -582,7 +579,10 @@ The harness now supports routed execution plus target-aware operational memory, 
 
 That keeps the system inspectable, testable, and easy to extend.
 
-### Personal Antigravity integration
+## Security
 
-An unofficial Gemini provider is available through `cvkeharness antigravity login`
-and provider `antigravity`. See [authentication, configuration, and limitations](docs/antigravity.md).
+Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), not in public issues.
+
+## License
+
+CvkeHarness is released under the [MIT License](LICENSE).

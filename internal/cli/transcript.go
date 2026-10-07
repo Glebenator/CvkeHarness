@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 const (

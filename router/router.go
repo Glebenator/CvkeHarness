@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // ApprovalPrompter asks the user whether a recommended model may be used.

@@ -13,14 +13,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/coolcake/cvkeharness/agent"
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/chatcmd"
-	"github.com/coolcake/cvkeharness/internal/secrets"
-	"github.com/coolcake/cvkeharness/internal/telemetry"
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/agent"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/chatcmd"
+	"github.com/glebenator/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 type chatDataMsg struct {

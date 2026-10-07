@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/recovery"
+	"github.com/glebenator/cvkeharness/recovery"
 )
 
 // The explicitly selected Docker suite fails, rather than skips, when its

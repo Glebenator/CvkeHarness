@@ -211,7 +211,7 @@ func (c *Config) VerifierInheritsExecution() bool {
 
 func supportedProvider(name string) bool {
 	switch name {
-	case "codex", "openrouter", "openai", "lmstudio", "antigravity":
+	case "codex", "openrouter", "openai", "lmstudio":
 		return true
 	}
 	return false
@@ -360,7 +360,7 @@ func ValidateConnectionDefinition(connection Connection) error {
 			return fmt.Errorf("%s does not support a custom endpoint", connection.Provider)
 		}
 	}
-	if connection.AuthFile != "" && connection.Provider != "codex" && connection.Provider != "antigravity" {
+	if connection.AuthFile != "" && connection.Provider != "codex" {
 		return fmt.Errorf("%s does not use a login file", connection.Provider)
 	}
 	return nil

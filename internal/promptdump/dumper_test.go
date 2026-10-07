@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 func TestDumperWritesMarkdownAndHTML(t *testing.T) {

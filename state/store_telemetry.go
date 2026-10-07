@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
 )
 
 // SchedulerHealth is the query-ready scheduler projection rebuilt from canonical events.

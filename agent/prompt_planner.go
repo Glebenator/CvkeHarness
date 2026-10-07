@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 type promptPlan struct {

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/safety"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/safety"
+	"github.com/glebenator/cvkeharness/tools"
 	"github.com/spf13/cobra"
 )
 

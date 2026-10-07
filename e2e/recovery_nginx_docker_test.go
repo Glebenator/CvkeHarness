@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/recovery"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/recovery"
 	"gopkg.in/yaml.v3"
 )
 

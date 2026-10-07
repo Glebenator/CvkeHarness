@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/agent"
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/agent"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func TestPromptModelApprovalRejectsByDefault(t *testing.T) {

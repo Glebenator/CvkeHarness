@@ -6,17 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/internal/modelruntime"
-	"github.com/coolcake/cvkeharness/internal/promptdump"
-	"github.com/coolcake/cvkeharness/internal/telemetry"
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/recovery"
-	"github.com/coolcake/cvkeharness/securitypolicy"
-	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/internal/modelruntime"
+	"github.com/glebenator/cvkeharness/internal/promptdump"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/recovery"
+	"github.com/glebenator/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 type providerResolver struct {

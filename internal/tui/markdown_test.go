@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	termansi "github.com/charmbracelet/x/ansi"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 	"github.com/muesli/termenv"
 )
 

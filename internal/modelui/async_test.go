@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/coolcake/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/config"
 )
 
 func TestInputCommandsPreserveBatchExecutionAndParentRouting(t *testing.T) {

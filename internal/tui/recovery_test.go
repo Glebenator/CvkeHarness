@@ -7,8 +7,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/coolcake/cvkeharness/recovery"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/recovery"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func TestOverviewSSHConfirmationRemainsExplicit(t *testing.T) {

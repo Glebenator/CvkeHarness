@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // EndpointCapture is runtime-owned evidence, independent of command completion.

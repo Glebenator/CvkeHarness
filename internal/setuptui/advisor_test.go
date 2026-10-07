@@ -3,8 +3,8 @@ package setuptui
 import (
 	"testing"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/setupflow"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/setupflow"
 )
 
 func TestAdvisorSetupOpensIndependentModelPicker(t *testing.T) {

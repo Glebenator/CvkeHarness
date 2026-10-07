@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/internal/modelruntime"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/internal/modelruntime"
+	"github.com/glebenator/cvkeharness/state"
 	"github.com/spf13/cobra"
 )
 

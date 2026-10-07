@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/coolcake/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/config"
 )
 
 // Exercise the actual private textinput paste message without reading or

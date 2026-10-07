@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
 	"github.com/creack/pty"
+	"github.com/glebenator/cvkeharness/config"
 	"gopkg.in/yaml.v3"
 )
 

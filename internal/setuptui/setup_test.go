@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/setupflow"
-	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/setupflow"
+	"github.com/glebenator/cvkeharness/securitypolicy"
 )
 
 func TestSetupSurfacesSaveFailure(t *testing.T) {

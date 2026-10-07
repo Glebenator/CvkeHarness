@@ -2,8 +2,8 @@ package tui
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/state"
 	"path/filepath"
 	"strings"
 	"testing"

@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/state"
 	"github.com/creack/pty"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 var (

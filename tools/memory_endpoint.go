@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/coolcake/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/memory"
 )
 
 type directEndpointMessageKey struct{}

@@ -56,10 +56,7 @@ Console Activity journeys run through the real executable and PTY at 80, 100,
 120, and 144 columns, covering both the full-width Activity view and split panes.
 Package tests cover detailed focus, scrolling, mouse geometry, cancellation,
 approval, and output layout behavior. Setup coverage includes both early exit
-and review/save with synthetic cached Codex fixtures. The separate
-[Settings frame validation](../output/settings-validation/README.md) exercises
-cross-connection role selection, staged changes, custom IDs, provider protection,
-catalog failure/reload, and setup review at 80×24 and 120×32.
+and review/save with synthetic cached Codex fixtures.
 
 The model boundary is hermetic. These checks do not establish live-provider
 authentication, availability, or model behavior. A PTY also does not reproduce

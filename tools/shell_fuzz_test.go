@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/shellpolicy"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/shellpolicy"
 )
 
 func FuzzParseShellCommand(f *testing.F) {

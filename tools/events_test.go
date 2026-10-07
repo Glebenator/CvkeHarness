@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
 )
 
 type correlationObserver struct{ events []Event }

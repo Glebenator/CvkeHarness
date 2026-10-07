@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/telemetry"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 const (

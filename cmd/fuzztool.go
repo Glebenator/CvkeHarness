@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/shellpolicy"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/shellpolicy"
+	"github.com/glebenator/cvkeharness/tools"
 	"github.com/spf13/cobra"
 )
 

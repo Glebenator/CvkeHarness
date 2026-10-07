@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 const (

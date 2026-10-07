@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 func TestLLMAdvisorConsoleApprovalJourney(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 type fleetFixture struct {

@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"unicode/utf8"
 
-	"github.com/coolcake/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/internal/secrets"
 )
 
 const maxInlineToolOutputBytes = 4096

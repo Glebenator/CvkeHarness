@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/termui"
-	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/systemcron"
+	"github.com/glebenator/cvkeharness/internal/termui"
+	"github.com/glebenator/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/systemcron"
 )
 
 // SystemCronManageTool manages the current user's crontab.

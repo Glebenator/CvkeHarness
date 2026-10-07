@@ -5,7 +5,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/tools"
 	"github.com/spf13/cobra"
 )
 

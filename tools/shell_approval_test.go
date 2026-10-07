@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 type failingJudgeProvider struct{}

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // ReviewInbox returns all candidate operational knowledge in a compact,

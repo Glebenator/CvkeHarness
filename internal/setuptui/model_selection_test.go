@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/modelui"
-	"github.com/coolcake/cvkeharness/internal/setupflow"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/modelui"
+	"github.com/glebenator/cvkeharness/internal/setupflow"
 )
 
 func connectionSetupFixture() setupModel {

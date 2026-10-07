@@ -3,8 +3,8 @@ package agent
 import (
 	"testing"
 
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 func TestPromptPlannerKeepsStablePrefixAcrossCompatibleTurns(t *testing.T) {

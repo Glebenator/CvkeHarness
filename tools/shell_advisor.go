@@ -9,10 +9,10 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/internal/promptdump"
-	"github.com/coolcake/cvkeharness/internal/secrets"
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/internal/promptdump"
+	"github.com/glebenator/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 // CommandAdvice is explanatory model output, never an execution authorization.

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func TestOrdinaryEndpointDeclarationGrammar(t *testing.T) {

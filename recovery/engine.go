@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 type Options struct {

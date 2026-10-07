@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/agent"
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/log"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/agent"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/log"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // startChatSession creates the shared in-process conversation and its

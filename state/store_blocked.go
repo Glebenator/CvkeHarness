@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/coolcake/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/core"
 )
 
 // SaveBlockedWork persists or updates one resumable blocked task.

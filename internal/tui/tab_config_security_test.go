@@ -7,9 +7,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/securitypolicy"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 func TestConfigSecurityEditorCreatesAndResetsIndividualOverride(t *testing.T) {

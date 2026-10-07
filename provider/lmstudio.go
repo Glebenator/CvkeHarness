@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/internal/httputil"
+	"github.com/glebenator/cvkeharness/internal/httputil"
 )
 
 // LMStudio implements the Provider interface for a local LM Studio instance.

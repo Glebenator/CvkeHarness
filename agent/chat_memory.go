@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/internal/telemetry"
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 type pendingEndpointRequest struct{ Request, Name, Clarification string }

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/secrets"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 const maxDiagnosticFieldRunes = 8192

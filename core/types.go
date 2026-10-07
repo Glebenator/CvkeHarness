@@ -67,7 +67,7 @@ func ParseModelRef(raw, defaultProvider string) ModelRef {
 
 	parts := strings.Split(raw, "/")
 	if len(parts) >= 2 {
-		if parts[0] == "codex" || parts[0] == "openrouter" || parts[0] == "openai" || parts[0] == "lmstudio" || parts[0] == "antigravity" {
+		if parts[0] == "codex" || parts[0] == "openrouter" || parts[0] == "openai" || parts[0] == "lmstudio" {
 			return NewModelRef(parts[0], strings.Join(parts[1:], "/"))
 		}
 	}

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/config"
 )
 
 func TestReadinessChecksIndependentJudgeLogin(t *testing.T) {

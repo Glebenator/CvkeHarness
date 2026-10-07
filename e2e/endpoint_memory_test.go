@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // Exercise the real binary and terminal with a local fake model. Outbound

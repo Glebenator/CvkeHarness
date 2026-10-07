@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 type scriptedProvider struct {

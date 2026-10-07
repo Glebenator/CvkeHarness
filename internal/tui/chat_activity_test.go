@@ -8,7 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 func activityTestTab() *chatTab {

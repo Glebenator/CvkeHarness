@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/log"
+	"github.com/glebenator/cvkeharness/internal/log"
 )
 
 // DefaultTimeout is the default timeout for HTTP requests.

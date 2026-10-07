@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/coolcake/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/internal/secrets"
 )
 
 // Activity owns its selection and scrolling. Chat scrolling and composer focus

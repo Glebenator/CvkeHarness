@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/memory"
 )
 
 func TestWriteSetupSoulCreatesGeneratedGuidanceFromStub(t *testing.T) {

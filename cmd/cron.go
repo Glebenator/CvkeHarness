@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/systemcron"
+	"github.com/glebenator/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/systemcron"
 	"github.com/spf13/cobra"
 )
 

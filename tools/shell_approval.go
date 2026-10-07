@@ -7,12 +7,12 @@ import (
 	"io"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/internal/promptdump"
-	"github.com/coolcake/cvkeharness/internal/secrets"
-	"github.com/coolcake/cvkeharness/internal/termui"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/internal/promptdump"
+	"github.com/glebenator/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/internal/termui"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 const (

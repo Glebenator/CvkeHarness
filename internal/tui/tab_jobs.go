@@ -4,14 +4,14 @@ import (
 	"context"
 	"fmt"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/coolcake/cvkeharness/scheduler"
+	"github.com/glebenator/cvkeharness/scheduler"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // ── messages ────────────────────────────────────────────────────────

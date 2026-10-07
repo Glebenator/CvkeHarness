@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"github.com/coolcake/cvkeharness/internal/setuptui"
-	dashboard "github.com/coolcake/cvkeharness/internal/tui"
+	"github.com/glebenator/cvkeharness/internal/setuptui"
+	dashboard "github.com/glebenator/cvkeharness/internal/tui"
 	"github.com/spf13/cobra"
 )
 

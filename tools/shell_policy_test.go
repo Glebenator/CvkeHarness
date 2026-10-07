@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/securitypolicy"
 )
 
 func resolvedProfile(t *testing.T, profile securitypolicy.Profile) securitypolicy.EffectivePolicy {

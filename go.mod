@@ -1,4 +1,4 @@
-module github.com/coolcake/cvkeharness
+module github.com/glebenator/cvkeharness
 
 go 1.26.2
 

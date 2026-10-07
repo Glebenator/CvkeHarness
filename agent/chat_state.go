@@ -3,7 +3,7 @@ package agent
 import (
 	"strings"
 
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 // ChatState owns the mutable conversation history for one execution phase.

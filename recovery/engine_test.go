@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func fixture(t *testing.T) (*Engine, string) {

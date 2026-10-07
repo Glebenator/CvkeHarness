@@ -11,4 +11,10 @@
 coverage.txt
 coverage.out
 
-speedtest.md
+# Reports written to docs/ by redteam, scorecard, and the fuzz tool
+docs/redteam-report.*
+docs/safety-scorecard.*
+docs/fuzz-report.*
+
+# OS metadata
+.DS_Store

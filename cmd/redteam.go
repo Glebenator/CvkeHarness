@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/safety"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/safety"
 	"github.com/spf13/cobra"
 )
 

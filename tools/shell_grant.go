@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/secrets"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/securitypolicy"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 const actionAnalyzerVersion = "effect-policy-v1"

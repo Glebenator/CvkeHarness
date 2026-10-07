@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/coolcake/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/config"
 )
 
 func TestConnectionEditorKeepsStableIDsAndNeverShowsKeyFragments(t *testing.T) {

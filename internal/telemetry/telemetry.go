@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/internal/secrets"
 )
 
 // Stream separates live runtime data from test and synthetic telemetry.

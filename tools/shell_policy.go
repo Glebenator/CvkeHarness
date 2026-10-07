@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/coolcake/cvkeharness/internal/secrets"
-	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/securitypolicy"
 )
 
 // ShellEffect is a deterministic fact extracted from a shell action. Policy

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/core"
 )
 
 func TestNamedConnectionsDoNotContaminateLegacyRoutingStatistics(t *testing.T) {

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/internal/telemetry"
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 func TestModelCallTelemetryIncludesCacheHitRatio(t *testing.T) {

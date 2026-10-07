@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/shellpolicy"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/shellpolicy"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 type recordingObserver struct {

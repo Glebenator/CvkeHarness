@@ -3,9 +3,9 @@ package setuptui
 import (
 	"testing"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/setupflow"
-	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/setupflow"
+	"github.com/glebenator/cvkeharness/securitypolicy"
 )
 
 func TestLLMJudgePresetOpensJudgeModelPicker(t *testing.T) {

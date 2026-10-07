@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
 )
 
 func TestRebuildTelemetryProjectionsFromCanonicalEvents(t *testing.T) {

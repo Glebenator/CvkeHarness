@@ -3,7 +3,7 @@ package config
 import (
 	"testing"
 
-	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/securitypolicy"
 )
 
 func TestLLMJudgePresetAndSelectedModelSurviveSave(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 type fakeProvider struct {

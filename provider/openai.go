@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/internal/httputil"
+	"github.com/glebenator/cvkeharness/internal/httputil"
 )
 
 const openAIResponsesBaseURL = "https://api.openai.com/v1"

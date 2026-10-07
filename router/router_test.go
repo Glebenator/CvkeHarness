@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func TestNamedConnectionDoesNotUseProviderOnlyHistoricalRouting(t *testing.T) {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 type capturingRouter struct {

@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/recovery"
-	"github.com/coolcake/cvkeharness/securitypolicy"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/recovery"
+	"github.com/glebenator/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func TestRecoveryToolScopedApprovalAndRemoteRefusal(t *testing.T) {

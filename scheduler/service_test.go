@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 type fakeRunner struct {

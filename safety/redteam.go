@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/agent"
-	"github.com/coolcake/cvkeharness/provider"
-	toolspkg "github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/agent"
+	"github.com/glebenator/cvkeharness/provider"
+	toolspkg "github.com/glebenator/cvkeharness/tools"
 )
 
 type AttemptDisposition string

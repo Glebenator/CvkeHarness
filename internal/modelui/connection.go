@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/coolcake/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/config"
 )
 
 type ConnectionResultMsg struct {
@@ -87,19 +87,18 @@ func (e *ConnectionEditor) fields() []string {
 	switch e.draft.Provider {
 	case "openai", "openrouter", "lmstudio":
 		fields = append(fields, "Endpoint", "API key")
-	case "codex", "antigravity":
+	case "codex":
 		fields = append(fields, "Login file")
 	}
 	return append(fields, "Keep connection")
 }
 
-var providerIDs = []string{"codex", "openrouter", "openai", "lmstudio", "antigravity"}
+var providerIDs = []string{"codex", "openrouter", "openai", "lmstudio"}
 var providerDescriptions = map[string]string{
-	"codex":       "Reuse a local Codex login",
-	"openrouter":  "Cloud API with an API key",
-	"openai":      "OpenAI API with an API key",
-	"lmstudio":    "Local or remote OpenAI-compatible server",
-	"antigravity": "Personal Google login; unofficial integration",
+	"codex":      "Reuse a local Codex login",
+	"openrouter": "Cloud API with an API key",
+	"openai":     "OpenAI API with an API key",
+	"lmstudio":   "Local or remote OpenAI-compatible server",
 }
 
 func (e *ConnectionEditor) Update(msg tea.Msg) tea.Cmd {

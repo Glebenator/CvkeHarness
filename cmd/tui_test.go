@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/agent"
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/agent"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func TestCanceledChatTurnStillPersistsLocalAuditRecord(t *testing.T) {

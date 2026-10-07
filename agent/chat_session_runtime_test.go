@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/internal/telemetry"
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/securitypolicy"
-	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 type chatRouterStub struct {

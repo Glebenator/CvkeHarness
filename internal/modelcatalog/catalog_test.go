@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/config"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

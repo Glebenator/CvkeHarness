@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/recovery"
-	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/recovery"
+	"github.com/glebenator/cvkeharness/securitypolicy"
 	"gopkg.in/yaml.v3"
 )
 

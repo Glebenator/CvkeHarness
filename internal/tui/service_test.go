@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func TestServiceExportChatSessionWritesPersistedTranscript(t *testing.T) {

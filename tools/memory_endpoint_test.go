@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/securitypolicy"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func TestRememberTargetRequiresExactCurrentUserDeclaration(t *testing.T) {

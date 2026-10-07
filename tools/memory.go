@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/memory"
 )
 
 // FindingRecorder captures the subset of memory.Manager used by the tool.

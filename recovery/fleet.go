@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // Fleet deliberately supports one pre-prepared file or NGINX operation per

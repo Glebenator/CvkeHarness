@@ -6,15 +6,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func TestParseEndpointDeclaration(t *testing.T) {
 	for _, tc := range []struct{ input, name, endpoint string }{
 		{"remember that my servers address is 192.168.50.69", "server", "192.168.50.69"},
 		{"Remember that my server's IP address is 192.168.50.69.", "server", "192.168.50.69"},
-		{"please remember my homeserver is coolcake@home.local", "home server", "coolcake@home.local"},
+		{"please remember my homeserver is operator@home.local", "home server", "operator@home.local"},
 		{"save my staging server address is ops@staging.internal", "staging server", "ops@staging.internal"},
 		{"remember my NAS hostname is storage", "nas", "storage"},
 		{"remember my server address is 2001:db8::1", "server", "2001:db8::1"},
@@ -53,7 +53,7 @@ func TestUserEndpointSurvivesRestartWithoutPromotingOperationalMemory(t *testing
 	ctx := context.Background()
 	store := state.Open(path)
 	mgr := NewManager(dir, store)
-	oldTarget, err := mgr.ResolveTarget(ctx, TargetResolutionInput{Task: "inspect coolcake@192.168.50.69"})
+	oldTarget, err := mgr.ResolveTarget(ctx, TargetResolutionInput{Task: "inspect operator@192.168.50.69"})
 	if err != nil {
 		t.Fatal(err)
 	}

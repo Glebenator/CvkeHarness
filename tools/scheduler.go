@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/scheduler"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/scheduler"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // ScheduleManageTool lets the agent manage CvkeHarness internal schedules.

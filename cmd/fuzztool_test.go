@@ -12,7 +12,7 @@ func TestParseGoFuzzOutput(t *testing.T) {
 	output := `fuzz: elapsed: 0s, gathering baseline coverage: 22/22 completed
 fuzz: elapsed: 3s, execs: 248278 (82754/sec), new interesting: 68 (total: 170)
 PASS
-ok  	github.com/coolcake/cvkeharness/tools	6.098s`
+ok  	github.com/glebenator/cvkeharness/tools	6.098s`
 
 	result := parseGoFuzzOutput("FuzzParseShellCommand", "go test ./tools -run ^$ -fuzz FuzzParseShellCommand -fuzztime 5s", output)
 

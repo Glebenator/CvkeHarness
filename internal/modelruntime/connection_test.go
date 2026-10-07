@@ -8,9 +8,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 func TestSeparateConnectionsSendNativeModelsAndOwnCredentials(t *testing.T) {

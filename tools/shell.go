@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/log"
-	"github.com/coolcake/cvkeharness/internal/secrets"
-	"github.com/coolcake/cvkeharness/internal/telemetry"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/securitypolicy"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/internal/log"
+	"github.com/glebenator/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // ShellTool runs restricted shell commands on the host.

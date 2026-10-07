@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 func TestChatRememberEndpointThenFreshConversationAndFollowUp(t *testing.T) {
@@ -19,7 +19,7 @@ func TestChatRememberEndpointThenFreshConversationAndFollowUp(t *testing.T) {
 	store := state.Open(path)
 	ctx := context.Background()
 	mgr := memory.NewManager(dir, store)
-	old, err := mgr.ResolveTarget(ctx, memory.TargetResolutionInput{Task: "inspect coolcake@192.168.50.69"})
+	old, err := mgr.ResolveTarget(ctx, memory.TargetResolutionInput{Task: "inspect operator@192.168.50.69"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/config"
 )
 
 const CustomModelID = "[ custom model ]"
@@ -42,8 +42,6 @@ func (l Loader) Fetch(ctx context.Context, connection config.Connection) ModelRe
 	switch connection.Provider {
 	case "codex":
 		return FetchCodexModels(now, connection.AuthFile)
-	case "antigravity":
-		return fallback(nil, "antigravity", "Enter a model ID supported by your account; this catalog is not verified", now)
 	case "openrouter", "openai", "lmstudio":
 		return l.fetchAPI(ctx, connection, now)
 	default:

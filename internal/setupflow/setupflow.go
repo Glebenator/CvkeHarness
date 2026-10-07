@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/modelcatalog"
-	"github.com/coolcake/cvkeharness/internal/modelruntime"
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/modelcatalog"
+	"github.com/glebenator/cvkeharness/internal/modelruntime"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/securitypolicy"
 )
 
 const HostProfileFile = "host_profile.json"
@@ -140,7 +140,6 @@ func ProviderOptions() []ProviderOption {
 		{ID: "openrouter", Label: "OpenRouter", Description: "Cloud API with many coding models"},
 		{ID: "openai", Label: "OpenAI", Description: "Usage-based OpenAI API models"},
 		{ID: "lmstudio", Label: "LM Studio", Description: "Local OpenAI-compatible inference"},
-		{ID: "antigravity", Label: "Antigravity", Description: "Personal Google subscription (unofficial); run cvkeharness antigravity login"},
 	}
 }
 
@@ -225,13 +224,6 @@ func ValidateReady(cfg *config.Config) error {
 			}
 			if _, err := provider.LoadCodexCLIAuth(path); err != nil {
 				return fmt.Errorf("%s: Codex login is missing or unreadable for connection %s; run 'codex login' or edit its login file", role, resolved.ConnectionID)
-			}
-		case "antigravity":
-			if path == "" {
-				path = provider.AntigravityAuthPath()
-			}
-			if _, err := provider.LoadAntigravityAuth(path); err != nil {
-				return fmt.Errorf("%s: Antigravity login is missing or unreadable for connection %s", role, resolved.ConnectionID)
 			}
 		}
 	}

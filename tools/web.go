@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/httputil"
-	"github.com/coolcake/cvkeharness/internal/secrets"
+	"github.com/glebenator/cvkeharness/internal/httputil"
+	"github.com/glebenator/cvkeharness/internal/secrets"
 )
 
 const (

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/config"
 )
 
 func TestFirstRunCommandsRequireSetup(t *testing.T) {
@@ -74,7 +74,7 @@ func TestFirstRunBootstrapAndRecoveryRemainAvailable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	for _, name := range []string{"setup", "settings", "recovery", "antigravity"} {
+	for _, name := range []string{"setup", "settings", "recovery"} {
 		c, _, err := rootCmd.Find([]string{name})
 		if err != nil {
 			t.Fatal(err)

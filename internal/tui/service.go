@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/chatexport"
-	"github.com/coolcake/cvkeharness/scheduler"
-	"github.com/coolcake/cvkeharness/state"
-	"github.com/coolcake/cvkeharness/systemcron"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/chatexport"
+	"github.com/glebenator/cvkeharness/scheduler"
+	"github.com/glebenator/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/systemcron"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 // RunJobFunc triggers a scheduled job by ID.

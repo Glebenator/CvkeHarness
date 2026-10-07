@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 // Exercise the actual console input path at both sides of the responsive split.

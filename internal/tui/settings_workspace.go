@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/modelui"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/modelui"
 )
 
 type settingsSection int
@@ -335,7 +335,7 @@ func (t *configTab) viewConnections(width, height int) string {
 		detail := connection.Provider
 		if connection.BaseURL != "" {
 			detail += " · " + connection.BaseURL
-		} else if connection.Provider == "codex" || connection.Provider == "antigravity" {
+		} else if connection.Provider == "codex" {
 			detail += " · local login file"
 		} else if connection.APIKey != "" {
 			detail += " · API key stored"

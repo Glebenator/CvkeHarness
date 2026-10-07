@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/provider"
-	"github.com/coolcake/cvkeharness/securitypolicy"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func TestChatRuntimeSeparatesExecutionClassificationSafetyAndVerificationHTTP(t *testing.T) {

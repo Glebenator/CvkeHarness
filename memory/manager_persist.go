@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/telemetry"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // PersistLessons keeps the ad hoc finding tool working on top of the new model.

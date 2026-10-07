@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/coolcake/cvkeharness/core"
-	"github.com/coolcake/cvkeharness/internal/telemetry"
-	"github.com/coolcake/cvkeharness/provider"
+	"github.com/glebenator/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/internal/telemetry"
+	"github.com/glebenator/cvkeharness/provider"
 )
 
 func emitModelCallCompleted(ctx context.Context, phase core.Phase, iteration int, providerName, requestedModel string, resp *provider.ChatResponse, durationMs int64, callErr error) {

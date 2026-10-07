@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/recovery"
+	"github.com/glebenator/cvkeharness/recovery"
 )
 
 func TestRecoveryPlatformCalculator(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/recovery"
+	"github.com/glebenator/cvkeharness/recovery"
 )
 
 type RecoveryFleetTool struct{ engine *recovery.Engine }

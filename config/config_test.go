@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/coolcake/cvkeharness/securitypolicy"
+	"github.com/glebenator/cvkeharness/securitypolicy"
 )
 
 func TestDefaultConfigUsesReasonableSecurity(t *testing.T) {
@@ -373,7 +373,7 @@ func TestLoadConfigDeduplicatesFavoriteModels(t *testing.T) {
 }
 
 func TestJudgeDefaultUsesSelectedProviderModel(t *testing.T) {
-	for _, provider := range []string{"codex", "openai", "lmstudio", "antigravity", "openrouter"} {
+	for _, provider := range []string{"codex", "openai", "lmstudio", "openrouter"} {
 		t.Run(provider, func(t *testing.T) {
 			cfg := &Config{Provider: provider, DefaultModel: "primary"}
 			cfg.Normalize()

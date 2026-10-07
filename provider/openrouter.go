@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/coolcake/cvkeharness/internal/httputil"
+	"github.com/glebenator/cvkeharness/internal/httputil"
 )
 
 // OpenRouter implements the Provider interface for the OpenRouter API.
@@ -82,8 +82,8 @@ func (o *OpenRouter) ChatCompletion(ctx context.Context, req *ChatRequest) (*Cha
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/coolcake/cvkeharness") // OpenRouter requests this
-	httpReq.Header.Set("X-Title", "CvkeHarness")                                  // Optional, but good practice for OpenRouter
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/glebenator/cvkeharness") // OpenRouter requests this
+	httpReq.Header.Set("X-Title", "CvkeHarness")                                    // Optional, but good practice for OpenRouter
 
 	httpResp, err := o.client.Do(httpReq)
 	if err != nil {

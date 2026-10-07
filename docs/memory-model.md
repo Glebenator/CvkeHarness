@@ -182,5 +182,3 @@ The approval grant is intentionally separate from the memory target label. Opera
 - Stop retrieval immediately: `cvkeharness memory revoke <kind> <id>`
 - Remove a record from canonical operational state: `cvkeharness memory delete <kind> <id>`. Generated-view snapshots remain as local audit history and the current CLI does not purge them.
 - Regenerate stale views: `cvkeharness memory export`
-
-For the complete user guide, open `docs/memory-guide.html` in a browser.

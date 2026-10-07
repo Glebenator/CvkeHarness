@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/internal/log"
-	"github.com/coolcake/cvkeharness/internal/setupflow"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/internal/log"
+	"github.com/glebenator/cvkeharness/internal/setupflow"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +31,7 @@ func requireSetup(cmd *cobra.Command) error {
 		top = top.Parent()
 	}
 	switch top.Name() {
-	case "setup", "settings", "help", "completion", "__complete", "__completeNoDesc", "antigravity", "recovery":
+	case "setup", "settings", "help", "completion", "__complete", "__completeNoDesc", "recovery":
 		// Bootstrap, help, and model-independent recovery must stay available.
 		return nil
 	case "console":

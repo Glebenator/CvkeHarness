@@ -7,7 +7,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 func phaseModelLabel(phase state.PhaseRecord) string {

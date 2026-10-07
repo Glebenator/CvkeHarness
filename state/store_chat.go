@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/coolcake/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/core"
 )
 
 // StartChatSession inserts a new interactive chat session.

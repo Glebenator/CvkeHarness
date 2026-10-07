@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/coolcake/cvkeharness/config"
-	"github.com/coolcake/cvkeharness/memory"
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/config"
+	"github.com/glebenator/cvkeharness/memory"
+	"github.com/glebenator/cvkeharness/state"
 	"github.com/spf13/cobra"
 )
 

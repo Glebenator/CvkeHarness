@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/internal/shellpolicy"
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/internal/shellpolicy"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 type Decision = shellpolicy.Decision

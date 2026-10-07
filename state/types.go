@@ -3,7 +3,7 @@ package state
 import (
 	"time"
 
-	"github.com/coolcake/cvkeharness/core"
+	"github.com/glebenator/cvkeharness/core"
 )
 
 // TaskState is the durable lifecycle state for a run or chat turn.

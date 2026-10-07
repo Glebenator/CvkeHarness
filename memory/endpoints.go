@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coolcake/cvkeharness/state"
+	"github.com/glebenator/cvkeharness/state"
 )
 
 // Match a complete, direct declaration only. Do not mine quotes, documents,

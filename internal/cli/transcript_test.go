@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coolcake/cvkeharness/tools"
+	"github.com/glebenator/cvkeharness/tools"
 )
 
 func TestTranscriptRendererPlainShellFlow(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/coolcake/cvkeharness/internal/setupflow"
+	"github.com/glebenator/cvkeharness/internal/setupflow"
 )
 
 var (
