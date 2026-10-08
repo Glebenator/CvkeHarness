@@ -35,11 +35,11 @@ does not change the primary's Codex connection. Model IDs such as
 | Safety advisor | Uses Primary | Explains gated actions and recommends approve/reject in LLM advisor mode; humans decide |
 | Classifier | Uses Safety judge | Classifies tasks in LLM-judge mode before execution |
 | Verifier | Uses Execution | Checks completion evidence; inherits the model actually selected for execution |
-| Planning | Uses Primary | Planning phase when routing is enabled |
+| Planning | Uses Primary | Optional planning phase when routing is enabled |
 | Execution | Uses Primary | Agent execution, including console chat |
 | Curation | Uses Primary | LLM-based memory curators; the normal structured memory curator does not call an LLM |
 
-Primary, Safety judge, and Safety advisor are always visible. Press `a` to show the advanced
+Primary, Safety judge, and Safety advisor are always visible. In Models, press `a` to show the advanced
 roles. Every role opens the same picker:
 
 - Type to search model IDs and names. Arrows and page keys move through results.
@@ -53,6 +53,11 @@ Catalogs identify their source and cache/fallback state. Catalog availability
 does not establish that authentication or a model call will succeed. Codex uses
 its local CLI model cache; the configured login file can be reused without
 copying subscription tokens into the harness configuration.
+
+The `models favorite`, `models unfavorite`, and `models approve` CLI commands
+accept `connection-id::provider/model-id` for named connections. Bare model IDs
+use Primary's connection; a provider prefix alone cannot identify a custom
+connection such as `review-api`.
 
 ## LLM judge preset
 

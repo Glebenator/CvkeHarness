@@ -4,10 +4,10 @@ CvkeHarness treats the model as a fallible operator. The primary risks are the w
 
 This design is grounded in effect control:
 
-- [YoloFS](https://arxiv.org/abs/2604.13536) found that prompts and command-string filters do not reliably constrain filesystem effects; staging, snapshots, and progressive permissions made hidden effects reviewable in its selected incident corpus.
+- [YoloFS](https://arxiv.org/abs/2604.13536) studies filesystem misuse by agents and evaluates mutation staging, snapshots, and progressive permissions on tasks with hidden side effects.
 - [AgentDojo](https://papers.neurips.cc/paper_files/paper/2024/file/97091a5177d8dc64b1da8bf3e1f6fb54-Paper-Datasets_and_Benchmarks_Track.pdf) demonstrates both ordinary agent failures and redirection through untrusted tool data.
 - The [GPT-5-Codex system card](https://cdn.openai.com/pdf/97cc5669-7a25-4e63-b15f-5fd5bdc4d149/gpt-5-codex-system-card.pdf) and [Claude Code sandbox documentation](https://code.claude.com/docs/en/sandboxing) likewise use sandbox boundaries, network restrictions, approvals, and logs rather than trusting model training alone.
-- A second LLM is useful as an advisor, not as the authorization boundary. Sequential-harm research found that prompt engineering and monitor ensembles did not reliably eliminate monitoring failures ([OpenReview](https://openreview.net/forum?id=PGsM81SWHt)).
+- CvkeHarness uses a second LLM for advisory review. Neither a recommendation nor a `SAFE` verdict grants execution authority; see the [advisor guide](llm-advisor.md) and [judge preset](models-settings.md#llm-judge-preset).
 
 ## Configuration model
 
@@ -19,21 +19,24 @@ The profiles are:
 | --- | --- |
 | `extra_strict` | Known reads run. Opaque and destructive actions are denied. Most mutations are denied or require a person. |
 | `reasonable` | Default. Reads and new-file creation run; overwrite, delete, privilege, service, package, network, cloud, container, database, and scheduled mutations ask. Credential and raw-device access are denied. |
+| `llm_advisor` | Reasonable's defaults, with an explanation and approve/reject recommendation before human approval. Advice never authorizes execution. |
+| `llm_judge` | Known reads run; most other actions receive binary LLM review followed by human approval. Credential and raw-device access remain denied. |
 | `less_strict` | Routine local and recoverable changes run. Delete, privilege, cloud, remote, database, and credential effects still ask. Unknown commands may receive advisory LLM review. |
 | `minimal` | Most effects run. Critical paths, raw devices, and credential access still interrupt. |
-| `yolo` | CvkeHarness approval and deletion guards are disabled. Operating-system permissions, cloud RBAC, resource locks, and other external protections still apply. |
+| `yolo` | Effect-policy approval and deletion guards are disabled. Tool-specific confirmation and validation still apply, as do operating-system permissions, cloud RBAC, and resource locks. |
 
 Changing one control produces `<profile> + N overrides`. Applying another profile requires confirmation and clears the previous overrides. YOLO always requires explicit confirmation.
 
 ## Enforced settings
 
-The current catalog contains 25 settings in seven groups:
+The current catalog contains 25 settings in eight groups:
 
 - Commands: known reads, unknown commands, and script interpreters.
 - Filesystem: create, overwrite/truncate, append, delete, critical-path protection, and credential-path protection.
 - System: privilege/ownership changes, service changes, package lifecycle changes, and raw-device access.
 - Network and remote: outbound access, remote mutation, cloud change, container change, and destructive database statements.
 - Autonomy: scheduled-job and crontab mutation.
+- Data: credential access.
 - Approvals: exact action reuse for the current process plus explicit, 15-minute, single-use deferred grants. Grants bind the action/effect digest, effective policy, host, principal, and working directory. New-policy approvals are never persisted as unscoped command strings, and an LLM judgment never creates reusable authority.
 - Limits: command bytes, command segments, wall-clock timeout, and captured output bytes.
 
@@ -55,7 +58,7 @@ When background work pauses for a person, `commands approve-work <id>` reconstru
 
 Guided setup keeps the existing four stages: Connect, Safety, Capabilities, Ready.
 
-Safety presents the five profiles and a concise consequence. Press `A` to reveal all individual controls; use Left/Right or Space to change one, and `R` to restore its profile value. Ready shows the effective profile, override count, and policy hash. Saving configuration remains separate from applying install or daemon actions.
+Safety presents all seven profiles and a concise consequence. Press `a` to enable per-control customization after profile selection; use Left/Right or Space to change a control, and `r` to restore its profile value. Ready shows the effective profile, override count, and policy hash. Saving configuration remains separate from applying install or daemon actions.
 
 The dashboard Settings page has a dedicated Security subpage. It shows each control’s effective value and source (`profile` or `override`). `r` resets one override, `R` requires a second press before resetting all, and profile application requires Enter. Changes apply to new sessions after save; an active session retains its immutable snapshot.
 
@@ -71,12 +74,12 @@ These correctness and privacy invariants are not profile toggles:
 - security changes cannot silently alter an already-running session;
 - the UI states consequences in text rather than color alone.
 
-The current implementation does **not** claim an OS-enforced sandbox, copy-on-write staging filesystem, automatic snapshot/trash recovery, exact delete enumeration/byte budgets, remote target fingerprinting, provider-native dry-run/delete protection, or executable-content hashing. Those controls are valuable, but showing enabled toggles before the enforcement mechanism exists would be security theater.
+General shell execution does **not** provide an OS-enforced sandbox, copy-on-write staging filesystem, automatic snapshot/trash recovery, exact delete enumeration/byte budgets, remote machine fingerprinting, provider-native dry-run/delete protection, or executable-content hashing. The separate [typed recovery adapters](recovery.md) do provide bounded manifests, impact budgets, file recovery, native Btrfs checkpoints, and executable/identity checks within their documented scope. Arbitrary shell commands do not acquire that coverage by selecting a profile.
 
 Recommended follow-on order:
 
 1. Extend the action envelope with resolved remote target identity, executable-content hashes, scope, and recoverability.
-2. Add delete enumeration, protected-root budgets, a recovery manifest, and at least one real Trash/snapshot provider.
+2. Extend typed recovery's manifests, budgets, and quarantine/snapshot coverage to additional operations; general shell deletes still lack exact enumeration and recovery.
 3. Add an OS-enforced filesystem/process/network sandbox and fail closed where the selected profile requires it.
-4. Add typed cloud, Kubernetes, database, and service adapters with plan/apply, dry-run, preconditions, idempotency keys, and provider-native recovery checks.
+4. Add typed cloud, Kubernetes, and database adapters and broaden the existing narrow NGINX/SSH service adapters, with preconditions, dry-run, and provider-native recovery checks.
 5. Add redacted tamper-evident authorization/result audit and postcondition verification.

@@ -8,7 +8,7 @@ CvkeHarness memory is a target-scoped planning aid. It is not an authorization s
 
 CvkeHarness keeps four concepts separate:
 
-1. **Managed policy**: configured safety mode, static command allowlist, approval gates, tool validation, and other operator-owned enforcement. Models and memory cannot edit this plane.
+1. **Managed policy**: configured security profile and overrides, static command allowlist, approval gates, and tool validation. Each runtime session uses an immutable policy snapshot; prompts and retrieved memory cannot change it. Editing on-disk configuration affects a future session, not the active snapshot.
 2. **Live fleet inventory**: deterministic endpoint-label IDs, environment, transport, and operator-confirmed remote identity labels.
 3. **Operational knowledge**: target-scoped facts, playbooks, findings, and cautions. This is historical context, filtered before retrieval and presented as a hint.
 4. **Run state**: current task, tool outcomes, telemetry, and resumable blocked work. It is short-lived execution context, not durable operational truth.

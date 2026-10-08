@@ -36,6 +36,7 @@ go test -tags=e2e ./e2e -v
 | Unapproved interruption | Leaving an approval ungranted and interrupting the turn never runs the proposed action; Activity exposes the cancellation reason | A filesystem marker is not created; blocked work and the interrupted outcome remain inspectable |
 | Chat export | `/export` produces a readable transcript | Export file is mode `0600` |
 | Approval management | `commands approve` is visible in `commands list` | Approval survives a second process |
+| Endpoint memory | A server address supplied to a pending request is saved and recalled in a new process | The requested SSH disk check is denied by network policy before any connection; the endpoint label persists |
 | Recovery approval and offline restore | The Console applies a prepared recovery operation after explicit approval, then the CLI restores it with the model server stopped | Only a temporary fixture is changed and its original contents are restored |
 
 ## Isolation and safety
@@ -46,6 +47,8 @@ go test -tags=e2e ./e2e -v
 - Approval management records `echo E2E_APPROVED` without executing it.
 - The rejection journey requests `touch` but rejects it and asserts that its
   marker file was never created.
+- The endpoint journey requests SSH but denies network access before execution.
+  The recovery journey changes and restores only a temporary regular-file fixture.
 - The suite does not require provider credentials or public network access.
 - Pseudo-terminal coverage currently targets macOS and Linux; the file is
   excluded on Windows.

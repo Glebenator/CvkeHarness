@@ -21,11 +21,12 @@ The runtime is phase-routed, approval-aware, and uses a target-aware operational
 
 ## Runtime Model
 
-The main `run` flow is split into three routed phases:
+The `run` flow supports these phases:
 
-1. `planning`
-2. `execution`
-3. `memory_curation`
+1. `planning`: an optional model call when routing is enabled
+2. `execution`: the model/tool loop using the configured execution role or a routed selection
+3. `verification`: checks completion evidence for actionable tasks and can trigger a bounded repair
+4. Memory curation: the normal runtime deterministically records structured candidates. The `memory_curation` model phase is used only by an LLM-based curator, not by the default structured memory manager.
 
 The Chat workspace inside `console` uses the same runtime stack with a pinned `chat` phase selection and the same target-aware retrieval/call loop.
 
@@ -133,6 +134,11 @@ The state database in `~/.cvkeharness/state.db` stores:
 - routing candidates
 - model approvals
 - scoped one-time action grants and quarantined legacy command approvals
+- chat sessions, turns, and tool activity
+- user-declared endpoint labels
+- scheduled jobs, job runs, scheduler claims, and system crontab audit records
+- blocked work and redacted telemetry
+- recovery operations, batches, and supervision evidence
 - `targets`
 - `target_aliases`
 - `host_facts`
@@ -160,7 +166,7 @@ For ChatGPT subscription-backed Codex access, install the official Codex CLI and
 codex login
 ```
 
-Choose `Sign in with ChatGPT`. CvkeHarness reuses the official `~/.codex/auth.json` login cache and sends Codex model requests to the ChatGPT Codex backend, so usage follows your ChatGPT/Codex plan rather than a manually pasted OpenAI API key. If you previously used API-key mode in Codex CLI, run `codex logout` and then `codex login` to switch to subscription-backed access.
+Choose `Sign in with ChatGPT`. CvkeHarness reuses the official `~/.codex/auth.json` login cache (or `auth.json` under `CODEX_HOME`, or a connection's explicit `auth_file`) and sends Codex model requests to the ChatGPT Codex backend, so usage follows your ChatGPT/Codex plan rather than a manually pasted OpenAI API key. If you previously used API-key mode in Codex CLI, run `codex logout` and then `codex login` to switch to subscription-backed access.
 
 The setup wizard also reads the Codex `~/.codex/models_cache.json` model cache (or the cache under `CODEX_HOME`). The primary and judge model pickers use that account-scoped catalog and distinguish recent from older cached choices. These are cached models, not a live availability check. If the cache is missing or empty, enter an exact model ID or run Codex to refresh the cache. Existing configured models remain selectable even when absent from the catalog.
 
@@ -207,15 +213,15 @@ Windows ARM64. These checks do not replace the recovery Docker/VM fault labs.
 ./cvkeharness setup
 ```
 
-Fresh installations must complete setup before opening the console (including Chat and the `tui` alias), running tasks, or starting scheduled work. Missing, empty, incomplete, or unreadable configuration produces a setup prompt instead of creating runtime state. Existing usable configurations continue to work without a new completion flag. Help, provider login, and model-independent recovery remain available.
+Fresh installations must complete setup before opening the console (including Chat and the `tui` alias), running tasks, or starting scheduled work. Missing, empty, incomplete, or unreadable configuration produces a setup-required error instead of creating runtime state. Existing usable configurations continue to work without a new completion flag. Help, Settings for configuration repair, model-independent recovery, and daemon stop/status/uninstall remain available. Codex login runs through the separate official Codex CLI.
 
 The setup wizard configures:
 
 - provider
 - Codex CLI ChatGPT login, API key, or local base URL
 - default model
-- security profile (`extra_strict`, `reasonable`, `less_strict`, `minimal`, or `yolo`)
-- optional per-control overrides for filesystem, commands, system, network, remote actions, autonomy, approvals, and limits
+- security profile (`extra_strict`, `reasonable`, `llm_advisor`, `llm_judge`, `less_strict`, `minimal`, or `yolo`)
+- optional per-control overrides for filesystem, commands, system, network, remote actions, autonomy, credential access, approvals, and limits
 - safety judge or advisor model, defaulting to the primary model with an independent connection/model available
 - optional host scan and dependency planning (daemon installation is Linux-only)
 - initial `guidance.md` profile
@@ -269,6 +275,12 @@ Open directly on the Chat workspace:
   Run a live red-team evaluation harness
 - `cvkeharness scorecard`
   Generate a deterministic safety scorecard
+- `cvkeharness fuzztool`
+  Run Go fuzz smoke checks for the shell parser and policy and write a report
+- `cvkeharness recovery`
+  Prepare, inspect, apply, and restore typed operations without a model; see the [recovery guide](docs/recovery.md)
+- `cvkeharness jobs`, `cvkeharness daemon`, and `cvkeharness cron`
+  Manage internal scheduled work, its daemon, and the current user's crontab; see the [scheduling guide](docs/scheduled-jobs-and-cron.md)
 
 ### Chat slash commands
 
@@ -295,6 +307,10 @@ Exports use private file permissions and mask obvious credential patterns. They 
   Show `guidance.md`, `targets.md`, `playbooks.md`, `findings.md`, `cautions.md`, and snapshot summary
 - `cvkeharness memory inbox`
   List candidate facts, playbooks, findings, and cautions with provenance and review metadata
+- `cvkeharness memory endpoints`
+  Show endpoint labels saved from direct user declarations in Chat
+- `cvkeharness memory forget-endpoint "<name>"`
+  Forget one saved endpoint label
 - `cvkeharness memory promote|reject|revoke|delete <kind> <id>`
   Apply the one-way review lifecycle to one exact record
 - `cvkeharness memory export [directory]`
@@ -312,9 +328,9 @@ Exports use private file permissions and mask obvious credential patterns. They 
 
 - `cvkeharness models favorites`
   Show saved favorite models
-- `cvkeharness models favorite <provider/model>`
+- `cvkeharness models favorite <model-ref>`
   Save a favorite model without changing routing approvals
-- `cvkeharness models unfavorite <provider/model>`
+- `cvkeharness models unfavorite <model-ref>`
   Remove a model from favorites
 - `cvkeharness models shortlist`
   Show favorite models, approved models, and learned routing candidates
@@ -322,10 +338,15 @@ Exports use private file permissions and mask obvious credential patterns. They 
   Show recently used requested/actual model pairs across runs and chat
 - `cvkeharness models aliases`
   Show requested models that resolved to different actual models
-- `cvkeharness models approve <provider/model>`
+- `cvkeharness models approve <model-ref>`
   Approve a model for future routing
 - `cvkeharness models stats`
   Show normalized model performance data
+
+For a named connection, use `connection-id::provider/model-id`, such as
+`review-api::openrouter/anthropic/claude-sonnet-4.6`. A bare provider-native model
+ID uses the current Primary connection. The `provider/model-id` form also works
+for legacy configurations or a saved connection whose ID equals the provider.
 
 ### Command commands
 
@@ -360,9 +381,11 @@ Important fields:
 - `approved_models`
 - `favorite_models`
 - `memory_dir`
+- `memory_capture`
+  Capture server-address declarations in Chat: `declarations` (default), `explicit_only`, or `off`. See [conversational server addresses](docs/memory-model.md#conversational-server-addresses).
 - `state_db_path`
 - `debug_prompt_dumps`
-  When true, every model call writes a full prompt dump as Markdown and HTML for debugging.
+  When true, instrumented execution, planning, verification, curation, and safety-review calls write prompt dumps as Markdown and HTML. The task classifier and setup suggestions are not captured.
 - `prompt_dump_dir`
   Directory for prompt dump artifacts, grouped by date and run. Each run folder includes an `index.html` master page linking the individual Markdown and HTML dumps. The index starts with estimated prompt tokens and is updated with actual prompt, completion, total, and cached token counts when providers return usage. Defaults to `~/.cvkeharness/prompt_dumps`.
 - `prompt_dump_retention_days`
@@ -375,14 +398,17 @@ Important fields:
 - `safety_model`
 - `max_tokens`
 - `max_iterations`
+- `log_level`
 - `allowed_commands`
+- `recovery`
+  Operator-defined roots, impact budgets, service adapters, snapshot targets, and enrolled fleet transports; see the [recovery guide](docs/recovery.md).
 - `web_search`
   Optional public web research tools. Disabled by default. Set `web_search.enabled: true`, keep `provider: tavily`, and provide `api_keys.tavily` or `TAVILY_API_KEY`. Defaults are `max_results: 5`, `search_depth: basic`, and `max_fetched_chars: 12000`; request/config caps are 10 results and 30000 fetched characters. `allowed_domains` and `blocked_domains` constrain public search/fetch targets.
 
 ### Routing behavior
 
 - Every role uses its configured connection/model or explicit inheritance. With automatic routing disabled, configured role assignments are used directly.
-- If routing is enabled, the router scores approved candidates from local history.
+- For legacy provider-scoped connections, enabled routing scores candidates from local history and checks routing approval before selecting another model.
 - If confidence is too low, the runtime falls back to the default.
 - If a strong unapproved candidate is found, the CLI asks for one-off approval.
 - A prompt-approved model is recorded as `approved_once`; only deliberately durable model approvals are reused later.
@@ -397,7 +423,10 @@ For execution runs, the system prompt is layered in this order:
 3. compact host-target-memory brief loaded from canonical SQLite state
 4. volatile turn context, conversation history, and optional planning notes
 
-Each model call records a stable-prefix hash, full prompt hash, cached-token count, and cache-hit ratio so provider-side cache behavior is measurable without opening raw prompt dumps.
+Instrumented agent phase calls record a stable-prefix hash and full prompt hash,
+plus cached-token usage when the provider reports it. This makes provider-side
+cache behavior measurable without opening raw prompt dumps; unknown usage is
+not evidence of a cache miss.
 
 ## Tooling Model
 
@@ -445,6 +474,24 @@ The memory note tool:
 - should not be used for raw logs, speculative thoughts, or verbose summaries
 - keeps ad hoc notes provisional rather than executable
 
+### `memory_remember_target`
+
+This tool saves an endpoint label declared in the current direct
+user message. It obeys `memory_capture` and the memory-write policy, and cannot
+infer declarations from tool output or model arguments. Saved labels do not
+verify a live machine, promote operational knowledge, or authorize a connection.
+See the [memory guide](docs/memory-model.md#conversational-server-addresses).
+
+### Scheduling, recovery, and arithmetic
+
+- `schedule_manage` manages internal agent jobs; `system_cron_manage` manages the current user's crontab with an additional exact-diff confirmation.
+- `recovery_manage` and `recovery_fleet` expose configured typed recovery operations on supported platforms.
+- `safety_calculate` checks exact arithmetic and units without changing a system.
+
+Scheduling requires available SQLite state; recovery also requires an effective
+security policy and a supported executor. Registered tools pass through policy
+checks, and tool schemas are filtered for each task.
+
 ### `web_search` and `web_fetch`
 
 The optional Tavily-backed web tools:
@@ -490,7 +537,13 @@ The optional Tavily-backed web tools:
 - `provider/`
   Provider interface plus Codex ChatGPT subscription, OpenRouter, OpenAI Responses API, and LM Studio implementations
 - `tools/`
-  Tool registry, shell tool, and memory note tool
+  Policy-gated registry, shell, memory, scheduling, web, recovery, and arithmetic tools
+- `scheduler/` and `systemcron/`
+  Internal job scheduling and current-user crontab management
+- `recovery/`
+  Typed file, service, snapshot, and fleet executors with persisted recovery evidence
+- `securitypolicy/`
+  Security profiles, control catalog, and immutable effective policy
 
 ### Safety and evaluation
 

@@ -166,7 +166,7 @@ output before restoration; detected conflicting files remain untouched.
 External programs do not participate in this lock. Content checks followed by
 replacement are not a filesystem compare-and-swap primitive; do not claim
 isolation against arbitrary concurrent writers. Further concurrency hardening
-and broader file metadata support remain in the acceptance ledger.
+and broader file metadata support remain future work.
 
 The journal records preparation, readiness, application, verification,
 commit, unknown outcome, restoration and failure. A fresh process can recover
@@ -180,8 +180,8 @@ agent tool refuses remote/ambiguous target contexts. Use the explicitly enrolled
 ```sh
 go test ./recovery ./tools ./state ./internal/tui
 go test -tags=e2e ./e2e -run TestRecoveryConsole -v
+docker pull alpine:latest
 docker pull nginx:stable-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
-bash scripts/build-recovery-vm.sh
 bash scripts/test-recovery-docker.sh
 ```
 
